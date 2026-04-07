@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+/// <reference types="node" />
 import { WireReader, WireWriter, BoltFFIModule, instantiateBoltFFISync, wireStringSize } from "@boltffi/runtime";
 import type { Duration, WireCodec, BoltFFIImports, BoltFFIExports } from "@boltffi/runtime";
 import { readFileSync } from "node:fs";

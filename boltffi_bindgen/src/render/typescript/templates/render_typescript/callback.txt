@@ -4,7 +4,7 @@ export type {{ callback.interface_name }} = {{ fn_type }};
 {%- when None %}
 export interface {{ callback.interface_name }} {
 {%- for method in callback.methods %}
-  {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_type %}{% when Some with (return_type) %}: {{ return_type }}{% when None %}{% endmatch %};
+  {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_type %}{% when Some with (return_type) %}: {{ return_type }}{% when None %}: void{% endmatch %};
 {%- endfor %}
 {%- for method in callback.async_methods %}
   {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Promise<{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}>;
@@ -65,7 +65,7 @@ const _{{ callback.trait_name_snake }}_release = (handle: number): void => {
 };
 
 export function register{{ callback.interface_name }}(impl: {{ callback.interface_name }}): number {
-  const existingHandle = (impl as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle];
+  const existingHandle = (impl as unknown as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle];
   if (typeof existingHandle === "number") {
     return _{{ callback.trait_name_snake }}_retain(existingHandle);
   }
@@ -94,7 +94,7 @@ class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
   constructor(handle: number) {
     const handle_key = _callback_handle_key(handle);
     this._handle = handle_key;
-    (this as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle] = handle_key;
+    (this as unknown as Record<PropertyKey, unknown>)[_{{ callback.trait_name_snake }}_native_handle] = handle_key;
   }
 {%- for method in callback.methods %}
 

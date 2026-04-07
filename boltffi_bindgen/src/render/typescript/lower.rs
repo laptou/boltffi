@@ -276,14 +276,46 @@ impl<'a> TypeScriptLowerer<'a> {
         let mut error_types: HashSet<String> = HashSet::new();
 
         for func in functions {
-            if func.throws && !func.err_type.is_empty() && !is_excluded_error_type(&func.err_type) {
-                error_types.insert(func.err_type.clone());
-            }
+            self.insert_error_exception_type(&mut error_types, func.throws, &func.err_type);
         }
 
         for func in async_functions {
-            if func.throws && !func.err_type.is_empty() && !is_excluded_error_type(&func.err_type) {
-                error_types.insert(func.err_type.clone());
+            self.insert_error_exception_type(&mut error_types, func.throws, &func.err_type);
+        }
+
+        for record in self.contract.catalog.all_records() {
+            self.collect_value_type_error_exceptions(
+                TsValueTypeDef::Record(record),
+                &mut error_types,
+                index,
+            );
+        }
+
+        for enumeration in self.contract.catalog.all_enums() {
+            self.collect_value_type_error_exceptions(
+                TsValueTypeDef::Enum(enumeration),
+                &mut error_types,
+                index,
+            );
+        }
+
+        for class_def in self.contract.catalog.all_classes() {
+            for (constructor_index, _constructor) in class_def.constructors.iter().enumerate() {
+                let call_id = CallId::Constructor {
+                    class_id: class_def.id.clone(),
+                    index: constructor_index,
+                };
+                let abi_call = index.call(self.abi, &call_id);
+                self.collect_call_error_exception(abi_call, &mut error_types);
+            }
+
+            for method_def in &class_def.methods {
+                let call_id = CallId::Method {
+                    class_id: class_def.id.clone(),
+                    method_id: method_def.id.clone(),
+                };
+                let abi_call = index.call(self.abi, &call_id);
+                self.collect_call_error_exception(abi_call, &mut error_types);
             }
         }
 
@@ -308,6 +340,47 @@ impl<'a> TypeScriptLowerer<'a> {
                 }
             })
             .collect()
+    }
+
+    fn collect_value_type_error_exceptions(
+        &self,
+        owner: TsValueTypeDef<'_>,
+        error_types: &mut HashSet<String>,
+        index: &AbiIndex,
+    ) {
+        for (call_id, _constructor) in owner.constructor_calls() {
+            let abi_call = index.call(self.abi, &call_id);
+            self.collect_call_error_exception(abi_call, error_types);
+        }
+
+        for (call_id, _method) in owner.method_calls() {
+            let abi_call = index.call(self.abi, &call_id);
+            self.collect_call_error_exception(abi_call, error_types);
+        }
+    }
+
+    fn collect_call_error_exception(&self, abi_call: &AbiCall, error_types: &mut HashSet<String>) {
+        match &abi_call.mode {
+            CallMode::Sync => {
+                let (throws, err_type) = self.lower_error(&abi_call.error);
+                self.insert_error_exception_type(error_types, throws, &err_type);
+            }
+            CallMode::Async(async_call) => {
+                let (throws, err_type) = self.lower_error(&async_call.error);
+                self.insert_error_exception_type(error_types, throws, &err_type);
+            }
+        }
+    }
+
+    fn insert_error_exception_type(
+        &self,
+        error_types: &mut HashSet<String>,
+        throws: bool,
+        err_type: &str,
+    ) {
+        if throws && !err_type.is_empty() && !is_excluded_error_type(err_type) {
+            error_types.insert(err_type.to_string());
+        }
     }
 
     fn lower_record(
@@ -2343,6 +2416,12 @@ mod tests {
         }
     }
 
+    fn error_enum(name: &str) -> EnumDef {
+        let mut enumeration = c_style_enum_i64(name);
+        enumeration.is_error = true;
+        enumeration
+    }
+
     fn lower_contract_result(contract: &FfiContract) -> Result<TsModule, TypeScriptLowerError> {
         let abi = IrLowerer::new(contract).to_abi_contract();
         TypeScriptLowerer::new(
@@ -3618,6 +3697,82 @@ mod tests {
             }
             _ => panic!("expected sync method"),
         }
+    }
+
+    #[test]
+    fn class_result_methods_emit_error_exception_classes() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("TransferError"));
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Downloader"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("receive"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Primitive(PrimitiveType::I32),
+                    err: TypeExpr::Enum(EnumId::new("TransferError")),
+                },
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        assert!(
+            module
+                .error_exceptions
+                .iter()
+                .any(|error| error.class_name == "TransferErrorException")
+        );
+
+        let rendered = crate::render::typescript::templates::TypeScriptEmitter::emit(&module);
+        assert!(rendered.contains("export class TransferErrorException extends Error"));
+        assert!(rendered.contains("new TransferErrorException("));
+    }
+
+    #[test]
+    fn value_type_result_methods_emit_error_exception_classes() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("ParseError"));
+        contract.catalog.insert_record(RecordDef {
+            id: RecordId::new("Packet"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![],
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("decode"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Primitive(PrimitiveType::I32),
+                    err: TypeExpr::Enum(EnumId::new("ParseError")),
+                },
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        assert!(
+            module
+                .error_exceptions
+                .iter()
+                .any(|error| error.class_name == "ParseErrorException")
+        );
+
+        let rendered = crate::render::typescript::templates::TypeScriptEmitter::emit(&module);
+        assert!(rendered.contains("export class ParseErrorException extends Error"));
+        assert!(rendered.contains("new ParseErrorException("));
     }
 
     #[test]
