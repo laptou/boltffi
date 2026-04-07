@@ -131,6 +131,12 @@ pub struct Builder<'a> {
 pub struct BuildResult {
     pub triple: String,
     pub success: bool,
+    pub output: String,
+}
+
+pub struct CommandRunResult {
+    pub success: bool,
+    pub output: String,
 }
 
 impl<'a> Builder<'a> {
@@ -169,11 +175,12 @@ impl<'a> Builder<'a> {
         self.apply_common_build_args(&mut command);
         command.args(&command_args.command_args);
 
-        let success = run_command_streaming(&mut command, self.options.on_output.as_ref());
+        let result = run_command_streaming(&mut command, self.options.on_output.as_ref());
 
         Ok(vec![BuildResult {
             triple: triple.to_string(),
-            success,
+            success: result.success,
+            output: result.output,
         }])
     }
 
@@ -196,11 +203,12 @@ impl<'a> Builder<'a> {
                 .and_then(|toolchain| toolchain.configure_cargo_for_target(&mut cmd, target))?;
         }
 
-        let success = run_command_streaming(&mut cmd, self.options.on_output.as_ref());
+        let result = run_command_streaming(&mut cmd, self.options.on_output.as_ref());
 
         Ok(BuildResult {
             triple: target.triple().to_string(),
-            success,
+            success: result.success,
+            output: result.output,
         })
     }
 
@@ -236,12 +244,20 @@ impl<'a> Builder<'a> {
     }
 }
 
-pub(crate) fn run_command_streaming(cmd: &mut Command, on_output: Option<&OutputCallback>) -> bool {
+pub(crate) fn run_command_streaming(
+    cmd: &mut Command,
+    on_output: Option<&OutputCallback>,
+) -> CommandRunResult {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(error) => {
+            return CommandRunResult {
+                success: false,
+                output: format!("failed to spawn command `{cmd:?}`: {error}"),
+            };
+        }
     };
 
     let stdout = child.stdout.take();
@@ -275,7 +291,12 @@ pub(crate) fn run_command_streaming(cmd: &mut Command, on_output: Option<&Output
 
     drop(tx);
 
+    let mut output = String::new();
     for line in rx {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&line);
         if let Some(cb) = on_output {
             cb(&line);
         }
@@ -288,7 +309,8 @@ pub(crate) fn run_command_streaming(cmd: &mut Command, on_output: Option<&Output
         let _ = h.join();
     }
 
-    child.wait().map(|s| s.success()).unwrap_or(false)
+    let success = child.wait().map(|s| s.success()).unwrap_or(false);
+    CommandRunResult { success, output }
 }
 pub fn count_successful(results: &[BuildResult]) -> usize {
     results.iter().filter(|r| r.success).count()
@@ -304,6 +326,25 @@ pub fn failed_targets(results: &[BuildResult]) -> Vec<String> {
         .filter(|r| !r.success)
         .map(|r| r.triple.clone())
         .collect()
+}
+
+pub fn failed_target_details(results: &[BuildResult]) -> String {
+    results
+        .iter()
+        .filter(|result| !result.success)
+        .map(|result| {
+            format!(
+                "target {} output:\n{}",
+                result.triple,
+                if result.output.trim().is_empty() {
+                    "<no output captured>".to_string()
+                } else {
+                    result.output.clone()
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]
@@ -392,6 +433,7 @@ mod tests {
         let result = rx
             .recv_timeout(Duration::from_secs(5))
             .expect("run_command_streaming should finish once the child exits");
-        assert!(result);
+        assert!(result.success);
+        assert_eq!(result.output, "ok");
     }
 }

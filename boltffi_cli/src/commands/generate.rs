@@ -12,7 +12,7 @@ use boltffi_bindgen::{
 
 use crate::config::{
     Config, Experimental, FactoryStyle as ConfigFactoryStyle, KotlinApiStyle, Target,
-    TypeConversion as ConfigTypeConversion,
+    TypeConversion as ConfigTypeConversion, WasmNpmTarget,
 };
 use crate::error::{CliError, Result};
 
@@ -542,16 +542,30 @@ fn generate_typescript(config: &Config, output: Option<PathBuf>) -> Result<()> {
         source,
     })?;
 
-    let node_ts_code = TypeScriptEmitter::emit_node(&ts_module, &module_name).replacen(
-        "from \"@boltffi/runtime\"",
-        &format!("from \"{}\"", runtime_package),
-        1,
-    );
+    let emits_node_bundle = config
+        .wasm_npm_targets()
+        .iter()
+        .any(|target| matches!(target, WasmNpmTarget::Nodejs));
 
-    std::fs::write(&node_output_path, &node_ts_code).map_err(|source| CliError::WriteFailed {
-        path: node_output_path.clone(),
-        source,
-    })?;
+    if emits_node_bundle {
+        let node_ts_code = TypeScriptEmitter::emit_node(&ts_module, &module_name).replacen(
+            "from \"@boltffi/runtime\"",
+            &format!("from \"{}\"", runtime_package),
+            1,
+        );
+
+        std::fs::write(&node_output_path, &node_ts_code).map_err(|source| {
+            CliError::WriteFailed {
+                path: node_output_path.clone(),
+                source,
+            }
+        })?;
+    } else if node_output_path.exists() {
+        std::fs::remove_file(&node_output_path).map_err(|source| CliError::WriteFailed {
+            path: node_output_path.clone(),
+            source,
+        })?;
+    }
 
     Ok(())
 }

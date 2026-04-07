@@ -1,6 +1,14 @@
 use crate::config::ConfigError;
 use std::path::PathBuf;
 
+fn build_failed_details_suffix(details: &str) -> String {
+    if details.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n{details}")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error("config error: {0}")]
@@ -76,8 +84,14 @@ pub enum CliError {
     #[error("verification error: {0}")]
     VerifyError(String),
 
-    #[error("build failed for targets: {targets:?}")]
-    BuildFailed { targets: Vec<String> },
+    #[error(
+        "build failed for targets: {targets:?}{details_suffix}",
+        details_suffix = build_failed_details_suffix(details)
+    )]
+    BuildFailed {
+        targets: Vec<String>,
+        details: String,
+    },
 }
 
 impl From<ConfigError> for CliError {

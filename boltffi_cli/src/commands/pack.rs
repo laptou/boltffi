@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::build::{
-    BuildOptions, Builder, CargoBuildProfile, OutputCallback, all_successful, failed_targets,
-    resolve_build_profile, run_command_streaming,
+    BuildOptions, Builder, CargoBuildProfile, OutputCallback, all_successful,
+    failed_target_details, failed_targets, resolve_build_profile, run_command_streaming,
 };
 use crate::commands::generate::{
     GenerateOptions, GenerateTarget, run_generate_java_with_output_from_source_dir,
@@ -500,16 +500,20 @@ fn pack_wasm(config: &Config, options: PackWasmOptions, reporter: &Reporter) -> 
     transpile_typescript_bundle(config, &generated_typescript_source, &npm_output)?;
     step.finish_success();
 
+    let enabled_targets = config.wasm_npm_targets();
     let generated_node_typescript_source = config
         .wasm_typescript_output()
         .join(format!("{}_node.ts", module_name));
-    if generated_node_typescript_source.exists() {
+    if enabled_targets
+        .iter()
+        .any(|target| matches!(target, WasmNpmTarget::Nodejs))
+        && generated_node_typescript_source.exists()
+    {
         let step = reporter.step("Transpiling Node.js bindings");
         transpile_typescript_bundle(config, &generated_node_typescript_source, &npm_output)?;
         step.finish_success();
     }
 
-    let enabled_targets = config.wasm_npm_targets();
     let step = reporter.step("Generating WASM loader entrypoints");
     generate_wasm_loader_entrypoints(&module_name, &enabled_targets, &npm_output)?;
     step.finish_success();
@@ -1016,9 +1020,11 @@ fn build_jvm_native_library(
         .toolchain
         .configure_cargo_build(&mut command);
 
-    if !run_command_streaming(&mut command, on_output.as_ref()) {
+    let build_result = run_command_streaming(&mut command, on_output.as_ref());
+    if !build_result.success {
         return Err(CliError::BuildFailed {
             targets: vec![cargo_context.host_target.canonical_name().to_string()],
+            details: build_result.output,
         });
     }
 
@@ -2157,7 +2163,10 @@ fn build_apple_targets(
     }
 
     let failed = failed_targets(&results);
-    Err(CliError::BuildFailed { targets: failed })
+    Err(CliError::BuildFailed {
+        targets: failed,
+        details: failed_target_details(&results),
+    })
 }
 
 fn print_cargo_line(line: &str) {
@@ -2211,7 +2220,10 @@ fn build_android_targets(
     }
 
     let failed = failed_targets(&results);
-    Err(CliError::BuildFailed { targets: failed })
+    Err(CliError::BuildFailed {
+        targets: failed,
+        details: failed_target_details(&results),
+    })
 }
 
 fn build_wasm_target(
@@ -2240,7 +2252,10 @@ fn build_wasm_target(
     }
 
     let failed = failed_targets(&results);
-    Err(CliError::BuildFailed { targets: failed })
+    Err(CliError::BuildFailed {
+        targets: failed,
+        details: failed_target_details(&results),
+    })
 }
 
 fn resolve_build_cargo_args(config: &Config, cli_cargo_args: &[String]) -> Vec<String> {
@@ -2354,8 +2369,11 @@ fn transpile_typescript_bundle(
     };
     command
         .arg(source_file)
+        .arg("--ignoreConfig")
         .arg("--target")
         .arg("ES2020")
+        .arg("--lib")
+        .arg("ES2021,DOM,ESNext.Disposable")
         .arg("--module")
         .arg("ES2020")
         .arg("--moduleResolution")
@@ -2373,8 +2391,15 @@ fn transpile_typescript_bundle(
         .arg("--outDir")
         .arg(output_dir);
 
-    let output = command.output().map_err(|_| CliError::CommandFailed {
-        command: "tsc".to_string(),
+    let command_display = format_command_for_display(&command);
+    let working_directory = std::env::current_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+
+    let output = command.output().map_err(|source| CliError::CommandFailed {
+        command: format!(
+            "failed to spawn tsc command\nworking directory: {working_directory}\ncommand: {command_display}\nerror: {source}"
+        ),
         status: None,
     })?;
 
@@ -2387,10 +2412,47 @@ fn transpile_typescript_bundle(
         return Ok(());
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut details = Vec::new();
+    if !stdout.trim().is_empty() {
+        details.push(format!("stdout:\n{}", stdout.trim_end()));
+    }
+    if !stderr.trim().is_empty() {
+        details.push(format!("stderr:\n{}", stderr.trim_end()));
+    }
+    let details = if details.is_empty() {
+        "no stdout/stderr captured".to_string()
+    } else {
+        details.join("\n\n")
+    };
+
     Err(CliError::CommandFailed {
-        command: format!("tsc failed: {}", String::from_utf8_lossy(&output.stderr)),
+        command: format!(
+            "tsc failed while transpiling {} into {}\nworking directory: {working_directory}\ncommand: {command_display}\n{}",
+            source_file.display(),
+            output_dir.display(),
+            details
+        ),
         status: output.status.code(),
     })
+}
+
+fn format_command_for_display(command: &Command) -> String {
+    let mut parts = vec![shell_quote(command.get_program())];
+    parts.extend(command.get_args().map(shell_quote));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &std::ffi::OsStr) -> String {
+    let rendered = value.to_string_lossy();
+    if rendered.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | ',' | '=')
+    }) {
+        rendered.into_owned()
+    } else {
+        format!("'{}'", rendered.replace('\'', r"'\''"))
+    }
 }
 
 fn generate_wasm_loader_entrypoints(

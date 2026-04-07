@@ -1,6 +1,6 @@
 use crate::build::{
-    BuildOptions, BuildResult, Builder, all_successful, count_successful, failed_targets,
-    resolve_build_profile,
+    BuildOptions, BuildResult, Builder, all_successful, count_successful, failed_target_details,
+    failed_targets, resolve_build_profile,
 };
 use crate::config::Config;
 use crate::error::{CliError, Result};
@@ -94,6 +94,7 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
     } else {
         Err(CliError::BuildFailed {
             targets: failed_targets(&results),
+            details: failed_target_details(&results),
         })
     }
 }
