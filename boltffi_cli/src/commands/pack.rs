@@ -260,7 +260,7 @@ fn pack_all(config: &Config, options: PackAllOptions, reporter: &Reporter) -> Re
     }
 
     if !packed_any {
-        reporter.warning("no targets enabled in boltffi.toml");
+        reporter.warning("no targets enabled in config");
     }
 
     reporter.finish();

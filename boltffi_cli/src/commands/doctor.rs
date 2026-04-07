@@ -1,10 +1,16 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::check::EnvironmentCheck;
 use crate::commands::check::apple_targets_require_lipo;
 use crate::config::Config;
 use crate::error::Result;
 use crate::target::RustTarget;
+
+pub enum ConfigSummary {
+    Loaded(Box<Config>),
+    Missing,
+    Invalid(String),
+}
 
 pub struct DoctorOptions {
     pub apple: bool,
@@ -13,6 +19,9 @@ pub struct DoctorOptions {
     pub android_targets: Vec<RustTarget>,
     pub wasm: bool,
     pub wasm_target_triple: Option<String>,
+    pub config_summary: ConfigSummary,
+    pub config_path: PathBuf,
+    pub overlay_path: Option<PathBuf>,
     pub config_warning: Option<String>,
 }
 
@@ -28,7 +37,11 @@ pub fn run_doctor(options: DoctorOptions) -> Result<()> {
     }
     print_environment(&check, &options);
     println!();
-    print_config_summary();
+    print_config_summary(
+        &options.config_summary,
+        &options.config_path,
+        options.overlay_path.as_deref(),
+    );
 
     Ok(())
 }
@@ -140,17 +153,13 @@ fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
     }
 }
 
-fn print_config_summary() {
-    let config_path = PathBuf::from("boltffi.toml");
-
-    if !config_path.exists() {
-        println!("Config: missing (expected ./boltffi.toml)");
-        return;
-    }
-
-    match Config::load(&config_path) {
-        Ok(config) => {
+fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_path: Option<&Path>) {
+    match summary {
+        ConfigSummary::Loaded(config) => {
             println!("Config: {}", config_path.display());
+            if let Some(overlay_path) = overlay_path {
+                println!("Overlay: {}", overlay_path.display());
+            }
             println!("  crate: {}", config.library_name());
             println!(
                 "  targets.apple.output: {}",
@@ -243,8 +252,23 @@ fn print_config_summary() {
                 config.wasm_npm_output().display()
             );
         }
-        Err(error) => {
-            println!("Config: {} (invalid: {})", config_path.display(), error);
+        ConfigSummary::Missing => {
+            if let Some(overlay_path) = overlay_path {
+                println!(
+                    "Config: missing (expected {} before applying overlay {})",
+                    config_path.display(),
+                    overlay_path.display()
+                );
+            } else {
+                println!("Config: missing (expected {})", config_path.display());
+            }
+        }
+        ConfigSummary::Invalid(error) => {
+            println!("Config: {}", config_path.display());
+            if let Some(overlay_path) = overlay_path {
+                println!("Overlay: {}", overlay_path.display());
+            }
+            println!("  invalid: {}", error);
         }
     }
 }
@@ -255,8 +279,9 @@ fn readiness(is_ready: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{DoctorOptions, required_target_triples};
+    use super::{ConfigSummary, DoctorOptions, required_target_triples};
     use crate::target::RustTarget;
+    use std::path::PathBuf;
 
     #[test]
     fn uses_configured_wasm_target_triple() {
@@ -267,6 +292,9 @@ mod tests {
             android_targets: Vec::new(),
             wasm: true,
             wasm_target_triple: Some("wasm32-wasip1".to_string()),
+            config_summary: ConfigSummary::Missing,
+            config_path: PathBuf::from("boltffi.toml"),
+            overlay_path: None,
             config_warning: None,
         };
 
@@ -285,6 +313,9 @@ mod tests {
             android_targets: Vec::new(),
             wasm: true,
             wasm_target_triple: None,
+            config_summary: ConfigSummary::Missing,
+            config_path: PathBuf::from("boltffi.toml"),
+            overlay_path: None,
             config_warning: None,
         };
 

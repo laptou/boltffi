@@ -522,16 +522,60 @@ fn default_dart_output() -> PathBuf {
     PathBuf::from("dist/dart")
 }
 
+fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
+    let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
+        path: path.to_path_buf(),
+        source: err,
+    })?;
+
+    toml::from_str(&content).map_err(|source| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    })
+}
+
+fn merge_toml_value(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, overlay_value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(base_value) => merge_toml_value(base_value, overlay_value),
+                    None => {
+                        base_table.insert(key, overlay_value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => *base_value = overlay_value,
+    }
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
-            path: path.to_path_buf(),
-            source: err,
-        })?;
+        Self::load_with_overlay(path, None)
+    }
 
-        let config: Config = toml::from_str(&content).map_err(|err| ConfigError::Parse {
-            path: path.to_path_buf(),
-            source: err,
+    pub fn load_with_overlay(
+        path: &Path,
+        overlay_path: Option<&Path>,
+    ) -> Result<Self, ConfigError> {
+        let mut merged = read_toml_value(path)?;
+
+        if let Some(overlay_path) = overlay_path {
+            let overlay = read_toml_value(overlay_path)?;
+            merge_toml_value(&mut merged, overlay);
+        }
+
+        let config: Config = merged.try_into().map_err(|source| match overlay_path {
+            Some(overlay_path) => ConfigError::ParseMerged {
+                base_path: path.to_path_buf(),
+                overlay_path: overlay_path.to_path_buf(),
+                source: Box::new(source),
+            },
+            None => ConfigError::Parse {
+                path: path.to_path_buf(),
+                source: Box::new(source),
+            },
         })?;
 
         config.validate()?;
@@ -1266,7 +1310,14 @@ pub enum ConfigError {
     #[error("failed to parse config from {path}: {source}")]
     Parse {
         path: PathBuf,
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
+    },
+
+    #[error("failed to parse merged config from {base_path} with overlay {overlay_path}: {source}")]
+    ParseMerged {
+        base_path: PathBuf,
+        overlay_path: PathBuf,
+        source: Box<toml::de::Error>,
     },
 
     #[error("invalid config: {0}")]
@@ -1289,6 +1340,16 @@ mod tests {
     fn parse_config(input: &str) -> Config {
         let parsed: Config = toml::from_str(input).expect("toml parse failed");
         parsed.validate().expect("config validation failed");
+        parsed
+    }
+
+    fn parse_config_with_overlay(base: &str, overlay: &str) -> Config {
+        let mut merged: toml::Value = toml::from_str(base).expect("base toml parse failed");
+        let overlay: toml::Value = toml::from_str(overlay).expect("overlay toml parse failed");
+        merge_toml_value(&mut merged, overlay);
+
+        let parsed: Config = merged.try_into().expect("merged config parse failed");
+        parsed.validate().expect("merged config validation failed");
         parsed
     }
 
@@ -1805,5 +1866,99 @@ global_args = ["--frozen"]
             config.cargo_args_for_command("test"),
             vec!["--frozen".to_string()]
         );
+    }
+
+    #[test]
+    fn overlay_can_override_android_architectures_while_inheriting_other_fields() {
+        let config = parse_config_with_overlay(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android]
+min_sdk = 26
+output = "dist/android-release"
+architectures = ["arm64", "armv7"]
+"#,
+            r#"
+[targets.android]
+architectures = ["arm64"]
+"#,
+        );
+
+        assert_eq!(config.android_min_sdk(), 26);
+        assert_eq!(
+            config.android_output(),
+            PathBuf::from("dist/android-release")
+        );
+        assert_eq!(
+            config
+                .android_architectures()
+                .iter()
+                .map(|architecture| architecture.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["arm64"]
+        );
+    }
+
+    #[test]
+    fn overlay_can_override_java_host_targets_while_inheriting_other_fields() {
+        let config = parse_config_with_overlay(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android]
+min_sdk = 29
+
+[targets.java]
+package = "com.example.base"
+
+[targets.java.jvm]
+enabled = true
+host_targets = ["current", "linux-x86_64"]
+"#,
+            r#"
+[targets.java.jvm]
+host_targets = ["linux-x86_64"]
+"#,
+        );
+
+        assert_eq!(config.android_min_sdk(), 29);
+        assert_eq!(config.java_package(), "com.example.base");
+        assert_eq!(
+            config
+                .java_jvm_requested_host_targets()
+                .iter()
+                .map(|target| target.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["linux-x86_64"]
+        );
+    }
+
+    #[test]
+    fn overlay_deep_merges_nested_tables() {
+        let config = parse_config_with_overlay(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple.spm]
+distribution = "remote"
+repo_url = "https://example.com/base.git"
+package_name = "BaseKit"
+"#,
+            r#"
+[targets.apple.spm]
+package_name = "OverlayKit"
+"#,
+        );
+
+        assert_eq!(config.apple_spm_distribution(), SpmDistribution::Remote);
+        assert_eq!(
+            config.apple_spm_repo_url(),
+            Some("https://example.com/base.git")
+        );
+        assert_eq!(config.apple_spm_package_name(), Some("OverlayKit"));
     }
 }

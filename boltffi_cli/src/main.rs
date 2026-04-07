@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use commands::build::{BuildCommandOptions, BuildPlatform};
 use commands::check::CheckOptions;
-use commands::doctor::DoctorOptions;
+use commands::doctor::{ConfigSummary, DoctorOptions};
 use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use commands::init::InitOptions;
 use commands::pack::{
@@ -30,7 +30,7 @@ use error::{CliError, Result};
 #[command(name = "boltffi")]
 #[command(about = "BoltFFI - Rust FFI toolchain (Apple + Android + WASM)")]
 #[command(
-    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*]\n"
+    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*]\n"
 )]
 #[command(version)]
 struct Cli {
@@ -49,6 +49,14 @@ struct Cli {
         help = "Pass an argument to cargo invocations (repeatable)"
     )]
     cargo_args: Vec<String>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Optional overlay config file merged on top of the base config"
+    )]
+    overlay: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -282,6 +290,7 @@ enum PackLayoutArg {
 
 fn main() {
     let cli = Cli::parse();
+    let config_paths = ConfigPaths::from_cli(&cli);
 
     let verbosity = if cli.quiet {
         reporter::Verbosity::Quiet
@@ -292,7 +301,7 @@ fn main() {
     };
 
     let reporter = reporter::Reporter::new(verbosity);
-    let result = execute_command(cli.command, &reporter, cli.cargo_args);
+    let result = execute_command(cli.command, &reporter, cli.cargo_args, &config_paths);
 
     if let Err(err) = result {
         eprintln!("\n{} {}", console::style("error:").red().bold(), err);
@@ -304,13 +313,11 @@ fn execute_command(
     command: Commands,
     reporter: &reporter::Reporter,
     cargo_args: Vec<String>,
+    config_paths: &ConfigPaths,
 ) -> Result<()> {
     match command {
         Commands::Init { name } => {
-            let options = InitOptions {
-                name,
-                path: std::env::current_dir().unwrap_or_default(),
-            };
+            let options = resolve_init_options(name, config_paths)?;
             run_init(options).map(|_| ())
         }
 
@@ -321,7 +328,7 @@ fn execute_command(
             wasm,
         } => {
             let explicit_target_selected = apple || android || wasm;
-            let config = load_config_if_present()?;
+            let config = load_config_if_present(config_paths)?;
             let check_wasm = if explicit_target_selected { wasm } else { true };
             let wasm_target_triple = if check_wasm {
                 configured_wasm_target_triple_for_diagnostics(config.as_ref())
@@ -354,28 +361,34 @@ fn execute_command(
             wasm,
         } => {
             let explicit_target_selected = apple || android || wasm;
-            let doctor_config = resolve_doctor_config(load_config_if_present());
+            let doctor_config =
+                resolve_doctor_config(load_config_if_present(config_paths), config_paths);
+            let diagnostic_config = match &doctor_config.summary {
+                ConfigSummary::Loaded(config) => Some(config.as_ref()),
+                ConfigSummary::Missing | ConfigSummary::Invalid(_) => None,
+            };
+            let apple_targets = configured_apple_targets_for_diagnostics(diagnostic_config);
+            let android_targets = configured_android_targets_for_diagnostics(diagnostic_config);
+            let wasm_target_triple =
+                configured_wasm_target_triple_for_diagnostics(diagnostic_config);
             let options = DoctorOptions {
                 apple: if explicit_target_selected {
                     apple
                 } else {
                     true
                 },
-                apple_targets: configured_apple_targets_for_diagnostics(
-                    doctor_config.config.as_ref(),
-                ),
+                apple_targets,
                 android: if explicit_target_selected {
                     android
                 } else {
                     true
                 },
-                android_targets: configured_android_targets_for_diagnostics(
-                    doctor_config.config.as_ref(),
-                ),
+                android_targets,
                 wasm: if explicit_target_selected { wasm } else { true },
-                wasm_target_triple: configured_wasm_target_triple_for_diagnostics(
-                    doctor_config.config.as_ref(),
-                ),
+                wasm_target_triple,
+                config_summary: doctor_config.summary,
+                config_path: PathBuf::from("boltffi.toml"),
+                overlay_path: config_paths.overlay.clone(),
                 config_warning: doctor_config.warning,
             };
             run_doctor(options)
@@ -386,7 +399,7 @@ fn execute_command(
             output,
             experimental,
         } => {
-            let config = load_config()?;
+            let config = load_config(config_paths)?;
             let options = GenerateOptions {
                 target: target
                     .map(|t| match t {
@@ -406,7 +419,7 @@ fn execute_command(
         }
 
         Commands::Build { platform, release } => {
-            let config = load_config()?;
+            let config = load_config(config_paths)?;
             let options = BuildCommandOptions {
                 platform: platform
                     .map(|p| match p {
@@ -423,7 +436,7 @@ fn execute_command(
         }
 
         Commands::Pack { target } => {
-            let config = load_config()?;
+            let config = load_config(config_paths)?;
             let command = match target {
                 PackTargetArg::All {
                     release,
@@ -495,7 +508,7 @@ fn execute_command(
         }
 
         Commands::Release { platform } => {
-            let config = load_config()?;
+            let config = load_config(config_paths)?;
             run_release(&config, platform, reporter, cargo_args)
         }
 
@@ -510,24 +523,56 @@ fn execute_command(
     }
 }
 
-fn load_config() -> Result<Config> {
-    let config_path = PathBuf::from("boltffi.toml");
-
-    if !config_path.exists() {
-        return Err(CliError::ConfigNotFound);
-    }
-
-    Config::load(&config_path).map_err(Into::into)
+#[derive(Debug, Clone)]
+struct ConfigPaths {
+    overlay: Option<PathBuf>,
 }
 
-fn load_config_if_present() -> Result<Option<Config>> {
+impl ConfigPaths {
+    fn from_cli(cli: &Cli) -> Self {
+        Self {
+            overlay: cli.overlay.clone(),
+        }
+    }
+
+    fn describe(&self) -> String {
+        match &self.overlay {
+            Some(overlay) => format!("boltffi.toml with overlay {}", overlay.display()),
+            None => "boltffi.toml".to_string(),
+        }
+    }
+}
+
+fn load_config(config_paths: &ConfigPaths) -> Result<Config> {
     let config_path = PathBuf::from("boltffi.toml");
 
     if !config_path.exists() {
+        return Err(CliError::ConfigNotFound(config_path));
+    }
+
+    match config_paths.overlay.as_deref() {
+        Some(overlay_path) => Config::load_with_overlay(&config_path, Some(overlay_path)),
+        None => Config::load(&config_path),
+    }
+    .map_err(Into::into)
+}
+
+fn load_config_if_present(config_paths: &ConfigPaths) -> Result<Option<Config>> {
+    let config_path = PathBuf::from("boltffi.toml");
+
+    if !config_path.exists() {
+        if config_paths.overlay.is_some() {
+            return Err(CliError::ConfigNotFound(config_path));
+        }
         return Ok(None);
     }
 
-    Config::load(&config_path).map(Some).map_err(Into::into)
+    match config_paths.overlay.as_deref() {
+        Some(overlay_path) => Config::load_with_overlay(&config_path, Some(overlay_path)),
+        None => Config::load(&config_path),
+    }
+    .map(Some)
+    .map_err(Into::into)
 }
 
 fn configured_apple_targets_for_diagnostics(
@@ -553,20 +598,50 @@ fn configured_wasm_target_triple_for_diagnostics(config: Option<&Config>) -> Opt
 }
 
 struct DoctorConfig {
-    config: Option<Config>,
+    summary: ConfigSummary,
     warning: Option<String>,
 }
 
-fn resolve_doctor_config(config_result: Result<Option<Config>>) -> DoctorConfig {
+fn resolve_init_options(name: Option<String>, config_paths: &ConfigPaths) -> Result<InitOptions> {
+    if config_paths.overlay.is_some() {
+        return Err(CliError::CommandFailed {
+            command: "--overlay is not supported with init".to_string(),
+            status: None,
+        });
+    }
+
+    Ok(InitOptions {
+        name,
+        path: std::env::current_dir().unwrap_or_default(),
+    })
+}
+
+fn resolve_doctor_config(
+    config_result: Result<Option<Config>>,
+    config_paths: &ConfigPaths,
+) -> DoctorConfig {
     match config_result {
-        Ok(config) => DoctorConfig {
-            config,
+        Ok(Some(config)) => DoctorConfig {
+            summary: ConfigSummary::Loaded(Box::new(config)),
             warning: None,
         },
-        Err(error) => DoctorConfig {
-            config: None,
+        Ok(None) => DoctorConfig {
+            summary: ConfigSummary::Missing,
+            warning: None,
+        },
+        Err(CliError::ConfigNotFound(_)) => DoctorConfig {
+            summary: ConfigSummary::Missing,
             warning: Some(format!(
-                "failed to load boltffi.toml ({}); using default Apple/Android/WASM target checks",
+                "failed to load config {} ({}); using default Apple/Android/WASM target checks",
+                config_paths.describe(),
+                CliError::ConfigNotFound(PathBuf::from("boltffi.toml"))
+            )),
+        },
+        Err(error) => DoctorConfig {
+            summary: ConfigSummary::Invalid(error.to_string()),
+            warning: Some(format!(
+                "failed to load config {} ({}); using default Apple/Android/WASM target checks",
+                config_paths.describe(),
                 error
             )),
         },
@@ -743,13 +818,16 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, configured_android_targets_for_diagnostics,
+        BuildPlatformArg, ConfigPaths, configured_android_targets_for_diagnostics,
         configured_apple_targets_for_diagnostics, configured_wasm_target_triple_for_diagnostics,
-        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
+        load_config_if_present, release_pack_commands,
+        release_requires_java_environment_validation, resolve_doctor_config, resolve_init_options,
     };
+    use crate::commands::doctor::ConfigSummary;
     use crate::commands::pack::PackCommand;
     use crate::target::RustTarget;
     use crate::{config::Config, error::CliError};
+    use std::path::PathBuf;
 
     fn parse_config(input: &str) -> Config {
         let parsed: Config = toml::from_str(input).expect("toml parse failed");
@@ -819,14 +897,76 @@ triple = "wasm32-wasip1"
 
     #[test]
     fn doctor_falls_back_to_defaults_when_config_load_fails() {
-        let resolved = resolve_doctor_config(Err(CliError::Config(
-            crate::config::ConfigError::Validation("bad config".to_string()),
-        )));
+        let config_paths = ConfigPaths {
+            overlay: Some(PathBuf::from("boltffi.ci.toml")),
+        };
+        let resolved = resolve_doctor_config(
+            Err(crate::config::ConfigError::Validation("bad config".to_string()).into()),
+            &config_paths,
+        );
 
-        assert!(resolved.config.is_none());
+        assert!(matches!(resolved.summary, ConfigSummary::Invalid(_)));
         assert!(resolved.warning.as_deref().is_some_and(|warning| {
             warning.contains("using default Apple/Android/WASM target checks")
         }));
+    }
+
+    #[test]
+    fn missing_base_config_fails_when_overlay_is_requested() {
+        let config_paths = ConfigPaths {
+            overlay: Some(PathBuf::from("boltffi.ci.toml")),
+        };
+
+        let error =
+            load_config_if_present(&config_paths).expect_err("overlay without base should fail");
+
+        assert!(
+            matches!(error, CliError::ConfigNotFound(path) if path == PathBuf::from("boltffi.toml"))
+        );
+    }
+
+    #[test]
+    fn doctor_warns_when_overlay_is_requested_without_base_config() {
+        let config_paths = ConfigPaths {
+            overlay: Some(PathBuf::from("boltffi.ci.toml")),
+        };
+        let resolved = resolve_doctor_config(
+            Err(CliError::ConfigNotFound(PathBuf::from("boltffi.toml"))),
+            &config_paths,
+        );
+
+        assert!(matches!(resolved.summary, ConfigSummary::Missing));
+        assert!(resolved.warning.as_deref().is_some_and(|warning| {
+            warning.contains("boltffi.toml with overlay boltffi.ci.toml")
+                && warning.contains("config file not found")
+        }));
+    }
+
+    #[test]
+    fn init_uses_current_directory() {
+        let config_paths = ConfigPaths { overlay: None };
+
+        let options = resolve_init_options(Some("mylib".to_string()), &config_paths)
+            .expect("init options should resolve");
+
+        assert_eq!(options.path, std::env::current_dir().unwrap_or_default());
+    }
+
+    #[test]
+    fn init_rejects_overlay_config() {
+        let config_paths = ConfigPaths {
+            overlay: Some(PathBuf::from("boltffi.ci.toml")),
+        };
+
+        let error = match resolve_init_options(None, &config_paths) {
+            Ok(_) => panic!("overlay should fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command == "--overlay is not supported with init"
+        ));
     }
 
     #[test]

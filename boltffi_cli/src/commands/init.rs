@@ -48,15 +48,13 @@ fn detect_package_name(path: &Path) -> Option<String> {
 
     std::fs::read_to_string(&cargo_toml)
         .ok()
-        .and_then(|content| {
-            content
-                .lines()
-                .find(|line| line.starts_with("name = "))
-                .and_then(|line| {
-                    line.split('=')
-                        .nth(1)
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                })
+        .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
+        .and_then(|value| {
+            value
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_string)
         })
 }
 
@@ -144,4 +142,64 @@ fn to_pascal_case(input: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InitOptions, run_init};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn run_init_writes_requested_config_path() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!("boltffi-init-test-{unique}"));
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        fs::write(
+            temp_root.join("Cargo.toml"),
+            "[package]\nname = \"demo_lib\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write cargo toml");
+
+        let config_path = temp_root.join("boltffi.toml");
+        let written_path = run_init(InitOptions {
+            name: None,
+            path: temp_root.clone(),
+        })
+        .expect("init should succeed");
+
+        assert_eq!(written_path, config_path);
+        assert!(config_path.exists());
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("name = \"demo_lib\""));
+
+        fs::remove_dir_all(temp_root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn run_init_falls_back_when_cargo_manifest_has_no_package_table() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!("boltffi-init-workspace-test-{unique}"));
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        fs::write(temp_root.join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("write workspace cargo toml");
+
+        let config_path = temp_root.join("boltffi.toml");
+        run_init(InitOptions {
+            name: None,
+            path: temp_root.clone(),
+        })
+        .expect("init should succeed");
+
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("name = \"mylib\""));
+
+        fs::remove_dir_all(temp_root).expect("cleanup temp root");
+    }
 }

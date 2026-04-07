@@ -4,10 +4,10 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error("config error: {0}")]
-    Config(#[from] ConfigError),
+    Config(Box<ConfigError>),
 
-    #[error("boltffi.toml not found in current directory")]
-    ConfigNotFound,
+    #[error("config file not found: {0}")]
+    ConfigNotFound(PathBuf),
 
     #[error("no built libraries found for {platform}")]
     NoLibrariesFound { platform: String },
@@ -78,6 +78,12 @@ pub enum CliError {
 
     #[error("build failed for targets: {targets:?}")]
     BuildFailed { targets: Vec<String> },
+}
+
+impl From<ConfigError> for CliError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(Box::new(error))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CliError>;
