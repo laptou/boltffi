@@ -5,8 +5,10 @@ pub use boltffi_ffi_rules::transport::{
 };
 use syn::{ReturnType, Type};
 
+use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::data_types::DataTypeRegistry;
+use crate::index::exported_classes::ExportedClassRegistry;
 use crate::lowering::transport::NamedTypeTransportClassifier;
 
 use super::classify::classify_value_return_strategy;
@@ -84,13 +86,22 @@ impl ResolvedReturn {
 pub struct ReturnLoweringContext<'a> {
     custom_types: &'a CustomTypeRegistry,
     data_types: &'a DataTypeRegistry,
+    exported_classes: &'a ExportedClassRegistry,
+    callback_traits: &'a CallbackTraitRegistry,
 }
 
 impl<'a> ReturnLoweringContext<'a> {
-    pub fn new(custom_types: &'a CustomTypeRegistry, data_types: &'a DataTypeRegistry) -> Self {
+    pub fn new(
+        custom_types: &'a CustomTypeRegistry,
+        data_types: &'a DataTypeRegistry,
+        exported_classes: &'a ExportedClassRegistry,
+        callback_traits: &'a CallbackTraitRegistry,
+    ) -> Self {
         Self {
             custom_types,
             data_types,
+            exported_classes,
+            callback_traits,
         }
     }
 
@@ -102,28 +113,40 @@ impl<'a> ReturnLoweringContext<'a> {
         self.data_types
     }
 
-    pub(crate) fn named_type_transport_classifier(&self) -> NamedTypeTransportClassifier<'a> {
-        NamedTypeTransportClassifier::new(self.custom_types, self.data_types)
+    pub fn exported_classes(&self) -> &'a ExportedClassRegistry {
+        self.exported_classes
     }
 
-    pub fn lower_output(&self, output: &ReturnType) -> ResolvedReturn {
+    pub fn callback_traits(&self) -> &'a CallbackTraitRegistry {
+        self.callback_traits
+    }
+
+    pub(crate) fn named_type_transport_classifier(&self) -> NamedTypeTransportClassifier<'a> {
+        NamedTypeTransportClassifier::new(
+            self.custom_types,
+            self.data_types,
+            self.exported_classes,
+        )
+    }
+
+    pub fn lower_output(&self, output: &ReturnType) -> syn::Result<ResolvedReturn> {
         match output {
-            ReturnType::Default => ResolvedReturn::new(
+            ReturnType::Default => Ok(ResolvedReturn::new(
                 syn::parse_quote!(()),
                 ReturnContract::infallible(ValueReturnStrategy::Void),
-            ),
+            )),
             ReturnType::Type(_, rust_type) => self.lower_type(rust_type),
         }
     }
 
-    pub fn lower_type(&self, rust_type: &Type) -> ResolvedReturn {
-        ResolvedReturn::new(
+    pub fn lower_type(&self, rust_type: &Type) -> syn::Result<ResolvedReturn> {
+        Ok(ResolvedReturn::new(
             rust_type.clone(),
             ReturnContract::new(
-                classify_value_return_strategy(rust_type, self),
+                classify_value_return_strategy(rust_type, self)?,
                 ErrorReturnStrategy::None,
             ),
-        )
+        ))
     }
 }
 

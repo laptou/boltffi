@@ -201,6 +201,7 @@ impl<'a> CallbackBindingBuilder<'a> {
         if matches!(
             self.return_lowering
                 .lower_type(arg_type)
+                .expect("boltffi: failed to classify callback arg for lowering")
                 .value_return_strategy(),
             ValueReturnStrategy::Scalar(_)
         ) {
@@ -310,7 +311,11 @@ impl<'a> CallbackBindingBuilder<'a> {
             quote! { , #first_param #(, #rest_params)* }
         };
 
-        let return_abi = returns.map(|return_type| self.return_lowering.lower_type(return_type));
+        let return_abi = returns.map(|return_type| {
+            self.return_lowering
+                .lower_type(return_type)
+                .expect("boltffi: failed to classify closure callback return")
+        });
         let wasm_return_method = return_abi.as_ref().map(|return_abi| {
             return_abi
                 .value_return_method(ReturnInvocationContext::InlineClosure, ReturnPlatform::Wasm)
@@ -531,9 +536,12 @@ impl<'a> SyncCallbackParamLowerer<'a> {
                 },
             );
 
-        let closure_return_abi = returns
-            .as_ref()
-            .map(|return_type| self.builder.return_lowering.lower_type(return_type));
+        let closure_return_abi = returns.as_ref().map(|return_type| {
+            self.builder
+                .return_lowering
+                .lower_type(return_type)
+                .expect("boltffi: failed to classify native closure callback return")
+        });
         let closure_return_method = closure_return_abi.as_ref().map(|return_abi| {
             return_abi.value_return_method(
                 ReturnInvocationContext::InlineClosure,

@@ -111,6 +111,14 @@ impl<'a> SyncParamLowerer<'a> {
                 let classified_param = self.param_transform_classifier.classify(&pat_type.ty);
 
                 match classified_param.contract.value_strategy() {
+                    ParamValueStrategy::ObjectHandle { .. } => self
+                        .value_param_lowerer
+                        .lower_param_transform(
+                            &mut acc,
+                            &name,
+                            &pat_type.ty,
+                            classified_param.transform,
+                        ),
                     ParamValueStrategy::CallbackHandle { .. } => match classified_param.transform {
                         ParamTransform::Callback {
                             params: arg_types,
@@ -245,6 +253,7 @@ impl<'a> AsyncParamLowerer<'a> {
             | ParamTransform::VecPassable(_)
             | ParamTransform::WireEncoded(_)
             | ParamTransform::Passable(_)
+            | ParamTransform::ExportedClass(_)
             | ParamTransform::ImplTrait(_)
             | ParamTransform::PassThrough => None,
         }
@@ -322,6 +331,7 @@ fn param_transform_name(param_transform: &ParamTransform) -> &'static str {
         ParamTransform::VecPassable(_) => "VecPassable",
         ParamTransform::WireEncoded(_) => "WireEncoded",
         ParamTransform::Passable(_) => "Passable",
+        ParamTransform::ExportedClass(_) => "ExportedClass",
     }
 }
 
@@ -390,11 +400,16 @@ mod tests {
     fn async_param_lowerer() -> AsyncParamLowerer<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let exported_classes = Box::leak(Box::new(
+            crate::index::exported_classes::ExportedClassRegistry::default(),
+        ));
+        let callback_registry = Box::leak(Box::new(CallbackTraitRegistry::default()));
         let return_lowering = Box::leak(Box::new(ReturnLoweringContext::new(
             custom_types,
             data_types,
+            exported_classes,
+            callback_registry,
         )));
-        let callback_registry = Box::leak(Box::new(CallbackTraitRegistry::default()));
         let on_wire_record_error = Box::leak(Box::new(proc_macro2::TokenStream::new()));
         AsyncParamLowerer::new(return_lowering, callback_registry, on_wire_record_error)
     }

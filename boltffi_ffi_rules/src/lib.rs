@@ -1323,10 +1323,12 @@ pub mod transport {
                 ReturnInvocationContext::CallbackVtable => match self {
                     Self::Void => ValueReturnMethod::DirectReturn,
                     Self::Scalar(_) => ValueReturnMethod::WriteToOutParameter,
-                    Self::CompositeValue
-                    | Self::Buffer(_)
-                    | Self::ObjectHandle
-                    | Self::CallbackHandle => ValueReturnMethod::WriteToOutBufferParts,
+                    Self::ObjectHandle | Self::CallbackHandle => {
+                        ValueReturnMethod::WriteToOutParameter
+                    }
+                    Self::CompositeValue | Self::Buffer(_) => {
+                        ValueReturnMethod::WriteToOutBufferParts
+                    }
                 },
             }
         }

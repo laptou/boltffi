@@ -2,6 +2,7 @@
 source: boltffi_bindgen/src/render/typescript/templates.rs
 expression: output
 ---
+/// <reference lib="esnext.disposable" />
 import { WireReader, WireWriter, BoltFFIModule, instantiateBoltFFI, wireStringSize } from "@boltffi/runtime";
 import type { Duration, WireCodec, BoltFFIImports, BoltFFIExports } from "@boltffi/runtime";
 

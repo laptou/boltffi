@@ -7,6 +7,8 @@ use quote::{format_ident, quote};
 use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
+use crate::lowering::returns::callback_return::resolve_sync_callback_return;
+use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::custom_types::{contains_custom_types, from_wire_expr_owned, wire_type_for};
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
@@ -23,6 +25,7 @@ pub(super) struct LocalHandleExpander<'a> {
     vtable_name: &'a syn::Ident,
     custom_types: &'a CustomTypeRegistry,
     return_lowering: &'a ReturnLoweringContext<'a>,
+    callback_traits: &'a CallbackTraitRegistry,
 }
 
 impl<'a> LocalHandleExpander<'a> {
@@ -33,6 +36,7 @@ impl<'a> LocalHandleExpander<'a> {
         vtable_name: &'a syn::Ident,
         custom_types: &'a CustomTypeRegistry,
         return_lowering: &'a ReturnLoweringContext<'a>,
+        callback_traits: &'a CallbackTraitRegistry,
     ) -> Self {
         Self {
             item_trait,
@@ -41,6 +45,7 @@ impl<'a> LocalHandleExpander<'a> {
             vtable_name,
             custom_types,
             return_lowering,
+            callback_traits,
         }
     }
 
@@ -81,6 +86,7 @@ impl<'a> LocalHandleExpander<'a> {
                     &local_registry_lookup_name,
                     self.custom_types,
                     self.return_lowering,
+                    self.callback_traits,
                 )
                 .expand()
             })
@@ -213,6 +219,7 @@ struct LocalHandleMethodExpander<'a> {
     local_registry_lookup_name: &'a syn::Ident,
     custom_types: &'a CustomTypeRegistry,
     return_lowering: &'a ReturnLoweringContext<'a>,
+    callback_traits: &'a CallbackTraitRegistry,
 }
 
 struct LocalHandleMethodExpansion {
@@ -229,6 +236,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         local_registry_lookup_name: &'a syn::Ident,
         custom_types: &'a CustomTypeRegistry,
         return_lowering: &'a ReturnLoweringContext<'a>,
+        callback_traits: &'a CallbackTraitRegistry,
     ) -> Self {
         Self {
             method,
@@ -237,6 +245,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             local_registry_lookup_name,
             custom_types,
             return_lowering,
+            callback_traits,
         }
     }
 
@@ -248,7 +257,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             self.trait_name_snake,
             method_name_snake
         );
-        let lowered_params = self.lowered_params();
+        let lowered_params = self.lowered_params()?;
         let ffi_params = &lowered_params.ffi_params;
         let decode_steps = &lowered_params.decode_steps;
         let call_args = &lowered_params.call_args;
@@ -306,8 +315,8 @@ impl<'a> LocalHandleMethodExpander<'a> {
         return_type: &syn::Type,
         invoke_expression: &TokenStream,
     ) -> Result<(Vec<TokenStream>, TokenStream), syn::Error> {
-        let resolved_return = self.return_lowering.lower_type(return_type);
-        let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering);
+        let resolved_return = self.return_lowering.lower_type(return_type)?;
+        let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
         let uses_wire_payload = matches!(
             lowered_return.value_return_method(
                 ReturnInvocationContext::CallbackVtable,
@@ -344,7 +353,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
                 ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                     return Err(syn::Error::new_spanned(
                         return_type,
-                        "boltffi: local callback handle trampolines do not support handle returns yet",
+                        "boltffi: internal error: handle returns should not use wire payload vtable path",
                     ));
                 }
                 ValueReturnStrategy::Void | ValueReturnStrategy::Scalar(_) => {
@@ -429,11 +438,19 @@ impl<'a> LocalHandleMethodExpander<'a> {
             | ValueReturnStrategy::CompositeValue => quote! {
                 ::boltffi::__private::Passable::pack(#result_name)
             },
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                return Err(syn::Error::new_spanned(
-                    return_type,
-                    "boltffi: local callback handle trampolines do not support handle returns yet",
-                ));
+            ValueReturnStrategy::ObjectHandle => quote! {
+                ::boltffi::__private::Passable::pack(#result_name)
+            },
+            ValueReturnStrategy::CallbackHandle => {
+                let output: syn::ReturnType = syn::parse_quote! { -> #return_type };
+                let sync = resolve_sync_callback_return(&output, self.callback_traits)?;
+                let Some(cb) = sync else {
+                    return Err(syn::Error::new_spanned(
+                        return_type,
+                        "boltffi: callback handle return requires a resolvable exported callback trait",
+                    ));
+                };
+                cb.lower_native_result_expression(quote! { #result_name })
             }
             ValueReturnStrategy::Void | ValueReturnStrategy::Buffer(_) => {
                 return Err(syn::Error::new_spanned(
@@ -506,8 +523,8 @@ impl<'a> LocalHandleMethodExpander<'a> {
         return_type: &syn::Type,
         invoke_expression: &TokenStream,
     ) -> Result<TokenStream, syn::Error> {
-        let resolved_return = self.return_lowering.lower_type(return_type);
-        let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering);
+        let resolved_return = self.return_lowering.lower_type(return_type)?;
+        let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
         let uses_wire_payload = matches!(
             lowered_return.value_return_method(
                 ReturnInvocationContext::CallbackVtable,
@@ -530,7 +547,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
                 ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                     return Err(syn::Error::new_spanned(
                         return_type,
-                        "boltffi: local wasm callback trampolines do not support handle returns yet",
+                        "boltffi: internal error: handle returns should not use wire payload wasm path",
                     ));
                 }
                 ValueReturnStrategy::Void => {
@@ -571,11 +588,19 @@ impl<'a> LocalHandleMethodExpander<'a> {
             | ValueReturnStrategy::CompositeValue => quote! {
                 ::boltffi::__private::Passable::pack(#callback_result_name)
             },
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                return Err(syn::Error::new_spanned(
-                    return_type,
-                    "boltffi: local wasm callback trampolines do not support handle returns yet",
-                ));
+            ValueReturnStrategy::ObjectHandle => quote! {
+                ::boltffi::__private::Passable::pack(#callback_result_name)
+            },
+            ValueReturnStrategy::CallbackHandle => {
+                let output: syn::ReturnType = syn::parse_quote! { -> #return_type };
+                let sync = resolve_sync_callback_return(&output, self.callback_traits)?;
+                let Some(cb) = sync else {
+                    return Err(syn::Error::new_spanned(
+                        return_type,
+                        "boltffi: callback handle return requires a resolvable exported callback trait",
+                    ));
+                };
+                cb.lower_wasm_result_expression(quote! { #callback_result_name })
             }
             ValueReturnStrategy::Void | ValueReturnStrategy::Buffer(_) => {
                 return Err(syn::Error::new_spanned(
@@ -600,7 +625,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         })
     }
 
-    fn lowered_params(&self) -> LocalHandleMethodParams {
+    fn lowered_params(&self) -> syn::Result<LocalHandleMethodParams> {
         self.method
             .sig
             .inputs
@@ -613,29 +638,25 @@ impl<'a> LocalHandleMethodExpander<'a> {
                 syn::Pat::Ident(ident) => Some((ident.ident.clone(), pat_type.ty.as_ref().clone())),
                 _ => None,
             })
-            .map(|(param_name, param_type)| self.lower_param(&param_name, &param_type))
-            .fold(
+            .try_fold(
                 LocalHandleMethodParams::default(),
-                |mut lowered_params, lowered_param| {
+                |mut lowered_params, (param_name, param_type)| {
+                    let lowered_param = self.lower_param(&param_name, &param_type)?;
                     lowered_params.ffi_params.extend(lowered_param.ffi_params);
                     lowered_params
                         .decode_steps
                         .extend(lowered_param.decode_steps);
                     lowered_params.call_args.push(lowered_param.call_arg);
-                    lowered_params
+                    Ok(lowered_params)
                 },
             )
     }
 
-    fn lower_param(&self, param_name: &syn::Ident, param_type: &syn::Type) -> LocalHandleParam {
+    fn lower_param(&self, param_name: &syn::Ident, param_type: &syn::Type) -> syn::Result<LocalHandleParam> {
         let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
-        if matches!(
-            self.return_lowering
-                .lower_type(param_type)
-                .value_return_strategy(),
-            ValueReturnStrategy::Scalar(_)
-        ) {
-            return LocalHandleParam {
+        let value_strategy = self.return_lowering.lower_type(param_type)?.value_return_strategy();
+        if matches!(value_strategy, ValueReturnStrategy::Scalar(_)) {
+            return Ok(LocalHandleParam {
                 ffi_params: vec![quote! { #param_name: #direct_ffi_type }],
                 decode_steps: vec![quote! {
                     let #param_name: #param_type = unsafe {
@@ -643,7 +664,19 @@ impl<'a> LocalHandleMethodExpander<'a> {
                     };
                 }],
                 call_arg: quote! { #param_name },
-            };
+            });
+        }
+        if matches!(value_strategy, ValueReturnStrategy::ObjectHandle) {
+            let in_ffi = quote! { <#param_type as ::boltffi::__private::Passable>::In };
+            return Ok(LocalHandleParam {
+                ffi_params: vec![quote! { #param_name: #in_ffi }],
+                decode_steps: vec![quote! {
+                    let #param_name: #param_type = unsafe {
+                        <#param_type as ::boltffi::__private::Passable>::unpack(#param_name)
+                    };
+                }],
+                call_arg: quote! { #param_name },
+            });
         }
 
         let pointer_name = format_ident!("{}_ptr", param_name);
@@ -679,14 +712,14 @@ impl<'a> LocalHandleMethodExpander<'a> {
             }]
         };
 
-        LocalHandleParam {
+        Ok(LocalHandleParam {
             ffi_params: vec![
                 quote! { #pointer_name: *const u8 },
                 quote! { #length_name: usize },
             ],
             decode_steps,
             call_arg: quote! { #param_name },
-        }
+        })
     }
 
     fn is_borrowed_utf8_str(param_type: &syn::Type) -> bool {
@@ -723,16 +756,28 @@ struct LocalHandleParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
     use crate::index::data_types::DataTypeRegistry;
+    use crate::index::exported_classes::ExportedClassRegistry;
     use crate::lowering::returns::model::ReturnLoweringContext;
     use quote::{format_ident, quote};
     use syn::parse_quote;
 
+    fn callback_traits() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
+    }
+
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        ReturnLoweringContext::new(custom_types, data_types)
+        let exported_classes = Box::leak(Box::new(ExportedClassRegistry::default()));
+        ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_traits(),
+        )
     }
 
     fn local_handle_method_expander(
@@ -755,6 +800,7 @@ mod tests {
             local_registry_lookup_name,
             custom_types,
             return_lowering,
+            callback_traits(),
         )
     }
 
@@ -763,7 +809,9 @@ mod tests {
             fn on_complete(&self, value: String);
         }));
         let expander = local_handle_method_expander(method);
-        let lowered_param = expander.lower_param(&format_ident!("value"), &param_type);
+        let lowered_param = expander
+            .lower_param(&format_ident!("value"), &param_type)
+            .expect("lower param");
         let decode_steps = lowered_param.decode_steps;
         quote! { #(#decode_steps)* }.to_string()
     }

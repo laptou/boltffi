@@ -679,6 +679,9 @@ impl<'a> SyncValueParamLowerer<'a> {
             ParamTransform::Passable(rust_type) => self
                 .decoder
                 .lower_sync_passable_param(acc, name, &rust_type),
+            ParamTransform::ExportedClass(rust_type) => self
+                .decoder
+                .lower_sync_passable_param(acc, name, &rust_type),
             ParamTransform::PassThrough => {
                 self.decoder
                     .lower_sync_pass_through_param(acc, name, original_type)
@@ -746,6 +749,9 @@ impl<'a> AsyncValueParamLowerer<'a> {
                     .lower_async_wire_encoded_param(acc, name, &wire_param);
             }
             ParamTransform::Passable(rust_type) => self
+                .decoder
+                .lower_async_passable_param(acc, name, &rust_type),
+            ParamTransform::ExportedClass(rust_type) => self
                 .decoder
                 .lower_async_passable_param(acc, name, &rust_type),
             ParamTransform::PassThrough => {

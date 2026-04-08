@@ -60,9 +60,10 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         let call_args = &lowered_params.call_args;
         let prelude_stmts = &lowered_params.prelude_stmts;
         let return_type = self.return_type();
-        let lowered_return = return_type
-            .as_ref()
-            .map(|ty| LoweredCallbackReturn::new(ty, self.return_lowering));
+        let lowered_return = match return_type.as_ref() {
+            Some(ty) => Some(LoweredCallbackReturn::new(ty, self.return_lowering)?),
+            None => None,
+        };
 
         let packed_utf8_return = lowered_return.as_ref().is_some_and(|lowered_return| {
             lowered_return.encoded_return_strategy() == Some(EncodedReturnStrategy::Utf8String)
@@ -352,11 +353,16 @@ impl<'a> WasmCallbackMethodExpander<'a> {
     ) -> WasmCallbackParamLowering {
         let rust_param = quote! { #param_name: #param_type };
         let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
+        let value_strategy = self
+            .return_lowering
+            .lower_type(param_type)
+            .expect("boltffi: failed to classify wasm callback param")
+            .value_return_strategy();
         if matches!(
-            self.return_lowering
-                .lower_type(param_type)
-                .value_return_strategy(),
+            value_strategy,
             ValueReturnStrategy::Scalar(_)
+                | ValueReturnStrategy::ObjectHandle
+                | ValueReturnStrategy::CallbackHandle
         ) {
             return WasmCallbackParamLowering {
                 ffi_params: vec![quote! { #param_name: #direct_ffi_type }],

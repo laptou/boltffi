@@ -461,7 +461,13 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let custom_types = crate_index.custom_types().clone();
     let callback_registry = crate_index.callback_traits().clone();
     let data_types = crate_index.data_types().clone();
-    let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types);
+    let exported_classes = crate_index.exported_classes().clone();
+    let return_lowering = ReturnLoweringContext::new(
+        &custom_types,
+        &data_types,
+        &exported_classes,
+        &callback_registry,
+    );
 
     let type_name = match impl_type_name(&input) {
         Some(name) => name,
@@ -523,6 +529,20 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         #thread_safety_assertion
+
+        // handle abi for this exported class: pointers in, pointers out (not wire `FfiBuf`/`FfiSpan`).
+        unsafe impl ::boltffi::__private::Passable for #type_name {
+            type In = *mut #type_name;
+            type Out = *mut #type_name;
+
+            unsafe fn unpack(input: Self::In) -> Self {
+                *::std::boxed::Box::from_raw(input)
+            }
+
+            fn pack(self) -> Self::Out {
+                ::std::boxed::Box::into_raw(::std::boxed::Box::new(self))
+            }
+        }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(handle: *mut #type_name) {
@@ -666,7 +686,10 @@ fn generate_sync_method_export(
             Ok(resolved_return) => resolved_return,
             Err(error) => return Some(error.to_compile_error()),
         };
-    let return_abi = return_lowering.lower_output(&method.sig.output);
+    let return_abi = match return_lowering.lower_output(&method.sig.output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
     if let Some(callback_return) = sync_callback_return {
         let other_inputs = method.sig.inputs.iter().skip(1).cloned();
         let native_on_wire_record_error =
@@ -871,6 +894,23 @@ fn generate_sync_method_export(
         };
         let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
         (body, return_type, false)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
+        let rust_type = return_abi.rust_type();
+        let body = if has_conversions {
+            quote! {
+                #(#conversions)*
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        } else {
+            quote! {
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        };
+        let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
     } else {
         unreachable!(
             "unsupported instance method return strategy: {:?}",
@@ -920,7 +960,10 @@ fn generate_static_method_export(
             Ok(resolved_return) => resolved_return,
             Err(error) => return Some(error.to_compile_error()),
         };
-    let return_abi = return_lowering.lower_output(&method.sig.output);
+    let return_abi = match return_lowering.lower_output(&method.sig.output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
     if let Some(callback_return) = sync_callback_return {
         let all_inputs = method.sig.inputs.iter().cloned();
         let native_on_wire_record_error =
@@ -1209,7 +1252,10 @@ fn generate_async_method_export(
     };
 
     let fn_output = &method.sig.output;
-    let return_abi = return_lowering.lower_output(fn_output);
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
 
     let ffi_return_type = return_abi.async_ffi_return_type();
     let rust_return_type = return_abi.async_rust_return_type();
@@ -1502,14 +1548,22 @@ mod tests {
         syn::parse_str(code).expect("failed to parse impl block")
     }
 
+    fn callback_registry() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
+    }
+
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        ReturnLoweringContext::new(custom_types, data_types)
-    }
-
-    fn callback_registry() -> &'static CallbackTraitRegistry {
-        Box::leak(Box::new(CallbackTraitRegistry::default()))
+        let exported_classes = Box::leak(Box::new(
+            crate::index::exported_classes::ExportedClassRegistry::default(),
+        ));
+        ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_registry(),
+        )
     }
 
     fn extract_receiver_mutability(method: &syn::ImplItemFn) -> Option<bool> {

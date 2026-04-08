@@ -45,6 +45,8 @@ pub(super) enum ParamTransform {
     VecPassable(syn::Type),
     WireEncoded(WireEncodedParam),
     Passable(syn::Type),
+    /// `#[export] impl` type — same ABI as `Passable` for the Rust type.
+    ExportedClass(syn::Type),
 }
 
 pub(super) struct ClassifiedParamTransform {
@@ -305,6 +307,20 @@ impl<'a> ParamTransformClassifier<'a> {
             };
         }
 
+        if matches!(
+            self.named_type_transport_classifier
+                .classify_named_type_transport(ty),
+            NamedTypeTransport::ExportedClass
+        ) {
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::ObjectHandle { nullable: false },
+                    Self::passing_strategy(ty),
+                ),
+                transform: ParamTransform::ExportedClass(ty.clone()),
+            };
+        }
+
         if param_syntax.is_str_ref() {
             return ClassifiedParamTransform {
                 contract: ParamContract::new(
@@ -343,6 +359,13 @@ impl<'a> ParamTransformClassifier<'a> {
                 .named_type_transport_classifier
                 .classify_named_type_transport(ty)
             {
+                NamedTypeTransport::ExportedClass => ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::ObjectHandle { nullable: false },
+                        Self::passing_strategy(ty),
+                    ),
+                    transform: ParamTransform::ExportedClass(ty.clone()),
+                },
                 NamedTypeTransport::Passable => ClassifiedParamTransform {
                     contract: ParamContract::new(
                         self.named_value_strategy(ty),

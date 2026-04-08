@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 pub(crate) mod callback_traits;
 pub(crate) mod custom_types;
 pub(crate) mod data_types;
+pub(crate) mod exported_classes;
 mod path_resolver;
 mod source_tree;
 
@@ -16,6 +17,7 @@ pub(crate) use source_tree::{ModulePath, SourceModule, SourceTree};
 pub(crate) struct CrateIndex {
     custom_types: custom_types::CustomTypeRegistry,
     data_types: data_types::DataTypeRegistry,
+    exported_classes: exported_classes::ExportedClassRegistry,
     callback_traits: callback_traits::CallbackTraitRegistry,
     path_resolver: PathResolver,
 }
@@ -41,6 +43,7 @@ impl CrateIndex {
         let crate_index = Self {
             custom_types: custom_types::build_custom_type_registry(&source_modules)?,
             data_types: data_types::build_data_type_registry(&source_modules)?,
+            exported_classes: exported_classes::build_exported_class_registry(&source_modules)?,
             callback_traits: callback_traits::build_callback_trait_registry(&source_modules)?,
             path_resolver: PathResolver::build(&source_modules),
         };
@@ -59,6 +62,10 @@ impl CrateIndex {
 
     pub(crate) fn data_types(&self) -> &data_types::DataTypeRegistry {
         &self.data_types
+    }
+
+    pub(crate) fn exported_classes(&self) -> &exported_classes::ExportedClassRegistry {
+        &self.exported_classes
     }
 
     pub(crate) fn callback_traits(&self) -> &callback_traits::CallbackTraitRegistry {
