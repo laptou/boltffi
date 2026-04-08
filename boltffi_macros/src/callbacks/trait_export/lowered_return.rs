@@ -1,6 +1,6 @@
 use boltffi_ffi_rules::transport::{
     DirectBufferReturnMethod, EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform,
-    ValueReturnMethod, ValueReturnStrategy,
+    ValueReturnMethod,
 };
 use syn::Type;
 
@@ -11,10 +11,10 @@ pub(super) struct LoweredCallbackReturn {
 }
 
 impl LoweredCallbackReturn {
-    pub(super) fn new(ty: &Type, return_lowering: &ReturnLoweringContext<'_>) -> Self {
-        Self {
-            resolved_return: return_lowering.lower_type(ty),
-        }
+    pub(super) fn new(ty: &Type, return_lowering: &ReturnLoweringContext<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            resolved_return: return_lowering.lower_type(ty)?,
+        })
     }
 
     pub(super) fn value_return_method(
@@ -38,10 +38,14 @@ impl LoweredCallbackReturn {
             .direct_buffer_return_method(context, platform)
     }
 
+    /// true only when the callback vtable uses the wire-buffer out path (not handles / scalars).
     pub(super) fn uses_wire_payload(&self) -> bool {
-        !matches!(
-            self.resolved_return.value_return_strategy(),
-            ValueReturnStrategy::Scalar(_)
+        matches!(
+            self.resolved_return.value_return_method(
+                ReturnInvocationContext::CallbackVtable,
+                ReturnPlatform::Native,
+            ),
+            ValueReturnMethod::WriteToOutBufferParts
         )
     }
 }

@@ -65,7 +65,14 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
     let crate_index = CrateIndex::for_current_crate()?;
     let custom_types = crate_index.custom_types().clone();
     let data_types = crate_index.data_types().clone();
-    let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types);
+    let exported_classes = crate_index.exported_classes().clone();
+    let callback_traits = crate_index.callback_traits().clone();
+    let return_lowering = ReturnLoweringContext::new(
+        &custom_types,
+        &data_types,
+        &exported_classes,
+        &callback_traits,
+    );
     let trait_name = &item_trait.ident;
     let trait_name_snake = snake_case_ident(trait_name);
     let vtable_name = syn::Ident::new(&format!("{}VTable", trait_name), trait_name.span());
@@ -388,8 +395,48 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
             &vtable_name,
             &custom_types,
             &return_lowering,
+            &callback_traits,
         )
         .expand()?
+    } else {
+        quote! {}
+    };
+
+    let local_handle_fn = format_ident!("__boltffi_local_{}_handle", trait_name_snake);
+    let box_dyn_passable_impl = if is_object_safe && !has_async_methods {
+        quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            unsafe impl ::boltffi::__private::Passable for ::std::boxed::Box<dyn #trait_name> {
+                type In = ::boltffi::__private::CallbackHandle;
+                type Out = ::boltffi::__private::CallbackHandle;
+
+                unsafe fn unpack(input: Self::In) -> Self {
+                    <dyn #trait_name as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(
+                        input,
+                    )
+                }
+
+                fn pack(self) -> Self::Out {
+                    #local_handle_fn(::std::sync::Arc::from(self))
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            unsafe impl ::boltffi::__private::Passable for ::std::boxed::Box<dyn #trait_name> {
+                type In = u32;
+                type Out = u32;
+
+                unsafe fn unpack(input: Self::In) -> Self {
+                    <dyn #trait_name as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(
+                        ::boltffi::__private::CallbackHandle::from_wasm_handle(input),
+                    )
+                }
+
+                fn pack(self) -> Self::Out {
+                    #local_handle_fn(::std::sync::Arc::from(self)).handle() as u32
+                }
+            }
+        }
     } else {
         quote! {}
     };
@@ -400,5 +447,6 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         #dyn_impl
         #foreign_type_impl
         #local_handle_impl
+        #box_dyn_passable_impl
     })
 }

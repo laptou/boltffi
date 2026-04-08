@@ -50,8 +50,10 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         let call_args = &lowered_params.call_args;
         let prelude_stmts = &lowered_params.prelude_stmts;
         let return_type = self.return_type();
-        let lowered_return =
-            return_type.map(|ty| LoweredCallbackReturn::new(ty, self.return_lowering));
+        let lowered_return = match return_type {
+            Some(ty) => Some(LoweredCallbackReturn::new(ty, self.return_lowering)?),
+            None => None,
+        };
         let async_wire_return = lowered_return
             .as_ref()
             .is_some_and(LoweredCallbackReturn::uses_wire_payload);
@@ -117,8 +119,10 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         let call_args = &lowered_params.call_args;
         let prelude_stmts = &lowered_params.prelude_stmts;
         let return_type = self.return_type();
-        let lowered_return =
-            return_type.map(|ty| LoweredCallbackReturn::new(ty, self.return_lowering));
+        let lowered_return = match return_type {
+            Some(ty) => Some(LoweredCallbackReturn::new(ty, self.return_lowering)?),
+            None => None,
+        };
         let wire_return = lowered_return.as_ref().is_some_and(|return_shape| {
             matches!(
                 return_shape.value_return_method(
@@ -564,11 +568,16 @@ impl<'a> NativeCallbackMethodExpander<'a> {
     ) -> NativeCallbackParamLowering {
         let rust_param = quote! { #param_name: #param_type };
         let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
+        let value_strategy = self
+            .return_lowering
+            .lower_type(param_type)
+            .expect("boltffi: failed to classify native callback param")
+            .value_return_strategy();
         if matches!(
-            self.return_lowering
-                .lower_type(param_type)
-                .value_return_strategy(),
+            value_strategy,
             ValueReturnStrategy::Scalar(_)
+                | ValueReturnStrategy::ObjectHandle
+                | ValueReturnStrategy::CallbackHandle
         ) {
             return NativeCallbackParamLowering {
                 ffi_param: quote! { #param_name: #direct_ffi_type },
