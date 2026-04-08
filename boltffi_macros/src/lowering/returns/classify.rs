@@ -1,5 +1,6 @@
 use syn::Type;
 
+use super::callback_return::try_resolve_callback_handle_return;
 use crate::index::data_types::DataTypeCategory;
 use crate::lowering::transport::{
     NamedTypeTransport, RustTypeShape, StandardContainer, TypeDescriptor,
@@ -41,15 +42,17 @@ impl<'a> ReturnTypeDescriptor<'a> {
 pub fn classify_value_return_strategy(
     rust_type: &Type,
     return_lowering: &ReturnLoweringContext<'_>,
-) -> ValueReturnStrategy {
+) -> syn::Result<ValueReturnStrategy> {
     let return_type = ReturnTypeDescriptor::parse(rust_type);
 
     match return_type.type_descriptor.shape() {
-        RustTypeShape::Unit => ValueReturnStrategy::Void,
-        RustTypeShape::Utf8String => ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String),
-        RustTypeShape::Primitive(_) => {
-            ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
-        }
+        RustTypeShape::Unit => Ok(ValueReturnStrategy::Void),
+        RustTypeShape::Utf8String => Ok(ValueReturnStrategy::Buffer(
+            EncodedReturnStrategy::Utf8String,
+        )),
+        RustTypeShape::Primitive(_) => Ok(ValueReturnStrategy::Scalar(
+            ScalarReturnStrategy::PrimitiveValue,
+        )),
         RustTypeShape::StandardContainer(StandardContainer::Vec(inner_type)) => {
             let buffer_strategy = if return_lowering
                 .named_type_transport_classifier()
@@ -59,38 +62,52 @@ pub fn classify_value_return_strategy(
             } else {
                 EncodedReturnStrategy::WireEncoded
             };
-            ValueReturnStrategy::Buffer(buffer_strategy)
+            Ok(ValueReturnStrategy::Buffer(buffer_strategy))
         }
         RustTypeShape::StandardContainer(StandardContainer::Result { ok, err }) => {
             if ReturnTypeDescriptor::parse(ok).is_primitive()
                 && ReturnTypeDescriptor::parse(err).is_primitive()
             {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar)
+                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar))
             } else {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
             }
         }
         RustTypeShape::StandardContainer(StandardContainer::Option(inner_type)) => {
             if ReturnTypeDescriptor::parse(inner_type).is_primitive() {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar)
+                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar))
             } else {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
             }
         }
         RustTypeShape::NamedNominal | RustTypeShape::GenericNominal | RustTypeShape::Other => {
+            if try_resolve_callback_handle_return(rust_type, return_lowering.callback_traits())?
+                .is_some()
+            {
+                return Ok(ValueReturnStrategy::CallbackHandle);
+            }
+
+            if return_lowering
+                .exported_classes()
+                .is_exported_class_type(rust_type)
+            {
+                return Ok(ValueReturnStrategy::ObjectHandle);
+            }
+
             match return_lowering
                 .named_type_transport_classifier()
                 .classify_named_type_transport(rust_type)
             {
-                NamedTypeTransport::WireEncoded => {
-                    ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
-                }
+                NamedTypeTransport::WireEncoded => Ok(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                )),
+                NamedTypeTransport::ExportedClass => Ok(ValueReturnStrategy::ObjectHandle),
                 NamedTypeTransport::Passable => {
                     match return_lowering.data_types().category_for(rust_type) {
-                        Some(DataTypeCategory::Scalar) => {
-                            ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag)
-                        }
-                        Some(DataTypeCategory::Blittable) => ValueReturnStrategy::CompositeValue,
+                        Some(DataTypeCategory::Scalar) => Ok(ValueReturnStrategy::Scalar(
+                            ScalarReturnStrategy::CStyleEnumTag,
+                        )),
+                        Some(DataTypeCategory::Blittable) => Ok(ValueReturnStrategy::CompositeValue),
                         Some(DataTypeCategory::WireEncoded) | None => unreachable!(
                             "passable return transport requires scalar or blittable data type"
                         ),
