@@ -15,7 +15,7 @@ use crate::exports::extern_export::{
     ExternExport, ReceiverParameter,
 };
 use crate::index::callback_traits::CallbackTraitRegistry;
-use crate::index::{CrateIndex, custom_types, data_types};
+use crate::index::{CrateIndex, custom_types};
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
 use crate::lowering::returns::lower::{encoded_return_body, encoded_return_buffer_expression};
 use crate::lowering::returns::model::{
@@ -210,7 +210,13 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
     let custom_types = crate_index.custom_types().clone();
     let callback_registry = crate_index.callback_traits().clone();
     let data_types = crate_index.data_types().clone();
-    let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types);
+    let exported_classes = crate_index.exported_classes().clone();
+    let return_lowering = ReturnLoweringContext::new(
+        &custom_types,
+        &data_types,
+        &exported_classes,
+        &callback_registry,
+    );
 
     let input = callable.item();
     debug_assert_eq!(callable.form(), CallableForm::Function);
@@ -230,7 +236,10 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
         Ok(resolved_return) => resolved_return,
         Err(error) => return error.to_compile_error(),
     };
-    let return_abi = return_lowering.lower_output(fn_output);
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error(),
+    };
 
     if let Some(callback_return) = sync_callback_return {
         let native_on_wire_record_error =
@@ -529,11 +538,19 @@ fn generate_async_export(
 
     let base_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
     let export_names = AsyncExportNames::new(&base_name, fn_name.span());
-    let data_types = match data_types::registry_for_current_crate() {
-        Ok(registry) => registry,
+    let crate_index = match CrateIndex::for_current_crate() {
+        Ok(i) => i,
         Err(error) => return error.to_compile_error().into(),
     };
-    let return_lowering = ReturnLoweringContext::new(custom_types, &data_types);
+    let data_types = crate_index.data_types();
+    let exported_classes = crate_index.exported_classes();
+    let callback_for_lower = crate_index.callback_traits();
+    let return_lowering = ReturnLoweringContext::new(
+        custom_types,
+        data_types,
+        exported_classes,
+        callback_for_lower,
+    );
 
     let on_wire_record_error = quote! { ::core::ptr::null() };
     let params = match transform_params_async(
@@ -545,7 +562,10 @@ fn generate_async_export(
         Ok(params) => params,
         Err(error) => return error.to_compile_error().into(),
     };
-    let return_abi = return_lowering.lower_output(fn_output);
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     let ffi_return_type = return_abi.async_ffi_return_type();
     let rust_return_type = return_abi.async_rust_return_type();

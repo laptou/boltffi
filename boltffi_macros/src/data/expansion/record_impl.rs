@@ -124,7 +124,14 @@ impl RecordImplExpansion {
         let custom_types = Box::leak(Box::new(crate_index.custom_types().clone()));
         let callback_registry = crate_index.callback_traits().clone();
         let data_types = Box::leak(Box::new(crate_index.data_types().clone()));
-        let return_lowering = ReturnLoweringContext::new(custom_types, data_types);
+        let exported_classes = Box::leak(Box::new(crate_index.exported_classes().clone()));
+        let callback_registry_leaked = Box::leak(Box::new(callback_registry.clone()));
+        let return_lowering = ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_registry_leaked,
+        );
         let record_name = type_name.to_string();
 
         Ok(Self {
@@ -235,7 +242,10 @@ fn generate_record_constructor_export(
     let export_name = syn::Ident::new(export_name.as_str(), method_name.span());
 
     let method_descriptor = RecordMethodDescriptor::from_method(method, type_name);
-    let return_abi = return_lowering.lower_output(&method_descriptor.resolved_output);
+    let return_abi = match return_lowering.lower_output(&method_descriptor.resolved_output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
     let on_error = return_abi.invalid_arg_early_return_statement();
 
     let inputs = method.sig.inputs.iter().cloned();
@@ -278,7 +288,10 @@ fn generate_record_instance_export(
     let export_name = syn::Ident::new(export_name.as_str(), method_name.span());
 
     let method_descriptor = RecordMethodDescriptor::from_method(method, type_name);
-    let return_abi = return_lowering.lower_output(&method_descriptor.resolved_output);
+    let return_abi = match return_lowering.lower_output(&method_descriptor.resolved_output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
     let on_error = return_abi.invalid_arg_early_return_statement();
 
     let self_ident = syn::Ident::new("self_value", method_name.span());
@@ -376,7 +389,10 @@ fn generate_record_static_export(
     let export_name = syn::Ident::new(export_name.as_str(), method_name.span());
 
     let method_descriptor = RecordMethodDescriptor::from_method(method, type_name);
-    let return_abi = return_lowering.lower_output(&method_descriptor.resolved_output);
+    let return_abi = match return_lowering.lower_output(&method_descriptor.resolved_output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
     let on_error = return_abi.invalid_arg_early_return_statement();
 
     let all_inputs = method.sig.inputs.iter().cloned();
@@ -650,14 +666,22 @@ mod tests {
         syn::parse_str(code).expect("failed to parse impl block")
     }
 
+    fn callback_registry() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
+    }
+
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        ReturnLoweringContext::new(custom_types, data_types)
-    }
-
-    fn callback_registry() -> &'static CallbackTraitRegistry {
-        Box::leak(Box::new(CallbackTraitRegistry::default()))
+        let exported_classes = Box::leak(Box::new(
+            crate::index::exported_classes::ExportedClassRegistry::default(),
+        ));
+        ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_registry(),
+        )
     }
 
     #[test]
