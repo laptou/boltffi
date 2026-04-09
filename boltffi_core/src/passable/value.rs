@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use crate::callback::{ArcDynCallbackPassable, CallbackHandle};
 use crate::types::{FfiBuf, FfiSpan};
 
 /// Describes how a Rust value is unpacked from ABI input and packed into ABI output.
@@ -57,6 +60,38 @@ macro_rules! impl_passable_scalar {
 impl_passable_scalar!(
     i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bool, usize, isize
 );
+
+// `Arc` is not fundamental (unlike `Box`), so user crates cannot implement [`Passable`] for
+// `Arc<dyn LocalTrait>`; this blanket delegates to [`ArcDynCallbackPassable`] on the inner type.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl<T: ?Sized + ArcDynCallbackPassable> Passable for Arc<T> {
+    type In = CallbackHandle;
+    type Out = CallbackHandle;
+
+    unsafe fn unpack(input: Self::In) -> Self {
+        // SAFETY: caller upholds [`Passable::unpack`] invariants; forwarded to the dyn-trait impl.
+        unsafe { T::unpack_from_handle(input) }
+    }
+
+    fn pack(self) -> Self::Out {
+        ArcDynCallbackPassable::pack_to_handle(self)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl<T: ?Sized + ArcDynCallbackPassable> Passable for Arc<T> {
+    type In = u32;
+    type Out = u32;
+
+    unsafe fn unpack(input: Self::In) -> Self {
+        // SAFETY: caller upholds [`Passable::unpack`] invariants; forwarded to the dyn-trait impl.
+        unsafe { T::unpack_from_handle(CallbackHandle::from_wasm_handle(input)) }
+    }
+
+    fn pack(self) -> Self::Out {
+        ArcDynCallbackPassable::pack_to_handle(self).handle() as u32
+    }
+}
 
 unsafe impl Passable for String {
     type In = FfiSpan;

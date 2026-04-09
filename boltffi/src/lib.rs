@@ -1,5 +1,6 @@
 pub use boltffi_core::{
-    ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
+    ArcDynCallbackPassable, ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType,
+    CallbackHandle,
     CustomFfiConvertible, CustomTypeConversionError, Data, EventSubscription, FfiType,
     StreamProducer, UnexpectedFfiCallbackError, custom_ffi, custom_type, data, default, error,
     export, ffi_stream, name, skip,
@@ -8,7 +9,8 @@ pub use boltffi_core::{
 #[doc(hidden)]
 pub mod __private {
     pub use boltffi_core::{
-        ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
+        ArcDynCallbackPassable, ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType,
+        CallbackHandle,
         EventSubscription, FfiBuf, FfiSpan, FfiStatus, Passable, RustFutureContinuationCallback,
         RustFutureHandle, StreamContinuationCallback, StreamPollResult, SubscriptionHandle,
         VecTransport, WaitResult, WirePassable, rustfuture, set_last_error, wire,

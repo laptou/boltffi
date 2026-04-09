@@ -23,7 +23,8 @@ pub use boltffi_macros::{
 #[cfg(target_arch = "wasm32")]
 pub use callback::WasmCallbackOwner;
 pub use callback::{
-    ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
+    ArcDynCallbackPassable, ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType,
+    CallbackHandle,
 };
 pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;

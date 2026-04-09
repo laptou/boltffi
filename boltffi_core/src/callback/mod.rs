@@ -8,12 +8,14 @@
 //! handle, and the foreign-type association used to move between the Rust-facing
 //! callback type and its generated wrapper.
 
+mod arc_dyn_passable;
 mod foreign;
 mod handle;
 mod ownership;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
+pub use arc_dyn_passable::ArcDynCallbackPassable;
 pub use foreign::CallbackForeignType;
 pub use handle::CallbackHandle;
 pub use ownership::{ArcFromCallbackHandle, BoxFromCallbackHandle};

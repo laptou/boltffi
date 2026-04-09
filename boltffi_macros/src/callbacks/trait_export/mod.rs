@@ -441,6 +441,44 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         quote! {}
     };
 
+    // `Arc` is not fundamental, so we cannot emit `impl Passable for Arc<dyn Trait>` in user crates.
+    // [`ArcDynCallbackPassable`] is implemented here; [`Passable`] for `Arc<T>` lives in boltffi_core.
+    let arc_dyn_callback_passable_impl = if is_object_safe && !has_async_methods {
+        quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            unsafe impl ::boltffi::__private::ArcDynCallbackPassable for dyn #trait_name {
+                unsafe fn unpack_from_handle(
+                    handle: ::boltffi::__private::CallbackHandle,
+                ) -> ::std::sync::Arc<Self> {
+                    <dyn #trait_name as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(
+                        handle,
+                    )
+                }
+
+                fn pack_to_handle(self_arc: ::std::sync::Arc<Self>) -> ::boltffi::__private::CallbackHandle {
+                    #local_handle_fn(self_arc)
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            unsafe impl ::boltffi::__private::ArcDynCallbackPassable for dyn #trait_name {
+                unsafe fn unpack_from_handle(
+                    handle: ::boltffi::__private::CallbackHandle,
+                ) -> ::std::sync::Arc<Self> {
+                    <dyn #trait_name as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(
+                        handle,
+                    )
+                }
+
+                fn pack_to_handle(self_arc: ::std::sync::Arc<Self>) -> ::boltffi::__private::CallbackHandle {
+                    #local_handle_fn(self_arc)
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #expanded
         #concrete_impl
@@ -448,5 +486,6 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         #foreign_type_impl
         #local_handle_impl
         #box_dyn_passable_impl
+        #arc_dyn_callback_passable_impl
     })
 }
