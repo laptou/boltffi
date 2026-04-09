@@ -7,7 +7,12 @@ use std::path::{Path, PathBuf};
 use syn::{
     Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, Type,
 };
+use quote::ToTokens;
 use walkdir::WalkDir;
+
+fn format_syn_type(ty: &syn::Type) -> String {
+    ty.to_token_stream().to_string()
+}
 
 use crate::model::{
     BuiltinId, CallbackTrait, Class, ClosureSignature as MClosureSignature, Constructor,
@@ -1051,30 +1056,30 @@ impl SourceScanner {
                     || (has_attribute(&item_struct.attrs, "derive")
                         && has_ffi_type_derive(&item_struct.attrs))
                 {
-                    self.process_record(item_struct);
+                    self.process_record(item_struct)?;
                 }
             }
             Item::Impl(item_impl) => {
                 if has_data_impl_attribute(&item_impl.attrs) {
-                    self.process_value_type_impl(item_impl);
+                    self.process_value_type_impl(item_impl)?;
                 } else if has_attribute(&item_impl.attrs, "ffi_class")
                     || has_attribute(&item_impl.attrs, "export")
                 {
-                    self.process_class(item_impl);
+                    self.process_class(item_impl)?;
                 }
             }
             Item::Trait(item_trait) => {
                 if has_attribute(&item_trait.attrs, "ffi_trait")
                     || has_attribute(&item_trait.attrs, "export")
                 {
-                    self.process_callback_trait(item_trait);
+                    self.process_callback_trait(item_trait)?;
                 }
             }
             Item::Fn(item_fn) => {
                 if has_attribute(&item_fn.attrs, "ffi_export")
                     || has_attribute(&item_fn.attrs, "export")
                 {
-                    self.process_function(item_fn);
+                    self.process_function(item_fn)?;
                 }
             }
             Item::Enum(item_enum) => {
@@ -1095,46 +1100,61 @@ impl SourceScanner {
         &self,
         inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
         self_type: Option<&str>,
-    ) -> Option<Vec<(String, MType)>> {
-        let typed: Vec<_> = inputs
-            .iter()
-            .filter_map(|arg| match arg {
-                FnArg::Typed(pat_type) => Some(pat_type),
-                _ => None,
-            })
-            .collect();
-
-        let resolved: Vec<(String, MType)> = typed
-            .iter()
-            .filter_map(|pat_type| {
-                let name = match &*pat_type.pat {
-                    syn::Pat::Ident(ident) => ident.ident.to_string(),
-                    _ => return None,
-                };
-                let ty = rust_type_to_ffi_type(
-                    &pat_type.ty,
-                    &self.type_registry,
-                    &self.alias_resolver,
-                    &self.compiler_canonical_types,
-                    self_type,
-                )?;
-                Some((name, ty))
-            })
-            .collect();
-
-        (resolved.len() == typed.len()).then_some(resolved)
+    ) -> Result<Vec<(String, MType)>, String> {
+        let mut out = Vec::new();
+        for arg in inputs.iter() {
+            let pat_type = match arg {
+                FnArg::Typed(pat_type) => pat_type,
+                FnArg::Receiver(_) => continue,
+            };
+            let name = match &*pat_type.pat {
+                syn::Pat::Ident(ident) => ident.ident.to_string(),
+                _ => {
+                    return Err(format!(
+                        "boltffi bindgen: unsupported parameter pattern `{}`",
+                        pat_type.pat.to_token_stream()
+                    ));
+                }
+            };
+            let ty = rust_type_to_ffi_type(
+                &pat_type.ty,
+                &self.type_registry,
+                &self.alias_resolver,
+                &self.compiler_canonical_types,
+                self_type,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "boltffi bindgen: unresolved type `{}` for parameter `{name}`",
+                    format_syn_type(&pat_type.ty),
+                )
+            })?;
+            out.push((name, ty));
+        }
+        Ok(out)
     }
 
-    fn resolve_output(&self, output: &syn::ReturnType, self_type: Option<&str>) -> Option<MType> {
+    fn resolve_output(
+        &self,
+        output: &syn::ReturnType,
+        self_type: Option<&str>,
+    ) -> Result<Option<MType>, String> {
         match output {
-            syn::ReturnType::Default => None,
+            syn::ReturnType::Default => Ok(None),
             syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(
                 ty,
                 &self.type_registry,
                 &self.alias_resolver,
                 &self.compiler_canonical_types,
                 self_type,
-            ),
+            )
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "boltffi bindgen: unresolved return type `{}`",
+                    format_syn_type(ty)
+                )
+            }),
         }
     }
 
@@ -1152,21 +1172,31 @@ impl SourceScanner {
             .unwrap_or(Receiver::None)
     }
 
-    fn process_record(&mut self, item_struct: &ItemStruct) {
+    fn process_record(&mut self, item_struct: &ItemStruct) -> Result<(), String> {
         let name = item_struct.ident.to_string();
         let fields = match &item_struct.fields {
-            Fields::Named(named) => named
-                .named
-                .iter()
-                .filter_map(|f| {
-                    let field_name = f.ident.as_ref()?.to_string();
+            Fields::Named(named) => {
+                let mut fields = Vec::new();
+                for f in &named.named {
+                    let field_name = f.ident.as_ref().ok_or_else(|| {
+                        format!(
+                            "boltffi bindgen: tuple struct field in record `{name}` is not supported"
+                        )
+                    })?;
+                    let field_name = field_name.to_string();
                     let field_type = rust_type_to_ffi_type(
                         &f.ty,
                         &self.type_registry,
                         &self.alias_resolver,
                         &self.compiler_canonical_types,
                         None,
-                    )?;
+                    )
+                    .ok_or_else(|| {
+                        format!(
+                            "boltffi bindgen: unresolved type `{}` for field `{field_name}` in record `{name}`",
+                            format_syn_type(&f.ty),
+                        )
+                    })?;
                     let mut record_field = RecordField::new(&field_name, field_type);
                     if let Some(doc) = extract_doc_string(&f.attrs) {
                         record_field = record_field.with_doc(doc);
@@ -1174,9 +1204,10 @@ impl SourceScanner {
                     if let Some(default) = extract_default_value(&f.attrs) {
                         record_field = record_field.with_default(default);
                     }
-                    Some(record_field)
-                })
-                .collect(),
+                    fields.push(record_field);
+                }
+                fields
+            }
             _ => Vec::new(),
         };
 
@@ -1190,6 +1221,7 @@ impl SourceScanner {
         };
         self.type_registry
             .fill_record_fields(&name, fields, is_repr_c, is_error);
+        Ok(())
     }
 
     fn process_enum(
@@ -1230,40 +1262,56 @@ impl SourceScanner {
                 })?;
 
                 let fields: Vec<RecordField> = match &v.fields {
-                    Fields::Named(named) => named
-                        .named
-                        .iter()
-                        .filter_map(|f| {
-                            let field_name = f.ident.as_ref()?.to_string();
+                    Fields::Named(named) => {
+                        let mut fields = Vec::new();
+                        for f in &named.named {
+                            let field_name = f.ident.as_ref().ok_or_else(|| {
+                                format!(
+                                    "boltffi bindgen: tuple field in enum `{name}` variant `{variant_name}` is not supported"
+                                )
+                            })?;
+                            let field_name = field_name.to_string();
                             let field_type = rust_type_to_ffi_type(
                                 &f.ty,
                                 &self.type_registry,
                                 &self.alias_resolver,
                                 &self.compiler_canonical_types,
                                 None,
-                            )?;
+                            )
+                            .ok_or_else(|| {
+                                format!(
+                                    "boltffi bindgen: unresolved type `{}` for field `{field_name}` in enum `{name}` variant `{variant_name}`",
+                                    format_syn_type(&f.ty),
+                                )
+                            })?;
                             let mut record_field = RecordField::new(&field_name, field_type);
                             if let Some(doc) = extract_doc_string(&f.attrs) {
                                 record_field = record_field.with_doc(doc);
                             }
-                            Some(record_field)
-                        })
-                        .collect(),
-                    Fields::Unnamed(unnamed) => unnamed
-                        .unnamed
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, f)| {
+                            fields.push(record_field);
+                        }
+                        fields
+                    }
+                    Fields::Unnamed(unnamed) => {
+                        let mut fields = Vec::new();
+                        for (i, f) in unnamed.unnamed.iter().enumerate() {
                             let field_type = rust_type_to_ffi_type(
                                 &f.ty,
                                 &self.type_registry,
                                 &self.alias_resolver,
                                 &self.compiler_canonical_types,
                                 None,
-                            )?;
-                            Some(RecordField::new(format!("value_{i}"), field_type))
-                        })
-                        .collect(),
+                            )
+                            .ok_or_else(|| {
+                                format!(
+                                    "boltffi bindgen: unresolved type `{}` for tuple field `{i}` in enum `{name}` variant `{variant_name}`",
+                                    format_syn_type(&f.ty),
+                                )
+                            })?;
+                            fields.push(RecordField::new(format!("value_{i}"), field_type));
+                        }
+                        fields
+                    }
                     Fields::Unit => Vec::new(),
                 };
 
@@ -1289,15 +1337,10 @@ impl SourceScanner {
         Ok(())
     }
 
-    fn process_function(&mut self, item_fn: &syn::ItemFn) {
+    fn process_function(&mut self, item_fn: &syn::ItemFn) -> Result<(), String> {
         let sig = &item_fn.sig;
-        let Some(params) = self.resolve_typed_params(&sig.inputs, None) else {
-            return;
-        };
-        let output = self.resolve_output(&sig.output, None);
-        if matches!(sig.output, syn::ReturnType::Type(..)) && output.is_none() {
-            return;
-        }
+        let params = self.resolve_typed_params(&sig.inputs, None)?;
+        let output = self.resolve_output(&sig.output, None)?;
 
         let function = params
             .into_iter()
@@ -1309,31 +1352,35 @@ impl SourceScanner {
             .maybe_async(sig.asyncness.is_some());
 
         self.functions.push(function);
+        Ok(())
     }
 
-    fn process_callback_trait(&mut self, item_trait: &ItemTrait) {
+    fn process_callback_trait(&mut self, item_trait: &ItemTrait) -> Result<(), String> {
         let name = item_trait.ident.to_string();
 
-        let callback = item_trait
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                syn::TraitItem::Fn(method) => self.build_trait_method(method),
-                _ => None,
-            })
+        let mut methods = Vec::new();
+        for item in &item_trait.items {
+            if let syn::TraitItem::Fn(method) = item {
+                methods.push(self.build_trait_method(method)?);
+            }
+        }
+
+        let callback = methods
+            .into_iter()
             .fold(CallbackTrait::new(&name), |ct, m| ct.with_method(m))
             .maybe_doc(extract_doc_string(&item_trait.attrs));
 
         self.type_registry.register_callback(name);
         self.callback_traits.push(callback);
+        Ok(())
     }
 
-    fn build_trait_method(&self, method: &syn::TraitItemFn) -> Option<TraitMethod> {
+    fn build_trait_method(&self, method: &syn::TraitItemFn) -> Result<TraitMethod, String> {
         let sig = &method.sig;
         let params = self.resolve_typed_params(&sig.inputs, None)?;
-        let output = self.resolve_output(&sig.output, None);
+        let output = self.resolve_output(&sig.output, None)?;
 
-        Some(
+        Ok(
             params
                 .into_iter()
                 .fold(TraitMethod::new(sig.ident.to_string()), |tm, (name, ty)| {
@@ -1345,16 +1392,16 @@ impl SourceScanner {
         )
     }
 
-    fn process_class(&mut self, item_impl: &ItemImpl) {
+    fn process_class(&mut self, item_impl: &ItemImpl) -> Result<(), String> {
         let Some(class_name) = impl_self_type_ident(item_impl) else {
-            return;
+            return Ok(());
         };
 
         let mut constructors = Vec::new();
         let mut methods = Vec::new();
         let mut streams = Vec::new();
 
-        item_impl
+        for method in item_impl
             .items
             .iter()
             .filter_map(|item| match item {
@@ -1363,25 +1410,21 @@ impl SourceScanner {
             })
             .filter(|method| matches!(method.vis, syn::Visibility::Public(_)))
             .filter(|method| !has_attribute(&method.attrs, "skip"))
-            .for_each(|method| {
-                if has_attribute(&method.attrs, "ffi_stream") {
-                    if let Some(stream) = self.build_stream(method) {
-                        streams.push(stream);
-                    }
-                    return;
+        {
+            if has_attribute(&method.attrs, "ffi_stream") {
+                if let Some(stream) = self.build_stream(method) {
+                    streams.push(stream);
                 }
+                continue;
+            }
 
-                if self.is_constructor(method, &class_name) {
-                    if let Some(ctor) = self.build_constructor(method, &class_name) {
-                        constructors.push(ctor);
-                    }
-                    return;
-                }
+            if self.is_constructor(method, &class_name) {
+                constructors.push(self.build_constructor(method, &class_name)?);
+                continue;
+            }
 
-                if let Some(built_method) = self.build_method(method, &class_name) {
-                    methods.push(built_method);
-                }
-            });
+            methods.push(self.build_method(method, &class_name)?);
+        }
 
         self.type_registry.fill(
             &class_name,
@@ -1391,24 +1434,25 @@ impl SourceScanner {
                 streams,
             },
         );
+        Ok(())
     }
 
-    fn process_value_type_impl(&mut self, item_impl: &ItemImpl) {
+    fn process_value_type_impl(&mut self, item_impl: &ItemImpl) -> Result<(), String> {
         let Some(type_name) = impl_self_type_ident(item_impl) else {
-            return;
+            return Ok(());
         };
 
         let is_record = self.type_registry.is_record(&type_name);
         let is_enum = self.type_registry.is_enum(&type_name);
 
         if !is_record && !is_enum {
-            return;
+            return Ok(());
         }
 
         let mut constructors = Vec::new();
         let mut methods = Vec::new();
 
-        item_impl
+        for method in item_impl
             .items
             .iter()
             .filter_map(|item| match item {
@@ -1417,18 +1461,14 @@ impl SourceScanner {
             })
             .filter(|method| matches!(method.vis, syn::Visibility::Public(_)))
             .filter(|method| !has_attribute(&method.attrs, "skip"))
-            .for_each(|method| {
-                if self.is_constructor(method, &type_name) {
-                    if let Some(ctor) = self.build_constructor(method, &type_name) {
-                        constructors.push(ctor);
-                    }
-                    return;
-                }
+        {
+            if self.is_constructor(method, &type_name) {
+                constructors.push(self.build_constructor(method, &type_name)?);
+                continue;
+            }
 
-                if let Some(built_method) = self.build_method(method, &type_name) {
-                    methods.push(built_method);
-                }
-            });
+            methods.push(self.build_method(method, &type_name)?);
+        }
 
         if is_record {
             self.type_registry
@@ -1437,15 +1477,16 @@ impl SourceScanner {
             self.type_registry
                 .merge_enum_impl(&type_name, constructors, methods);
         }
+        Ok(())
     }
 
-    fn build_method(&self, method: &syn::ImplItemFn, self_type_name: &str) -> Option<Method> {
+    fn build_method(&self, method: &syn::ImplItemFn, self_type_name: &str) -> Result<Method, String> {
         let sig = &method.sig;
         let receiver = Self::extract_receiver(sig);
         let params = self.resolve_typed_params(&sig.inputs, Some(self_type_name))?;
-        let output = self.resolve_output(&sig.output, Some(self_type_name));
+        let output = self.resolve_output(&sig.output, Some(self_type_name))?;
 
-        Some(
+        Ok(
             params
                 .into_iter()
                 .fold(
@@ -1499,7 +1540,7 @@ impl SourceScanner {
         &self,
         method: &syn::ImplItemFn,
         self_type_name: &str,
-    ) -> Option<Constructor> {
+    ) -> Result<Constructor, String> {
         let sig = &method.sig;
         let is_fallible = match &sig.output {
             syn::ReturnType::Default => false,
@@ -1511,7 +1552,7 @@ impl SourceScanner {
         };
         let params = self.resolve_typed_params(&sig.inputs, Some(self_type_name))?;
 
-        Some(
+        Ok(
             params
                 .into_iter()
                 .fold(
