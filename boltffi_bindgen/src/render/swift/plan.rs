@@ -209,6 +209,18 @@ impl SwiftAsyncResult {
         }
     }
 
+    /// `boltffiAsyncCallDirect` infers `T` from `completeFn`; C pointers import as `OpaquePointer?`
+    /// even when errors use `FfiStatus`, so handle fields need an unwrap after the await.
+    pub fn is_async_direct_handle(&self) -> bool {
+        matches!(
+            self,
+            Self::Direct {
+                conversion: SwiftAsyncConversion::Handle { .. },
+                ..
+            }
+        )
+    }
+
     pub fn direct_return_expr(&self, raw_var: &str) -> Option<String> {
         match self {
             Self::Direct { conversion, .. } => Some(match conversion {
@@ -747,6 +759,17 @@ impl SwiftConstructor {
             && let Some(in_pos) = first.rfind(" in")
         {
             first.replace_range(in_pos.., " -> OpaquePointer? in");
+        }
+        wrappers
+    }
+
+    /// same as [`Self::annotated_closure_wrappers`] but for async `start` symbols that return `RustFutureHandle?`.
+    pub fn annotated_async_closure_wrappers(&self) -> Vec<String> {
+        let mut wrappers = self.closure_wrappers();
+        if let Some(first) = wrappers.first_mut()
+            && let Some(in_pos) = first.rfind(" in")
+        {
+            first.replace_range(in_pos.., " -> RustFutureHandle? in");
         }
         wrappers
     }

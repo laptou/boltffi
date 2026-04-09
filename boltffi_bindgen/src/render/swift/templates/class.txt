@@ -16,7 +16,7 @@
         {{ wrapper }}
 {%- endif %}
 {%- endfor %}
-        let futureHandle = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        let futureHandle = {% for w in ctor.annotated_async_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
 {%- if result.is_direct() || result.is_unit() %}
         let rawResult = try await boltffiAsyncCallDirect(
             futureHandle: futureHandle,
@@ -25,7 +25,12 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         )
+{%- if result.is_async_direct_handle() %}
+        guard let __h = rawResult else { throw FfiError(message: "ffi call failed") }
+        self.handle = __h
+{%- else %}
         self.handle = rawResult
+{%- endif %}
 {%- else %}
         let ptr: OpaquePointer = try await boltffiAsyncCall(
             futureHandle: futureHandle,
@@ -85,7 +90,12 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         )
+{%- if result.is_async_direct_handle() %}
+        guard let __h = rawResult else { throw FfiError(message: "ffi call failed") }
+        return {{ cls.name }}(handle: __h)
+{%- else %}
         return {{ cls.name }}(handle: rawResult)
+{%- endif %}
 {%- else %}
         let ptr: OpaquePointer = try await boltffiAsyncCall(
             futureHandle: futureHandle,
@@ -134,7 +144,7 @@
         {{ wrapper }}
 {%- endif %}
 {%- endfor %}
-        let futureHandle = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        let futureHandle = {% for w in ctor.annotated_async_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
 {%- if result.is_direct() || result.is_unit() %}
         let rawResult = try await boltffiAsyncCallDirect(
             futureHandle: futureHandle,
@@ -143,7 +153,12 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         )
+{%- if result.is_async_direct_handle() %}
+        guard let __h = rawResult else { throw FfiError(message: "ffi call failed") }
+        self.init(handle: __h)
+{%- else %}
         self.init(handle: rawResult)
+{%- endif %}
 {%- else %}
         let ptr: OpaquePointer = try await boltffiAsyncCall(
             futureHandle: futureHandle,
