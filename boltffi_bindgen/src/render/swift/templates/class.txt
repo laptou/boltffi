@@ -7,7 +7,48 @@
 {%- for ctor in cls.constructors %}
 {%- if ctor.is_designated() %}
 
-{{ self::swift_doc_block(ctor.doc(), "    ") }}    public init{% if ctor.is_optional() %}?{% endif %}({% for p in ctor.params() %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_fallible() %} throws{% endif %} {
+{{ self::swift_doc_block(ctor.doc(), "    ") }}    public init{% if ctor.is_optional() %}?{% endif %}({% for p in ctor.params() %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_async_constructor() %} async throws{% elif ctor.is_fallible() %} throws{% endif %} {
+{%- if ctor.is_async_constructor() %}
+{%- match ctor.expect_async_mode() %}
+{%- when SwiftCallMode::Async { start, poll, complete, cancel, free, result } %}
+{%- for param in ctor.params() %}
+{%- if let Some(wrapper) = param.wrapper_code() %}
+        {{ wrapper }}
+{%- endif %}
+{%- endfor %}
+        let futureHandle = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+{%- if result.is_direct() || result.is_unit() %}
+        let rawResult = try await boltffiAsyncCallDirect(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        )
+        self.handle = rawResult
+{%- else %}
+        let ptr: OpaquePointer = try await boltffiAsyncCall(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        ) { buf, status in
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+{%- if result.throws() %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- else %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- endif %}
+        }
+        self.handle = ptr
+{%- endif %}
+{%- when SwiftCallMode::Sync { .. } %}
+        fatalError("internal: sync constructor matched async template")
+{%- endmatch %}
+{%- else %}
 {%- for param in ctor.params() %}
 {%- if let Some(wrapper) = param.wrapper_code() %}
         {{ wrapper }}
@@ -27,6 +68,7 @@
         let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}!
 {%- endif %}
         self.handle = ptr
+{%- endif %}
     }
 {%- else if ctor.is_factory() %}
 
@@ -46,7 +88,48 @@
     }
 {%- else if ctor.is_convenience() %}
 
-{{ self::swift_doc_block(ctor.doc(), "    ") }}    public convenience init{% if ctor.is_optional() %}?{% endif %}({% for p in ctor.params() %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_fallible() %} throws{% endif %} {
+{{ self::swift_doc_block(ctor.doc(), "    ") }}    public convenience init{% if ctor.is_optional() %}?{% endif %}({% for p in ctor.params() %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_async_constructor() %} async throws{% elif ctor.is_fallible() %} throws{% endif %} {
+{%- if ctor.is_async_constructor() %}
+{%- match ctor.expect_async_mode() %}
+{%- when SwiftCallMode::Async { start, poll, complete, cancel, free, result } %}
+{%- for param in ctor.params() %}
+{%- if let Some(wrapper) = param.wrapper_code() %}
+        {{ wrapper }}
+{%- endif %}
+{%- endfor %}
+        let futureHandle = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+{%- if result.is_direct() || result.is_unit() %}
+        let rawResult = try await boltffiAsyncCallDirect(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        )
+        self.init(handle: rawResult)
+{%- else %}
+        let ptr: OpaquePointer = try await boltffiAsyncCall(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        ) { buf, status in
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+{%- if result.throws() %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- else %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- endif %}
+        }
+        self.init(handle: ptr)
+{%- endif %}
+{%- when SwiftCallMode::Sync { .. } %}
+        fatalError("internal: sync constructor matched async template")
+{%- endmatch %}
+{%- else %}
 {%- for param in ctor.params() %}
 {%- if let Some(wrapper) = param.wrapper_code() %}
         {{ wrapper }}
@@ -66,6 +149,7 @@
         let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}!
 {%- endif %}
         self.init(handle: ptr)
+{%- endif %}
     }
 {%- endif %}
 {%- endfor %}

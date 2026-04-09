@@ -610,7 +610,7 @@ pub enum SwiftStreamMode {
 #[derive(Debug, Clone)]
 pub enum SwiftConstructor {
     Designated {
-        ffi_symbol: String,
+        mode: SwiftCallMode,
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
@@ -627,7 +627,7 @@ pub enum SwiftConstructor {
     },
     Convenience {
         name: String,
-        ffi_symbol: String,
+        mode: SwiftCallMode,
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
@@ -651,9 +651,33 @@ impl SwiftConstructor {
 
     pub fn ffi_symbol(&self) -> &str {
         match self {
-            Self::Designated { ffi_symbol, .. }
-            | Self::Factory { ffi_symbol, .. }
-            | Self::Convenience { ffi_symbol, .. } => ffi_symbol,
+            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => match mode {
+                SwiftCallMode::Sync { symbol } => symbol,
+                SwiftCallMode::Async { start, .. } => start,
+            },
+            Self::Factory { ffi_symbol, .. } => ffi_symbol,
+        }
+    }
+
+    pub fn constructor_mode(&self) -> Option<&SwiftCallMode> {
+        match self {
+            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => Some(mode),
+            Self::Factory { .. } => None,
+        }
+    }
+
+    pub fn is_async_constructor(&self) -> bool {
+        self.constructor_mode().is_some_and(|m| m.is_async())
+    }
+
+    /// only valid when [`Self::is_async_constructor`] is true; used by askama templates.
+    pub fn expect_async_mode(&self) -> &SwiftCallMode {
+        match self {
+            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => match mode {
+                m @ SwiftCallMode::Async { .. } => m,
+                SwiftCallMode::Sync { .. } => panic!("expect_async_mode on sync constructor"),
+            },
+            Self::Factory { .. } => panic!("expect_async_mode on factory constructor"),
         }
     }
 
@@ -724,7 +748,15 @@ impl SwiftConstructor {
     }
 
     pub fn call_expr(&self) -> String {
-        ffi_call_expr(self.ffi_symbol(), &[], self.params())
+        match self {
+            Self::Designated { mode, params, .. } | Self::Convenience { mode, params, .. } => {
+                match mode {
+                    SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], params),
+                    SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], params),
+                }
+            }
+            Self::Factory { ffi_symbol, .. } => ffi_call_expr(ffi_symbol, &[], &[]),
+        }
     }
 
     pub fn doc(&self) -> &Option<String> {
@@ -906,10 +938,43 @@ impl SwiftCallbackMethod {
     pub fn async_callback_c_type(&self) -> String {
         if self.wire_encoded_return() {
             "(@convention(c) (UInt64, UnsafePointer<UInt8>?, UInt, FfiStatus) -> Void)?".to_string()
+        } else if self.returns.is_handle() {
+            "(@convention(c) (UInt64, OpaquePointer?, FfiStatus) -> Void)?".to_string()
+        } else if self.returns.is_callback() {
+            "(@convention(c) (UInt64, BoltFFICallbackHandle, FfiStatus) -> Void)?".to_string()
         } else if let Some(ret) = self.return_type() {
             format!("(@convention(c) (UInt64, {}, FfiStatus) -> Void)?", ret)
         } else {
             "(@convention(c) (UInt64, FfiStatus) -> Void)?".to_string()
+        }
+    }
+
+    /// expression passed to the async completion callback for non-wire returns (handles/callbacks).
+    pub fn async_completion_value_expr(&self) -> Option<String> {
+        if self.wire_encoded_return() {
+            return None;
+        }
+        match &self.returns {
+            SwiftReturn::Handle { nullable, .. } => {
+                if *nullable {
+                    Some("result?.handle".to_string())
+                } else {
+                    Some("result.handle".to_string())
+                }
+            }
+            SwiftReturn::Callback {
+                protocol_name,
+                nullable,
+            } => {
+                if *nullable {
+                    Some(format!(
+                        "result.map {{ {protocol_name}Bridge.create($0) }} ?? BoltFFICallbackHandle(handle: 0, vtable: nil)"
+                    ))
+                } else {
+                    Some(format!("{protocol_name}Bridge.create(result)"))
+                }
+            }
+            _ => None,
         }
     }
 
@@ -967,11 +1032,115 @@ impl SwiftCallbackMethod {
         }
     }
 
-    pub fn direct_out_expr(&self) -> &str {
+    /// store return value into the vtable `outPtr` (often typed as `UnsafeMutablePointer<UInt8>?` in swift).
+    pub fn vtable_non_wire_out_store(&self) -> String {
+        match &self.returns {
+            SwiftReturn::Callback { .. } => format!(
+                "if let outWrite = outPtr {{ outWrite.withMemoryRebound(to: BoltFFICallbackHandle.self, capacity: 1) {{ $0.pointee = {} }} }}",
+                self.direct_out_expr()
+            ),
+            SwiftReturn::Handle { nullable, .. } => {
+                let val = if *nullable {
+                    "result?.handle ?? OpaquePointer(bitPattern: 0)!".to_string()
+                } else {
+                    "result.handle".to_string()
+                };
+                format!(
+                    "if let outWrite = outPtr {{ outWrite.withMemoryRebound(to: OpaquePointer.self, capacity: 1) {{ $0.pointee = {} }} }}",
+                    val
+                )
+            }
+            _ => format!("outPtr?.pointee = {}", self.direct_out_expr()),
+        }
+    }
+
+    /// value written to the native out-pointer after invoking Swift (vtable thunk).
+    pub fn direct_out_expr(&self) -> String {
         if self.returns.is_c_style_enum() {
-            "result.cValue"
-        } else {
-            "result"
+            return "result.cValue".to_string();
+        }
+        match &self.returns {
+            SwiftReturn::Handle { nullable, .. } => {
+                if *nullable {
+                    "result?.handle".to_string()
+                } else {
+                    "result.handle".to_string()
+                }
+            }
+            SwiftReturn::Callback {
+                protocol_name,
+                nullable,
+            } => {
+                if *nullable {
+                    format!(
+                        "result.map {{ {protocol_name}Bridge.create($0) }} ?? BoltFFICallbackHandle(handle: 0, vtable: nil)"
+                    )
+                } else {
+                    format!("{protocol_name}Bridge.create(result)")
+                }
+            }
+            SwiftReturn::FromComposite { .. } => self
+                .returns
+                .composite_pack_expr("result")
+                .unwrap_or_else(|| "result".to_string()),
+            _ => "result".to_string(),
+        }
+    }
+
+    pub fn proxy_out_var_init(&self) -> String {
+        match &self.returns {
+            SwiftReturn::Handle { nullable, .. } => {
+                if *nullable {
+                    "var result: OpaquePointer? = nil".to_string()
+                } else {
+                    "var result: OpaquePointer = OpaquePointer(bitPattern: 0)!".to_string()
+                }
+            }
+            SwiftReturn::Callback { .. } => {
+                "var result = BoltFFICallbackHandle(handle: 0, vtable: nil)".to_string()
+            }
+            SwiftReturn::FromComposite { c_type, .. } => format!("var result = {c_type}()"),
+            SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
+                format!("var result: {swift_type}.RawValue = 0")
+            }
+            SwiftReturn::Direct { swift_type } => format!("var result: {swift_type} = 0"),
+            SwiftReturn::FromDirectBuffer {
+                element_swift_type,
+                ..
+            } => format!("var result: {element_swift_type} = {element_swift_type}()"),
+            _ => self
+                .proxy_out_ffi_type()
+                .map(|t| format!("var result: {t} = 0"))
+                .unwrap_or_else(|| "var result: UInt64 = 0".to_string()),
+        }
+    }
+
+    /// swift value returned from foreign proxy after FFI out-param fill.
+    pub fn proxy_return_from_out(&self) -> Option<String> {
+        match &self.returns {
+            SwiftReturn::Handle {
+                class_name,
+                nullable,
+            } => {
+                if *nullable {
+                    Some(format!("result.map {{ {class_name}(handle: $0) }}"))
+                } else {
+                    Some(format!("{class_name}(handle: result)"))
+                }
+            }
+            SwiftReturn::Callback {
+                protocol_name,
+                nullable,
+            } => {
+                if *nullable {
+                    Some(format!(
+                        "result.handle == 0 ? nil : {protocol_name}Bridge.wrap(result)"
+                    ))
+                } else {
+                    Some(format!("{protocol_name}Bridge.wrap(result)"))
+                }
+            }
+            _ => None,
         }
     }
 
@@ -982,30 +1151,20 @@ impl SwiftCallbackMethod {
                 Some(format!("{}.RawValue", swift_type))
             }
             SwiftReturn::FromComposite { c_type, .. } => Some(c_type.clone()),
-            SwiftReturn::Handle {
-                class_name,
-                nullable,
-            } => {
+            SwiftReturn::Handle { nullable, .. } => {
                 if *nullable {
-                    Some(format!("{}?.Handle", class_name))
+                    Some("OpaquePointer?".to_string())
                 } else {
-                    Some(format!("{}.Handle", class_name))
+                    Some("OpaquePointer".to_string())
                 }
             }
-            SwiftReturn::Callback {
-                protocol_name,
-                nullable,
-            } => {
-                if *nullable {
-                    Some(format!("(any {})?", protocol_name))
-                } else {
-                    Some(format!("any {}", protocol_name))
-                }
+            SwiftReturn::Callback { .. } => Some("BoltFFICallbackHandle".to_string()),
+            SwiftReturn::FromDirectBuffer {
+                element_swift_type, ..
+            } => Some(element_swift_type.clone()),
+            SwiftReturn::Void | SwiftReturn::FromWireBuffer { .. } | SwiftReturn::Throws { .. } => {
+                None
             }
-            SwiftReturn::Void
-            | SwiftReturn::FromWireBuffer { .. }
-            | SwiftReturn::FromDirectBuffer { .. }
-            | SwiftReturn::Throws { .. } => None,
         }
     }
 
@@ -1560,10 +1719,16 @@ impl SwiftReturn {
     }
 
     pub fn is_wire_encoded(&self) -> bool {
-        matches!(
-            self,
-            SwiftReturn::FromWireBuffer { .. } | SwiftReturn::Throws { .. }
-        )
+        match self {
+            SwiftReturn::FromWireBuffer { .. } => true,
+            SwiftReturn::Throws { ok, result_decode, .. } => {
+                if !result_decode.ops.is_empty() {
+                    return true;
+                }
+                matches!(ok.as_ref(), SwiftReturn::FromWireBuffer { .. })
+            }
+            _ => false,
+        }
     }
 
     pub fn is_direct_buffer(&self) -> bool {
@@ -1745,7 +1910,14 @@ impl SwiftReturn {
                 result_decode,
                 err_is_string,
                 ..
-            } => Self::decode_result_from_seq(ok, result_decode, *err_is_string),
+            } => {
+                // status-code errors use an empty `result_decode`; the success payload is only on `ok`.
+                if result_decode.ops.is_empty() {
+                    ok.reader_decode_expr()
+                } else {
+                    Self::decode_result_from_seq(ok, result_decode, *err_is_string)
+                }
+            }
             _ => None,
         }
     }
@@ -1755,11 +1927,9 @@ impl SwiftReturn {
         decode: &ReadSeq,
         err_is_string: bool,
     ) -> Option<String> {
-        let ops = match ok_return {
-            SwiftReturn::FromWireBuffer { decode, .. } => decode,
-            _ => decode,
-        };
-        match ops.ops.first() {
+        // always use the full `result_decode` buffer (includes ok/err tag), not only the inner ok
+        // payload from `ok_return`.
+        match decode.ops.first() {
             Some(ReadOp::Result { ok, err, .. }) => {
                 let raw_ok_read = emit::emit_reader_read(ok);
                 let ok_read = match ok_return {

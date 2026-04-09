@@ -1139,7 +1139,9 @@ mod tests {
             ffi_free: "boltffi_data_store_free".to_string(),
             constructors: vec![
                 SwiftConstructor::Designated {
-                    ffi_symbol: "boltffi_data_store_new".to_string(),
+                    mode: SwiftCallMode::Sync {
+                        symbol: "boltffi_data_store_new".to_string(),
+                    },
                     params: vec![SwiftParam {
                         label: None,
                         name: "capacity".to_string(),
@@ -1189,7 +1191,9 @@ mod tests {
             name: "Database".to_string(),
             ffi_free: "boltffi_database_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
-                ffi_symbol: "boltffi_database_open".to_string(),
+                mode: SwiftCallMode::Sync {
+                    symbol: "boltffi_database_open".to_string(),
+                },
                 params: vec![SwiftParam {
                     label: None,
                     name: "path".to_string(),
@@ -1303,7 +1307,9 @@ mod tests {
             name: "Connection".to_string(),
             ffi_free: "boltffi_connection_free".to_string(),
             constructors: vec![SwiftConstructor::Designated {
-                ffi_symbol: "boltffi_connection_open".to_string(),
+                mode: SwiftCallMode::Sync {
+                    symbol: "boltffi_connection_open".to_string(),
+                },
                 params: vec![SwiftParam {
                     label: None,
                     name: "url".to_string(),
@@ -1329,7 +1335,9 @@ mod tests {
             ffi_free: "boltffi_connection_free".to_string(),
             constructors: vec![SwiftConstructor::Convenience {
                 name: "tryOpen".to_string(),
-                ffi_symbol: "boltffi_connection_open".to_string(),
+                mode: SwiftCallMode::Sync {
+                    symbol: "boltffi_connection_open".to_string(),
+                },
                 params: vec![
                     SwiftParam {
                         label: None,

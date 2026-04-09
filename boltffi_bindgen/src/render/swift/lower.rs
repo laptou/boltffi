@@ -28,13 +28,13 @@ use crate::ir::abi::{
 use crate::ir::codec::CodecPlan;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    CallbackKind, CallbackMethodDef, ConstructorDef, DefaultValue, EnumRepr, MethodDef, ParamDef,
-    Receiver, ReturnDef, StreamDef, StreamMode,
+    CallbackKind, CallbackMethodDef, ClassDef, ConstructorDef, DefaultValue, EnumRepr, MethodDef,
+    ParamDef, Receiver, ReturnDef, StreamDef, StreamMode,
 };
 use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
 use crate::ir::ops::{
     FieldReadOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
-    remap_root_in_seq,
+    remap_enum_encode_bindings_in_write_seq, remap_root_in_seq,
 };
 use crate::ir::plan::{
     AbiType, CallbackStyle, CompositeLayout, Mutability, ScalarOrigin, SpanContent, Transport,
@@ -382,6 +382,9 @@ impl<'a> SwiftLowerer<'a> {
         call: &AbiCall,
     ) -> SwiftConstructor {
         let throw_decode_expr = self.constructor_throw_decode_expr(call);
+        let sync_mode = SwiftCallMode::Sync {
+            symbol: call.symbol.as_str().to_string(),
+        };
         match ctor {
             ConstructorDef::Default {
                 is_fallible,
@@ -389,7 +392,7 @@ impl<'a> SwiftLowerer<'a> {
                 doc,
                 ..
             } => SwiftConstructor::Designated {
-                ffi_symbol: call.symbol.as_str().to_string(),
+                mode: sync_mode.clone(),
                 params: ctor
                     .params()
                     .into_iter()
@@ -429,7 +432,7 @@ impl<'a> SwiftLowerer<'a> {
                 let rest = rest_params.iter().map(|p| self.lower_param(p, call));
                 SwiftConstructor::Convenience {
                     name: label,
-                    ffi_symbol: call.symbol.as_str().to_string(),
+                    mode: sync_mode,
                     params: std::iter::once(first).chain(rest).collect(),
                     is_fallible: *is_fallible,
                     is_optional: *is_optional,
@@ -453,6 +456,23 @@ impl<'a> SwiftLowerer<'a> {
                 Some(throw_expr)
             }
             ErrorTransport::None | ErrorTransport::StatusCode => None,
+        }
+    }
+
+    fn constructor_return_def_for_swift(
+        &self,
+        class: &ClassDef,
+        ctor: &ConstructorDef,
+    ) -> ReturnDef {
+        if ctor.is_optional() {
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(class.id.clone()))))
+        } else if ctor.is_fallible() {
+            ReturnDef::Result {
+                ok: TypeExpr::Handle(class.id.clone()),
+                err: TypeExpr::String,
+            }
+        } else {
+            ReturnDef::Value(TypeExpr::Handle(class.id.clone()))
         }
     }
 
@@ -625,8 +645,16 @@ impl<'a> SwiftLowerer<'a> {
                     .iter()
                     .map(|field| {
                         let lowered = self.lower_enum_field(field);
-                        let encode =
-                            remap_root_in_seq(&lowered.encode, ValueExpr::Var("value".into()));
+                        // single-tuple template binds `value`; multi-tuple uses each field's swift name.
+                        let binding = if fields.len() == 1 {
+                            "value".to_string()
+                        } else {
+                            lowered.swift_name.clone()
+                        };
+                        let encode = remap_root_in_seq(
+                            &lowered.encode,
+                            ValueExpr::Var(binding),
+                        );
                         SwiftField { encode, ..lowered }
                     })
                     .collect(),
@@ -639,11 +667,20 @@ impl<'a> SwiftLowerer<'a> {
                     .map(|field| {
                         let lowered = self.lower_enum_field(field);
                         if lowered.swift_name.chars().all(|c| c.is_ascii_digit()) {
-                            let encode =
-                                remap_root_in_seq(&lowered.encode, ValueExpr::Var("value".into()));
+                            let binding = if fields.len() == 1 {
+                                "value".to_string()
+                            } else {
+                                lowered.swift_name.clone()
+                            };
+                            let encode = remap_root_in_seq(
+                                &lowered.encode,
+                                ValueExpr::Var(binding),
+                            );
                             SwiftField { encode, ..lowered }
                         } else {
-                            lowered
+                            let encode =
+                                remap_enum_encode_bindings_in_write_seq(&lowered.encode);
+                            SwiftField { encode, ..lowered }
                         }
                     })
                     .collect(),
@@ -691,6 +728,8 @@ impl<'a> SwiftLowerer<'a> {
                             index: idx,
                         });
                         let throw_decode_expr = self.constructor_throw_decode_expr(call);
+                        let return_def = self.constructor_return_def_for_swift(def, ctor);
+                        let mode = self.lower_call_mode(call, &return_def);
 
                         match ctor {
                             ConstructorDef::Default {
@@ -699,7 +738,7 @@ impl<'a> SwiftLowerer<'a> {
                                 doc,
                                 ..
                             } => SwiftConstructor::Designated {
-                                ffi_symbol: call.symbol.as_str().to_string(),
+                                mode,
                                 params: ctor
                                     .params()
                                     .into_iter()
@@ -739,7 +778,7 @@ impl<'a> SwiftLowerer<'a> {
                                 let rest = rest_params.iter().map(|p| self.lower_param(p, call));
                                 SwiftConstructor::Convenience {
                                     name: label,
-                                    ffi_symbol: call.symbol.as_str().to_string(),
+                                    mode,
                                     params: std::iter::once(first).chain(rest).collect(),
                                     is_fallible: *is_fallible,
                                     is_optional: *is_optional,
@@ -927,32 +966,25 @@ impl<'a> SwiftLowerer<'a> {
                         );
                         let has_out_param =
                             abi_method.execution_kind() == ExecutionKind::Sync && !returns.is_void();
-                        let param_map = method_def
+                        // abi includes synthetic params (e.g. vtable `handle`); only lower params that
+                        // exist on the semantic callback method.
+                        let params = method_def
                             .params
                             .iter()
-                            .map(|param| (param.name.clone(), param))
-                            .collect::<HashMap<_, _>>();
-                        let params = abi_method
-                            .params
-                            .iter()
-                            .filter(|param| matches!(
-                                param.role,
-                                ParamRole::Input {
-                                    transport: Transport::Scalar(_) | Transport::Span(SpanContent::Encoded(_)),
-                                    ..
-                                }
-                            ))
-                            .map(|param| {
-                                let def = param_map.get(&param.name).unwrap_or_else(|| {
-                                    unreachable!(
-                                        "param def not found: callback={}, method={}, param={}, role={:?}",
-                                        plan.callback_id.as_str(),
-                                        abi_method.id.as_str(),
-                                        param.name.as_str(),
-                                        param.role,
-                                    )
-                                });
-                                self.lower_callback_param(def, param)
+                            .map(|param_def| {
+                                let abi_param = abi_method
+                                    .params
+                                    .iter()
+                                    .find(|p| p.name == param_def.name)
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "missing abi param for callback={}, method={}, param={}",
+                                            plan.callback_id.as_str(),
+                                            abi_method.id.as_str(),
+                                            param_def.name.as_str(),
+                                        )
+                                    });
+                                self.lower_callback_param(param_def, abi_param)
                             })
                             .collect();
 
@@ -1053,6 +1085,81 @@ impl<'a> SwiftLowerer<'a> {
                         "let {} = {{ var reader = WireReader(ptr: {}!, len: Int({})); return {} }}()",
                         label, label, len_name, reader_decode
                     )),
+                )
+            }
+            ParamRole::Input {
+                transport: Transport::Handle { class_id, nullable },
+                ..
+            } => {
+                let class_name = self.swift_name_for_class(class_id);
+                let swift_type = if *nullable {
+                    format!("{}?", class_name)
+                } else {
+                    class_name.clone()
+                };
+                let raw_name = format!("raw{}", pascal_case(param.name.as_str()));
+                let proxy_handle = if *nullable {
+                    format!("{label}?.handle")
+                } else {
+                    format!("{label}.handle")
+                };
+                let decode_prelude = if *nullable {
+                    Some(format!(
+                        "let {label} = {raw_name}.map {{ {class_name}(handle: $0) }}"
+                    ))
+                } else {
+                    Some(format!("let {label} = {class_name}(handle: {raw_name}!)"))
+                };
+                (
+                    swift_type,
+                    vec![raw_name.clone()],
+                    vec![proxy_handle],
+                    None,
+                    None,
+                    None,
+                    decode_prelude,
+                )
+            }
+            ParamRole::Input {
+                transport:
+                    Transport::Callback {
+                        callback_id,
+                        nullable,
+                        style: CallbackStyle::BoxedDyn,
+                    },
+                ..
+            } => {
+                let protocol = pascal_case(callback_id.as_str());
+                let swift_type = if *nullable {
+                    format!("(any {})?", protocol)
+                } else {
+                    format!("any {}", protocol)
+                };
+                let raw_name = format!("raw{}", pascal_case(param.name.as_str()));
+                let decode_prelude = if *nullable {
+                    Some(format!(
+                        "let {label} = {raw_name}.handle == 0 ? nil : {protocol}Bridge.wrap({raw_name})"
+                    ))
+                } else {
+                    Some(format!(
+                        "let {label} = {protocol}Bridge.wrap({raw_name})"
+                    ))
+                };
+                let proxy_cb = if *nullable {
+                    format!(
+                        "{label}.map {{ {protocol}Bridge.create($0) }} ?? BoltFFICallbackHandle(handle: 0, vtable: nil)"
+                    )
+                } else {
+                    format!("{protocol}Bridge.create({label})")
+                };
+                (
+                    swift_type,
+                    vec![raw_name.clone()],
+                    vec![proxy_cb],
+                    None,
+                    None,
+                    None,
+                    decode_prelude,
                 )
             }
             _ => unreachable!(
@@ -3273,6 +3380,7 @@ mod tests {
                 ],
                 is_fallible: false,
                 is_optional: false,
+                execution_kind: ExecutionKind::Sync,
                 doc: None,
                 deprecated: None,
             }],

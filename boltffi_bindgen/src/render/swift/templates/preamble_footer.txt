@@ -344,15 +344,15 @@ final class FfiFutureState<T>: @unchecked Sendable {
 
 private final class BoltFFIAsyncPollDriver: @unchecked Sendable {
     let futureHandle: RustFutureHandle?
-    let pollFn: (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void
-    let onReady: () -> Void
-    let canContinuePolling: () -> Bool
+    let pollFn: @Sendable (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void
+    let onReady: @Sendable () -> Void
+    let canContinuePolling: @Sendable () -> Bool
 
     init(
         futureHandle: RustFutureHandle?,
-        pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
-        onReady: @escaping () -> Void,
-        canContinuePolling: @escaping () -> Bool
+        pollFn: @escaping @Sendable (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+        onReady: @escaping @Sendable () -> Void,
+        canContinuePolling: @escaping @Sendable () -> Bool
     ) {
         self.futureHandle = futureHandle; self.pollFn = pollFn
         self.onReady = onReady; self.canContinuePolling = canContinuePolling
@@ -383,11 +383,11 @@ private let boltffiAsyncPollCallback: @convention(c) (UInt64, Int8) -> Void = { 
 
 func boltffiAsyncCall<T>(
     futureHandle: RustFutureHandle?,
-    pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
-    completeFn: @escaping (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> FfiBuf_u8,
-    cancelFn: @escaping (RustFutureHandle?) -> Void,
-    freeFn: @escaping (RustFutureHandle?) -> Void,
-    transform: @escaping (FfiBuf_u8, FfiStatus) throws -> T
+    pollFn: @escaping @Sendable (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    completeFn: @escaping @Sendable (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> FfiBuf_u8,
+    cancelFn: @escaping @Sendable (RustFutureHandle?) -> Void,
+    freeFn: @escaping @Sendable (RustFutureHandle?) -> Void,
+    transform: @escaping @Sendable (FfiBuf_u8, FfiStatus) throws -> T
 ) async throws -> T {
     typealias Ctx = FfiFutureState<T>
     let state = Ctx(handle: futureHandle)
@@ -406,8 +406,8 @@ func boltffiAsyncCall<T>(
                     let decision = state.decideFinish()
                     if case .alreadyFinished = decision { return }
                     var status = FfiStatus()
-                    let buf = completeFn(futureHandle, &status)
-                    freeFn(futureHandle)
+                    let buf = completeFn(state.handle, &status)
+                    freeFn(state.handle)
                     switch decision {
                     case .finishWithContinuation(let continuation):
                         do {
@@ -444,10 +444,10 @@ func boltffiAsyncCall<T>(
 
 func boltffiAsyncCallDirect<T>(
     futureHandle: RustFutureHandle?,
-    pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
-    completeFn: @escaping (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> T,
-    cancelFn: @escaping (RustFutureHandle?) -> Void,
-    freeFn: @escaping (RustFutureHandle?) -> Void
+    pollFn: @escaping @Sendable (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    completeFn: @escaping @Sendable (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> T,
+    cancelFn: @escaping @Sendable (RustFutureHandle?) -> Void,
+    freeFn: @escaping @Sendable (RustFutureHandle?) -> Void
 ) async throws -> T {
     typealias Ctx = FfiFutureState<T>
     let state = Ctx(handle: futureHandle)
@@ -466,8 +466,8 @@ func boltffiAsyncCallDirect<T>(
                     let decision = state.decideFinish()
                     if case .alreadyFinished = decision { return }
                     var status = FfiStatus()
-                    let value = completeFn(futureHandle, &status)
-                    freeFn(futureHandle)
+                    let value = completeFn(state.handle, &status)
+                    freeFn(state.handle)
                     switch decision {
                     case .finishWithContinuation(let cont):
                         if status.code == 0 {

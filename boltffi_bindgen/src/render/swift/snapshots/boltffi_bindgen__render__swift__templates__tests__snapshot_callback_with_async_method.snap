@@ -22,7 +22,7 @@ private func _asyncHandlerVtable_onComplete(_ wrapper: AsyncHandlerWrapper, _ re
     }
 }
 
-private var asyncHandlerVtable: AsyncHandlerVtable = {
+nonisolated(unsafe) private var asyncHandlerVtable: AsyncHandlerVtable = {
     AsyncHandlerVtable(
         free: { handle in
             guard handle != 0 else { return }

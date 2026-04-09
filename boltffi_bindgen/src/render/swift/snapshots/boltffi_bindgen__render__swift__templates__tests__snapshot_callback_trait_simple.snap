@@ -15,7 +15,7 @@ private class DataHandlerWrapper {
 }
 
 
-private var dataHandlerVtable: DataHandlerVtable = {
+nonisolated(unsafe) private var dataHandlerVtable: DataHandlerVtable = {
     DataHandlerVtable(
         free: { handle in
             guard handle != 0 else { return }

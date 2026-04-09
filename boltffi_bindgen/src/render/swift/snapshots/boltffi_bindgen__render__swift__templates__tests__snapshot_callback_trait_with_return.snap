@@ -15,7 +15,7 @@ private class ValidatorWrapper {
 }
 
 
-private var validatorVtable: ValidatorVtable = {
+nonisolated(unsafe) private var validatorVtable: ValidatorVtable = {
     ValidatorVtable(
         free: { handle in
             guard handle != 0 else { return }

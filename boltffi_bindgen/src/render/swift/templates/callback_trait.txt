@@ -70,7 +70,7 @@ private final class {{ callback.protocol_name }}Proxy: {{ callback.protocol_name
         return boltffiDecodeOwnedBuf(outPtr, Int(outLen)) { reader in {{ method.returns.reader_decode_expr().unwrap() }} }
 {%- endif %}
 {%- elif method.has_return() %}
-        var result: {{ method.proxy_out_ffi_type().unwrap() }} = 0
+        {{ method.proxy_out_var_init() }}
         var ffiStatus = FfiStatus()
         invoke(handle_.handle{% for param in method.params %}{% for arg in param.proxy_ffi_args %}, {{ arg }}{% endfor %}{% endfor %}, &result, &ffiStatus)
 {%- if method.throws() %}
@@ -80,6 +80,8 @@ private final class {{ callback.protocol_name }}Proxy: {{ callback.protocol_name
 {%- endif %}
 {%- if method.returns.is_c_style_enum() %}
         return {{ method.returns.c_style_enum_type().unwrap() }}(rawValue: result)!
+{%- elif let Some(expr) = method.proxy_return_from_out() %}
+        return {{ expr }}
 {%- else %}
         return result
 {%- endif %}
@@ -115,7 +117,11 @@ private func _{{ callback.vtable_var }}_{{ method.swift_name }}(_ wrapper: {{ ca
 {%- endif %}
             boltffiInvokeWireCallback(callback, callbackData, encoded, FfiStatus(code: 0))
 {%- else %}
+{%- if let Some(expr) = method.async_completion_value_expr() %}
+            callback?(callbackData, {{ expr }}, FfiStatus(code: 0))
+{%- else %}
             callback?(callbackData, result, FfiStatus(code: 0))
+{%- endif %}
 {%- endif %}
 {%- else %}
             callback?(callbackData, FfiStatus(code: 0))
@@ -151,7 +157,11 @@ private func _{{ callback.vtable_var }}_{{ method.swift_name }}(_ wrapper: {{ ca
 {%- endif %}
         boltffiInvokeWireCallback(callback, callbackData, encoded, FfiStatus(code: 0))
 {%- else %}
+{%- if let Some(expr) = method.async_completion_value_expr() %}
+        callback?(callbackData, {{ expr }}, FfiStatus(code: 0))
+{%- else %}
         callback?(callbackData, result, FfiStatus(code: 0))
+{%- endif %}
 {%- endif %}
 {%- else %}
         callback?(callbackData, FfiStatus(code: 0))
@@ -162,7 +172,7 @@ private func _{{ callback.vtable_var }}_{{ method.swift_name }}(_ wrapper: {{ ca
 {%- endif %}
 {%- endfor %}
 
-private var {{ callback.vtable_var }}: {{ callback.vtable_type }} = {
+nonisolated(unsafe) private var {{ callback.vtable_var }}: {{ callback.vtable_type }} = {
     {{ callback.vtable_type }}(
         free: { handle in
             guard handle != 0 else { return }
@@ -198,7 +208,7 @@ private var {{ callback.vtable_var }}: {{ callback.vtable_type }} = {
                     return
                 }
 {%- else %}
-                outPtr?.pointee = {{ method.direct_out_expr() }}
+                {{ method.vtable_non_wire_out_store() }}
 {%- endif %}
 {%- endif %}
                 statusPtr?.pointee = FfiStatus(code: 0)
@@ -234,7 +244,7 @@ private var {{ callback.vtable_var }}: {{ callback.vtable_type }} = {
                 return
             }
 {%- else %}
-            outPtr?.pointee = {{ method.direct_out_expr() }}
+            {{ method.vtable_non_wire_out_store() }}
 {%- endif %}
 {%- endif %}
             statusPtr?.pointee = FfiStatus(code: 0)
