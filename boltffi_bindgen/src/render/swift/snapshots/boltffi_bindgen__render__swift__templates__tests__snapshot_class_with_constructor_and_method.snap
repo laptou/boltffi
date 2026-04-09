@@ -3,10 +3,24 @@ source: boltffi_bindgen/src/render/swift/templates.rs
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class Database {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
+    }
+
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
     }
 
     public init(path: String) {
@@ -16,13 +30,15 @@ public final class Database {
     }
 
     deinit {
-        boltffi_database_free(handle)
+        if let handle = handle {
+            boltffi_database_free(handle)
+        }
     }
 
     public func query(sql: String) -> String {
         var sql = sql
         return sql.withUTF8 { sqlBuf in
-            let buf = boltffi_database_query(handle, sqlBuf.baseAddress!, UInt(sqlBuf.count))
+            let buf = boltffi_database_query(ffiHandleForCall(), sqlBuf.baseAddress!, UInt(sqlBuf.count))
             defer { boltffi_free_buf(buf) }
             return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readString() }
         }

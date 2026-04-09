@@ -4,10 +4,24 @@ expression: "render_class(&cls, \"boltffi\")"
 ---
 /// A persistent key-value data store.
 public final class DataStore {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
+    }
+
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
     }
 
     /// Creates a new data store with the given capacity.
@@ -23,14 +37,16 @@ public final class DataStore {
     }
 
     deinit {
-        boltffi_data_store_free(handle)
+        if let handle = handle {
+            boltffi_data_store_free(handle)
+        }
     }
 
     /// Inserts a value into the store by key.
     public func insert(key: String) {
         var key = key
         key.withUTF8 { keyBuf in
-            boltffi_data_store_insert(handle, keyBuf.baseAddress!, UInt(keyBuf.count))
+            boltffi_data_store_insert(ffiHandleForCall(), keyBuf.baseAddress!, UInt(keyBuf.count))
         }
     }
 

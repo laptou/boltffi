@@ -1680,6 +1680,37 @@ mod tests {
         insta::assert_snapshot!(render_function(&func, "boltffi"));
     }
 
+    /// pass-by-value exported class params consume the handle; ffi args use `takeHandle()` and `deinit` skips if already moved.
+    #[test]
+    fn snapshot_class_with_pass_handle_constructor_param() {
+        let cls = SwiftClass {
+            name: "Receiver".to_string(),
+            ffi_free: "boltffi_receiver_free".to_string(),
+            constructors: vec![SwiftConstructor::Designated {
+                mode: SwiftCallMode::Sync {
+                    symbol: "boltffi_receiver_new".to_string(),
+                },
+                params: vec![SwiftParam {
+                    label: None,
+                    name: "endpoint".to_string(),
+                    swift_type: "Endpoint".to_string(),
+                    conversion: SwiftConversion::PassHandle {
+                        class_name: "Endpoint".to_string(),
+                        nullable: false,
+                    },
+                }],
+                is_fallible: false,
+                is_optional: false,
+                throw_decode_expr: None,
+                doc: None,
+            }],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+        };
+        insta::assert_snapshot!(render_class(&cls, "boltffi"));
+    }
+
     #[test]
     fn snapshot_class_with_nullable_handle_return() {
         let cls = SwiftClass {

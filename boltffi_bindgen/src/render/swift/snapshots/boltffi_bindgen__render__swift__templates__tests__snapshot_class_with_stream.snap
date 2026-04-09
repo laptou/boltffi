@@ -1,22 +1,37 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
-assertion_line: 1236
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class EventSource {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
     }
 
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
+    }
+
     deinit {
-        boltffi_event_source_free(handle)
+        if let handle = handle {
+            boltffi_event_source_free(handle)
+        }
     }
 
     public func events() -> _Concurrency.AsyncStream<String> {
         _Concurrency.AsyncStream<String>(bufferingPolicy: .unbounded) { continuation in
-            guard let subscription = boltffi_event_source_events_subscribe(self.handle) else {
+            guard let subscription = boltffi_event_source_events_subscribe(self.ffiHandleForCall()) else {
                 continuation.finish()
                 return
             }

@@ -2,7 +2,7 @@
 source: boltffi_bindgen/src/render/swift/templates.rs
 expression: "render_class(&cls, \"boltffi\")"
 ---
-public final class Connection {
+public final class Receiver {
     /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
     private var handle: OpaquePointer?
 
@@ -23,18 +23,14 @@ public final class Connection {
         return handle!
     }
 
-    public init(url: String) throws {
-        var url = url
-        let ptr = url.withUTF8 { urlBuf -> OpaquePointer? in boltffi_connection_open(urlBuf.baseAddress!, UInt(urlBuf.count)) }
-        guard let ptr = ptr else {
-            throw FfiError(message: takeLastErrorMessage())
-        }
+    public init(endpoint: Endpoint) {
+        let ptr = boltffi_receiver_new(endpoint.takeHandle())!
         self.handle = ptr
     }
 
     deinit {
         if let handle = handle {
-            boltffi_connection_free(handle)
+            boltffi_receiver_free(handle)
         }
     }
 

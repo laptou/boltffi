@@ -1,8 +1,22 @@
 {{ self::swift_doc_block(cls.doc, "") }}public final class {{ cls.name }} {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
+    }
+
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
     }
 {%- for ctor in cls.constructors %}
 {%- if ctor.is_designated() %}
@@ -207,7 +221,9 @@
 {%- endfor %}
 
     deinit {
-        {{ cls.ffi_free }}(handle)
+        if let handle = handle {
+            {{ cls.ffi_free }}(handle)
+        }
     }
 {%- for method in cls.methods %}
 
@@ -387,7 +403,7 @@
 {%- when SwiftStreamMode::Async %}
     public func {{ stream.name }}() -> _Concurrency.AsyncStream<{{ stream.item_type }}> {
         _Concurrency.AsyncStream<{{ stream.item_type }}>(bufferingPolicy: .unbounded) { continuation in
-            guard let subscription = {{ stream.subscribe }}(self.handle) else {
+            guard let subscription = {{ stream.subscribe }}(self.ffiHandleForCall()) else {
                 continuation.finish()
                 return
             }
@@ -434,7 +450,7 @@
 {%- when SwiftStreamMode::Batch { class_name, method_name_pascal } %}
     public func {{ stream.name }}() -> {{ class_name }}{{ method_name_pascal }}Subscription {
         {{ class_name }}{{ method_name_pascal }}Subscription(
-            handle: {{ stream.subscribe }}(self.handle),
+            handle: {{ stream.subscribe }}(self.ffiHandleForCall()),
             readBatch: { subscription, batchSize in
 {%- match stream.item_delivery %}
 {%- when SwiftStreamItemDelivery::WireEncoded { .. } %}
@@ -472,7 +488,7 @@
     }
 {%- when SwiftStreamMode::Callback { class_name, method_name_pascal } %}
     public func {{ stream.name }}(callback: @escaping ({{ stream.item_type }}) -> Void) -> {{ class_name }}{{ method_name_pascal }}Cancellable {
-        guard let subscription = {{ stream.subscribe }}(self.handle) else {
+        guard let subscription = {{ stream.subscribe }}(self.ffiHandleForCall()) else {
             return {{ class_name }}{{ method_name_pascal }}Cancellable {}
         }
 

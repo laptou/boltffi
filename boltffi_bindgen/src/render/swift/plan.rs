@@ -840,7 +840,7 @@ impl SwiftMethod {
 
     fn prefix_args(&self) -> Vec<&str> {
         if self.needs_handle() {
-            vec!["handle"]
+            vec!["ffiHandleForCall()"]
         } else if let Some(rs) = &self.value_self {
             rs.ffi_args.iter().map(String::as_str).collect()
         } else {
@@ -1410,9 +1410,9 @@ impl SwiftParam {
             }
             SwiftConversion::PassHandle { nullable, .. } => {
                 if *nullable {
-                    format!("{}?.handle", self.name)
+                    format!("{}?.takeHandle()", self.name)
                 } else {
-                    format!("{}.handle", self.name)
+                    format!("{}.takeHandle()", self.name)
                 }
             }
         }

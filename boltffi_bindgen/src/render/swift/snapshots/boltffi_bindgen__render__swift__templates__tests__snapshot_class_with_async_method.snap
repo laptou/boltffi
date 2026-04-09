@@ -3,19 +3,35 @@ source: boltffi_bindgen/src/render/swift/templates.rs
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class HttpClient {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
     }
 
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
+    }
+
     deinit {
-        boltffi_http_client_free(handle)
+        if let handle = handle {
+            boltffi_http_client_free(handle)
+        }
     }
 
     public func fetch(url: String) async throws -> Data {
         var url = url
-        let futureHandle = url.withUTF8 { urlBuf in boltffi_http_client_fetch_start(handle, urlBuf.baseAddress!, UInt(urlBuf.count)) }
+        let futureHandle = url.withUTF8 { urlBuf in boltffi_http_client_fetch_start(ffiHandleForCall(), urlBuf.baseAddress!, UInt(urlBuf.count)) }
         return try await boltffiAsyncCall(
             futureHandle: futureHandle,
             pollFn: boltffi_http_client_fetch_poll,

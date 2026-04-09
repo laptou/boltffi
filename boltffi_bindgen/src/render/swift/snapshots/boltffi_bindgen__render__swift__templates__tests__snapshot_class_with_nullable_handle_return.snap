@@ -3,20 +3,36 @@ source: boltffi_bindgen/src/render/swift/templates.rs
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class Cache {
-    let handle: OpaquePointer
+    /// null after ownership was transferred to rust via `takeHandle()` (pass-by-value exported class params).
+    private var handle: OpaquePointer?
 
     init(handle: OpaquePointer) {
         self.handle = handle
     }
 
+    /// moves the boxed rust value into the ffi callee; this wrapper must not be used afterward.
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "BoltFFI: handle was already consumed")
+        return handle!
+    }
+
     deinit {
-        boltffi_cache_free(handle)
+        if let handle = handle {
+            boltffi_cache_free(handle)
+        }
     }
 
     public func get(key: String) -> CacheEntry? {
         var key = key
         return key.withUTF8 { keyBuf in
-            guard let ptr = boltffi_cache_get(handle, keyBuf.baseAddress!, UInt(keyBuf.count)) else { return nil }
+            guard let ptr = boltffi_cache_get(ffiHandleForCall(), keyBuf.baseAddress!, UInt(keyBuf.count)) else { return nil }
             return CacheEntry(handle: ptr)
         }
     }
