@@ -248,6 +248,56 @@ func decideFinish(prior: UInt) -> Continuation {
 }
 
 #[test]
+fn test_exported_class_handle_transfer_pattern_no_false_positive() {
+    // mirrors generated swift: pass-by-value handle consumes `takeHandle()`; `deinit` only frees if still owned
+    let source = r#"
+public final class Endpoint {
+    private var handle: OpaquePointer?
+    init(handle: OpaquePointer) { self.handle = handle }
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "already consumed")
+        return handle!
+    }
+}
+
+public final class Receiver {
+    private var handle: OpaquePointer?
+    init(handle: OpaquePointer) { self.handle = handle }
+    fileprivate func takeHandle() -> OpaquePointer {
+        precondition(handle != nil, "already consumed")
+        let h = handle!
+        handle = nil
+        return h
+    }
+    private func ffiHandleForCall() -> OpaquePointer {
+        precondition(handle != nil, "already consumed")
+        return handle!
+    }
+    public init(endpoint: Endpoint) {
+        let ptr = boltffi_receiver_new(endpoint.takeHandle())!
+        self.handle = ptr
+    }
+    deinit {
+        if let handle = handle {
+            boltffi_receiver_free(handle)
+        }
+    }
+}
+"#;
+    let result = verify_swift(source);
+    assert!(
+        result.is_verified(),
+        "handle transfer pattern should not trigger false positives"
+    );
+}
+
+#[test]
 fn test_async_rust_future_pattern() {
     let source = r#"
 public final class RustFuture<T> {
