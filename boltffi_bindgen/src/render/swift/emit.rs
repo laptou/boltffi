@@ -3,7 +3,9 @@ use boltffi_ffi_rules::transport::EnumTagStrategy;
 
 use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::BuiltinId;
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
+use crate::ir::ops::{
+    OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq, remap_root_in_seq,
+};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use boltffi_ffi_rules::naming::snake_to_camel as camel_case;
 
@@ -978,7 +980,10 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
             match layout {
                 VecLayout::Blittable { .. } => format!("writer.writeBlittableArray({})", v),
                 VecLayout::Encoded => {
-                    let inner = emit_writer_write(element);
+                    // element seq is built with the record root; inside writeArray the binding is `item`.
+                    let element_rebased =
+                        remap_root_in_seq(element.as_ref(), ValueExpr::Var("item".to_string()));
+                    let inner = emit_writer_write(&element_rebased);
                     format!("writer.writeArray({}) {{ writer, item in {} }}", v, inner)
                 }
             }
