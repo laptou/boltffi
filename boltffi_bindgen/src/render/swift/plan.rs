@@ -45,12 +45,20 @@ impl SwiftCallMode {
     }
 }
 
+/// typed `Err` payload for async `Result<Handle, E>` (`complete` passes `err_out_*`).
+#[derive(Debug, Clone)]
+pub struct AsyncEncodedErrInfo {
+    pub err_decode: ReadSeq,
+    pub err_is_string: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum SwiftAsyncResult {
     Void,
     Direct {
         swift_type: String,
         conversion: SwiftAsyncConversion,
+        typed_async_err: Option<AsyncEncodedErrInfo>,
     },
     DirectBuffer {
         swift_type: String,
@@ -71,6 +79,35 @@ pub enum SwiftAsyncResult {
 impl SwiftAsyncResult {
     pub fn is_unit(&self) -> bool {
         matches!(self, Self::Void)
+    }
+
+    /// async `Result<Handle, E>`: `complete` has `err_out_ptr` / `err_out_len` for typed errors.
+    pub fn has_typed_async_err(&self) -> bool {
+        matches!(
+            self,
+            Self::Direct {
+                typed_async_err: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// reader expression that throws the typed `Err` (or `FfiError` for `String` errors).
+    pub fn typed_async_err_throw_expr(&self) -> Option<String> {
+        match self {
+            Self::Direct {
+                typed_async_err: Some(info),
+                ..
+            } => {
+                let expr = emit::emit_reader_read(&info.err_decode);
+                Some(if info.err_is_string {
+                    format!("FfiError(message: {})", expr)
+                } else {
+                    expr
+                })
+            }
+            _ => None,
+        }
     }
 
     pub fn is_direct(&self) -> bool {
@@ -778,13 +815,13 @@ impl SwiftConstructor {
         match self {
             Self::Designated { mode, params, .. } | Self::Convenience { mode, params, .. } => {
                 match mode {
-                    SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], params),
-                    SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], params),
+                    SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], params, false),
+                    SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], params, false),
                 }
             }
             Self::Factory { mode, .. } => match mode {
-                SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], &[]),
-                SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], &[]),
+                SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], &[], false),
+                SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], &[], false),
             },
         }
     }
@@ -851,7 +888,7 @@ impl SwiftMethod {
     pub fn start_call_expr(&self) -> String {
         match &self.mode {
             SwiftCallMode::Async { start, .. } => {
-                ffi_call_expr(start, &self.prefix_args(), &self.params)
+                ffi_call_expr(start, &self.prefix_args(), &self.params, false)
             }
             SwiftCallMode::Sync { .. } => String::new(),
         }
@@ -859,9 +896,12 @@ impl SwiftMethod {
 
     pub fn sync_call_expr(&self) -> String {
         match &self.mode {
-            SwiftCallMode::Sync { symbol } => {
-                ffi_call_expr(symbol, &self.prefix_args(), &self.params)
-            }
+            SwiftCallMode::Sync { symbol } => ffi_call_expr(
+                symbol,
+                &self.prefix_args(),
+                &self.params,
+                self.returns.throws_direct_ok_carrier(),
+            ),
             SwiftCallMode::Async { .. } => String::new(),
         }
     }
@@ -1254,12 +1294,25 @@ pub struct SwiftFunction {
     pub doc: Option<String>,
 }
 
-pub fn ffi_call_expr(symbol: &str, prefix_args: &[&str], params: &[SwiftParam]) -> String {
-    let args = prefix_args
+/// build `symbol(prefix..., params..., &outOk, &errOutPtr, &errLen)` when `append_throws_carrier` is true.
+/// carrier args must be appended only to the top-level ffi call (never splice into nested calls).
+pub fn ffi_call_expr(
+    symbol: &str,
+    prefix_args: &[&str],
+    params: &[SwiftParam],
+    append_throws_carrier: bool,
+) -> String {
+    let mut args: Vec<String> = prefix_args
         .iter()
         .map(|s| s.to_string())
-        .chain(params.iter().map(|p| p.ffi_arg()));
-    format!("{}({})", symbol, args.collect::<Vec<_>>().join(", "))
+        .chain(params.iter().map(|p| p.ffi_arg()))
+        .collect();
+    if append_throws_carrier {
+        args.push("&outOk".to_string());
+        args.push("&errOutPtr".to_string());
+        args.push("&errLen".to_string());
+    }
+    format!("{}({})", symbol, args.join(", "))
 }
 
 pub fn closure_wrappers(params: &[SwiftParam]) -> Vec<String> {
@@ -1284,14 +1337,19 @@ impl SwiftFunction {
 
     pub fn start_call_expr(&self) -> String {
         match &self.mode {
-            SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], &self.params),
+            SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], &self.params, false),
             SwiftCallMode::Sync { .. } => String::new(),
         }
     }
 
     pub fn sync_call_expr(&self) -> String {
         match &self.mode {
-            SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], &self.params),
+            SwiftCallMode::Sync { symbol } => ffi_call_expr(
+                symbol,
+                &[],
+                &self.params,
+                self.returns.throws_direct_ok_carrier(),
+            ),
             SwiftCallMode::Async { .. } => String::new(),
         }
     }
@@ -1704,6 +1762,8 @@ pub enum SwiftReturn {
         err_decode: ReadSeq,
         err_is_string: bool,
         err_encode: Option<WriteSeq>,
+        /// sync: ok is written to `out_ok`, err to `err_out_*`; ffi returns `FfiStatus` (code 0 = ok).
+        direct_ok_carrier: bool,
     },
 }
 
@@ -1742,6 +1802,47 @@ impl SwiftReturn {
 
     pub fn is_throws(&self) -> bool {
         matches!(self, SwiftReturn::Throws { .. })
+    }
+
+    /// sync `Result` with direct ok handle + encoded err buffer (`out_ok` / `err_out_*`).
+    pub fn throws_direct_ok_carrier(&self) -> bool {
+        matches!(
+            self,
+            SwiftReturn::Throws {
+                direct_ok_carrier: true,
+                ..
+            }
+        )
+    }
+
+    /// for direct-ok carrier, the swift class name wrapping the returned handle (inner ok).
+    pub fn throws_ok_handle_class_name(&self) -> Option<String> {
+        match self {
+            SwiftReturn::Throws { ok, .. } => ok
+                .handle_info()
+                .map(|(class_name, _)| class_name.to_string()),
+            _ => None,
+        }
+    }
+
+    /// decode expression for typed err when using [`Self::throws_direct_ok_carrier`].
+    pub fn throws_direct_err_throw_expr(&self) -> Option<String> {
+        match self {
+            SwiftReturn::Throws {
+                err_decode,
+                err_is_string,
+                direct_ok_carrier: true,
+                ..
+            } => {
+                let expr = emit::emit_reader_read(err_decode);
+                Some(if *err_is_string {
+                    format!("FfiError(message: {})", expr)
+                } else {
+                    expr
+                })
+            }
+            _ => None,
+        }
     }
 
     pub fn is_void(&self) -> bool {

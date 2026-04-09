@@ -141,6 +141,10 @@ pub enum AbiType {
     F32,
     F64,
     Pointer(PointerType),
+    /// pointer to an exported-class handle (`struct Foo *` in c); used with [`ParamRole::OutDirect`]
+    /// for `out_ok` on `Result<Handle, encoded E>` so the header is `struct Foo **out_ok`, matching
+    /// swift `OpaquePointer?` / `&outOk` rather than `uint8_t **`.
+    PointerToHandle(ClassId),
     OwnedBuffer,
     InlineCallbackFn {
         params: Vec<AbiType>,

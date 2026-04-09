@@ -103,6 +103,7 @@ impl<'c> Lowerer<'c> {
         let symbol = self.call_symbol(&plan);
         let params = self.abi_params_from_plan(&plan.params);
         let (mode, returns, error) = self.abi_mode_returns_error_for_function(func, &plan.kind);
+        let params = self.append_direct_ok_encoded_err_carrier(params, &mode, &returns, &error);
 
         AbiCall {
             id: CallId::Function(func.id.clone()),
@@ -120,6 +121,7 @@ impl<'c> Lowerer<'c> {
         let params = self.abi_params_from_plan(&plan.params);
         let (mode, returns, error) =
             self.abi_mode_returns_error_for_method(class, method, &plan.kind);
+        let params = self.append_direct_ok_encoded_err_carrier(params, &mode, &returns, &error);
 
         AbiCall {
             id: CallId::Method {
@@ -165,6 +167,7 @@ impl<'c> Lowerer<'c> {
                 (mode, ret, ErrorTransport::None)
             }
         };
+        let params = self.append_direct_ok_encoded_err_carrier(params, &mode, &returns, &error);
 
         AbiCall {
             id: CallId::Constructor {
@@ -191,6 +194,8 @@ impl<'c> Lowerer<'c> {
             CallPlanKind::Sync { returns } => returns,
             CallPlanKind::Async { .. } => unreachable!("value type methods are always sync"),
         });
+        let mode = CallMode::Sync;
+        let params = self.append_direct_ok_encoded_err_carrier(params, &mode, &returns, &error);
 
         AbiCall {
             id: host.method_call_id(&method.id),
@@ -481,14 +486,14 @@ impl<'c> Lowerer<'c> {
         func: &FunctionDef,
         plan: &AsyncPlan,
     ) -> AsyncCall {
-        let (result, _) = self.return_shape_and_error(&plan.result);
+        let (result, error) = self.return_shape_and_error(&plan.result);
         AsyncCall {
             poll: naming::function_ffi_poll(func.id.as_str()),
             complete: naming::function_ffi_complete(func.id.as_str()),
             cancel: naming::function_ffi_cancel(func.id.as_str()),
             free: naming::function_ffi_free(func.id.as_str()),
-            result: result.with_error_strategy(ErrorReturnStrategy::StatusCode),
-            error: ErrorTransport::StatusCode,
+            result,
+            error,
         }
     }
 
@@ -498,14 +503,14 @@ impl<'c> Lowerer<'c> {
         method: &MethodDef,
         plan: &AsyncPlan,
     ) -> AsyncCall {
-        let (result, _) = self.return_shape_and_error(&plan.result);
+        let (result, error) = self.return_shape_and_error(&plan.result);
         AsyncCall {
             poll: naming::method_ffi_poll(class.id.as_str(), method.id.as_str()),
             complete: naming::method_ffi_complete(class.id.as_str(), method.id.as_str()),
             cancel: naming::method_ffi_cancel(class.id.as_str(), method.id.as_str()),
             free: naming::method_ffi_free(class.id.as_str(), method.id.as_str()),
-            result: result.with_error_strategy(ErrorReturnStrategy::StatusCode),
-            error: ErrorTransport::StatusCode,
+            result,
+            error,
         }
     }
 
@@ -516,14 +521,14 @@ impl<'c> Lowerer<'c> {
         plan: &AsyncPlan,
     ) -> AsyncCall {
         let method_name = ctor.name().map(|n| n.as_str()).unwrap_or("new");
-        let (result, _) = self.return_shape_and_error(&plan.result);
+        let (result, error) = self.return_shape_and_error(&plan.result);
         AsyncCall {
             poll: naming::method_ffi_poll(class.id.as_str(), method_name),
             complete: naming::method_ffi_complete(class.id.as_str(), method_name),
             cancel: naming::method_ffi_cancel(class.id.as_str(), method_name),
             free: naming::method_ffi_free(class.id.as_str(), method_name),
-            result: result.with_error_strategy(ErrorReturnStrategy::StatusCode),
-            error: ErrorTransport::StatusCode,
+            result,
+            error,
         }
     }
 
@@ -550,7 +555,7 @@ impl<'c> Lowerer<'c> {
                     decode_ops: None,
                     encode_ops: None,
                 },
-                ErrorTransport::Encoded {
+                ErrorTransport::DirectOkWithEncodedErr {
                     decode_ops: self.expand_decode(err_codec),
                     encode_ops: None,
                 },
@@ -574,6 +579,56 @@ impl<'c> Lowerer<'c> {
                 )
             }
         }
+    }
+
+    /// trailing out params for sync calls where ok is a direct handle/callback and err is wire-encoded.
+    fn append_direct_ok_encoded_err_carrier(
+        &self,
+        mut params: Vec<AbiParam>,
+        mode: &CallMode,
+        returns: &ReturnShape,
+        error: &ErrorTransport,
+    ) -> Vec<AbiParam> {
+        if !matches!(mode, CallMode::Sync) {
+            return params;
+        }
+        if !matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. }) {
+            return params;
+        }
+        let Some(transport) = &returns.transport else {
+            return params;
+        };
+        if !matches!(
+            transport,
+            Transport::Handle { .. } | Transport::Callback { .. }
+        ) {
+            return params;
+        }
+        let err_out_ptr = ParamName::new("err_out_ptr");
+        let err_out_len = ParamName::new("err_out_len");
+        let out_ok_abi = match transport {
+            Transport::Handle { class_id, .. } => AbiType::PointerToHandle(class_id.clone()),
+            Transport::Callback { .. } => AbiType::CallbackHandle,
+            _ => unreachable!("append_direct_ok_encoded_err_carrier only handles handle/callback"),
+        };
+        params.push(AbiParam {
+            name: ParamName::new("out_ok"),
+            abi_type: out_ok_abi,
+            role: ParamRole::OutDirect,
+        });
+        params.push(AbiParam {
+            name: err_out_ptr.clone(),
+            abi_type: AbiType::Pointer(PrimitiveType::U8),
+            role: ParamRole::OutDirect,
+        });
+        params.push(AbiParam {
+            name: err_out_len,
+            abi_type: AbiType::USize,
+            role: ParamRole::OutLen {
+                for_param: err_out_ptr,
+            },
+        });
+        params
     }
 
     pub(super) fn return_shape_from_transport(&self, value: &Transport) -> ReturnShape {
@@ -934,7 +989,7 @@ impl<'c> Lowerer<'c> {
                                 decode_ops: None,
                                 encode_ops: None,
                             },
-                            ErrorTransport::Encoded {
+                            ErrorTransport::DirectOkWithEncodedErr {
                                 decode_ops: self.expand_decode(&err_codec),
                                 encode_ops: None,
                             },
@@ -960,7 +1015,7 @@ impl<'c> Lowerer<'c> {
                                 decode_ops: None,
                                 encode_ops: None,
                             },
-                            ErrorTransport::Encoded {
+                            ErrorTransport::DirectOkWithEncodedErr {
                                 decode_ops: self.expand_decode(&err_codec),
                                 encode_ops: None,
                             },
@@ -1214,7 +1269,10 @@ mod return_shape_tests {
             &shape.transport,
             Some(Transport::Handle { nullable: true, .. })
         ));
-        assert!(matches!(err_transport, ErrorTransport::Encoded { .. }));
+        assert!(matches!(
+            err_transport,
+            ErrorTransport::DirectOkWithEncodedErr { .. }
+        ));
     }
 
     #[test]
@@ -1239,6 +1297,9 @@ mod return_shape_tests {
             &shape.transport,
             Some(Transport::Handle { nullable: true, .. })
         ));
-        assert!(matches!(err_transport, ErrorTransport::Encoded { .. }));
+        assert!(matches!(
+            err_transport,
+            ErrorTransport::DirectOkWithEncodedErr { .. }
+        ));
     }
 }

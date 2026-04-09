@@ -498,6 +498,77 @@ func boltffiAsyncCallDirect<T>(
         }
     }
 }
+
+/// like `boltffiAsyncCallDirect`, but `complete` also takes `err_out_ptr` / `err_out_len` for typed `Result<Handle, E>` errors.
+func boltffiAsyncCallDirectWithErrOut<T>(
+    futureHandle: RustFutureHandle?,
+    pollFn: @escaping @Sendable (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    completeFn: @escaping @Sendable (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?) -> T,
+    cancelFn: @escaping @Sendable (RustFutureHandle?) -> Void,
+    freeFn: @escaping @Sendable (RustFutureHandle?) -> Void,
+    decodeTypedErr: @escaping @Sendable (UnsafePointer<UInt8>, Int) throws -> Error
+) async throws -> T {
+    typealias Ctx = FfiFutureState<T>
+    let state = Ctx(handle: futureHandle)
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            guard state.installContinuation(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            let driver = BoltFFIAsyncPollDriver(
+                futureHandle: futureHandle,
+                pollFn: pollFn,
+                onReady: {
+                    let decision = state.decideFinish()
+                    if case .alreadyFinished = decision { return }
+                    var status = FfiStatus()
+                    var errOutPtr: UnsafeMutablePointer<UInt8>?
+                    var errLen: UInt = 0
+                    let value = completeFn(state.handle, &status, &errOutPtr, &errLen)
+                    freeFn(state.handle)
+                    switch decision {
+                    case .finishWithContinuation(let cont):
+                        if status.code == 0 {
+                            cont.resume(returning: value)
+                        } else {
+                            if errLen > 0, let p = errOutPtr {
+                                defer { free(UnsafeMutableRawPointer(p)) }
+                                do {
+                                    let err = try decodeTypedErr(UnsafePointer(p), Int(errLen))
+                                    cont.resume(throwing: err)
+                                } catch {
+                                    cont.resume(throwing: error)
+                                }
+                            } else {
+                                cont.resume(throwing: FfiError(message: "async call failed"))
+                            }
+                        }
+                    case .finishWithoutContinuation, .alreadyFinished:
+                        break
+                    }
+                },
+                canContinuePolling: { state.canPoll() }
+            )
+            driver.startPoll()
+        }
+    } onCancel: {
+        let decision = state.decideFinish()
+        switch decision {
+        case .alreadyFinished:
+            break
+        case .finishWithoutContinuation:
+            cancelFn(state.handle)
+            freeFn(state.handle)
+        case .finishWithContinuation(let continuation):
+            cancelFn(state.handle)
+            freeFn(state.handle)
+            continuation.resume(throwing: CancellationError())
+        }
+    }
+}
 {%- endif %}
 {%- if has_streams %}
 

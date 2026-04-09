@@ -9,7 +9,7 @@ use crate::exports::async_export::{
     wasm_complete_export_for_async, AsyncExportNames, AsyncRuntimeExports,
 };
 use crate::exports::callable::FunctionCallable;
-use crate::exports::common::fallible_handle_export_body;
+use crate::exports::common::fallible_direct_ok_export_body;
 use crate::exports::callback_return::resolve_sync_callback_return;
 use crate::exports::extern_export::{
     DirectBufferCarrier, DualPlatformExternExport, ExportBody, ExportCondition, ExportSafety,
@@ -326,7 +326,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
 
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let FfiParams {
-        ffi_params,
+        mut ffi_params,
         conversions,
         call_args,
     } = transform_params(
@@ -408,14 +408,17 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
             .fallible_ok_type()
             .expect("fallible handle return must parse Result ok type");
         let result_ident = syn::Ident::new("result", fn_name.span());
-        let body = fallible_handle_export_body(
+        let body = fallible_direct_ok_export_body(
             quote! { #fn_name(#(#call_args),*) },
             &conversions,
             !conversions.is_empty(),
             full_ty,
             &result_ident,
         );
-        let return_type = quote! { <#ok_ty as ::boltffi::__private::Passable>::Out };
+        let return_type = quote! { -> ::boltffi::__private::FfiStatus };
+        ffi_params.push(quote! { out_ok: *mut <#ok_ty as ::boltffi::__private::Passable>::Out });
+        ffi_params.push(quote! { err_out_ptr: *mut *mut u8 });
+        ffi_params.push(quote! { err_out_len: *mut usize });
 
         if has_params {
             quote! {
@@ -425,7 +428,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                 #[unsafe(no_mangle)]
                 #fn_vis unsafe extern "C" fn #export_ident(
                     #(#ffi_params),*
-                ) -> #return_type {
+                ) #return_type {
                     #body
                 }
             }
@@ -435,7 +438,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
 
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 #[unsafe(no_mangle)]
-                #fn_vis extern "C" fn #export_ident() -> #return_type {
+                #fn_vis extern "C" fn #export_ident() #return_type {
                     #body
                 }
             }
@@ -679,6 +682,7 @@ fn generate_async_export(
         ffi_return_type: quote! { #ffi_return_type },
         complete_conversion,
         default_value,
+        complete_err_carrier: return_abi.async_complete_needs_err_carrier(),
     }
     .render(wasm_complete);
 

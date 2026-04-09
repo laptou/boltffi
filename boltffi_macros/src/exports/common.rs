@@ -130,8 +130,8 @@ impl FactoryReturnShape {
     }
 }
 
-/// `Result<OkT, ErrT>` where `OkT` is a handle: pack `Ok`, null/default on `Err` with last error.
-pub(crate) fn fallible_handle_export_body(
+/// `Result<OkT, ErrT>` where `OkT` is a handle: write packed ok to `out_ok`, wire-encoded err to `err_out_*`, return `FfiStatus`.
+pub(crate) fn fallible_direct_ok_export_body(
     call_expr: proc_macro2::TokenStream,
     conversions: &[proc_macro2::TokenStream],
     has_conversions: bool,
@@ -151,10 +151,83 @@ pub(crate) fn fallible_handle_export_body(
     quote! {
         #bind
         match #result_ident {
-            Ok(value) => ::boltffi::__private::Passable::pack(value),
+            Ok(value) => {
+                if !out_ok.is_null() {
+                    unsafe {
+                        *out_ok = ::boltffi::__private::Passable::pack(value);
+                    }
+                }
+                if !err_out_ptr.is_null() {
+                    unsafe {
+                        *err_out_ptr = ::core::ptr::null_mut();
+                    }
+                }
+                if !err_out_len.is_null() {
+                    unsafe {
+                        *err_out_len = 0;
+                    }
+                }
+                ::boltffi::__private::FfiStatus::OK
+            }
             Err(err) => {
-                ::boltffi::__private::set_last_error(format!("{err:?}"));
-                ::core::default::Default::default()
+                if !out_ok.is_null() {
+                    unsafe {
+                        *out_ok = ::core::default::Default::default();
+                    }
+                }
+                let buf = ::boltffi::__private::FfiBuf::wire_encode(&err);
+                let bytes = unsafe { buf.as_byte_slice() };
+                if !err_out_ptr.is_null() && !err_out_len.is_null() {
+                    if bytes.is_empty() {
+                        unsafe {
+                            *err_out_ptr = ::core::ptr::null_mut();
+                            *err_out_len = 0;
+                        }
+                    } else {
+                        unsafe extern "C" {
+                            fn malloc(size: usize) -> *mut ::core::ffi::c_void;
+                        }
+                        let copied = unsafe { malloc(bytes.len()) as *mut u8 };
+                        if copied.is_null() {
+                            return ::boltffi::__private::FfiStatus::INTERNAL_ERROR;
+                        }
+                        unsafe {
+                            ::core::ptr::copy_nonoverlapping(bytes.as_ptr(), copied, bytes.len());
+                            *err_out_ptr = copied;
+                            *err_out_len = bytes.len();
+                        }
+                    }
+                }
+                ::boltffi::__private::FfiStatus { code: 1 }
+            }
+        }
+    }
+}
+
+/// wire-encode `err` into `err_out_ptr` / `err_out_len` (async `complete` has no `out_ok`; ok is the return value).
+pub(crate) fn wire_encode_err_to_err_out_buffers(err_ref: &Ident) -> proc_macro2::TokenStream {
+    quote! {
+        let buf = ::boltffi::__private::FfiBuf::wire_encode(&#err_ref);
+        let bytes = unsafe { buf.as_byte_slice() };
+        if !err_out_ptr.is_null() && !err_out_len.is_null() {
+            if bytes.is_empty() {
+                unsafe {
+                    *err_out_ptr = ::core::ptr::null_mut();
+                    *err_out_len = 0;
+                }
+            } else {
+                unsafe extern "C" {
+                    fn malloc(size: usize) -> *mut ::core::ffi::c_void;
+                }
+                let copied = unsafe { malloc(bytes.len()) as *mut u8 };
+                if copied.is_null() {
+                    return ::core::default::Default::default();
+                }
+                unsafe {
+                    ::core::ptr::copy_nonoverlapping(bytes.as_ptr(), copied, bytes.len());
+                    *err_out_ptr = copied;
+                    *err_out_len = bytes.len();
+                }
             }
         }
     }

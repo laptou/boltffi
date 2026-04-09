@@ -96,6 +96,15 @@ impl ResolvedReturn {
             _ => None,
         }
     }
+
+    /// async `complete` adds `err_out_ptr` / `err_out_len` for typed `Err` (native + wasm).
+    pub fn async_complete_needs_err_carrier(&self) -> bool {
+        matches!(
+            self.value_return_strategy(),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+        ) && self.error_strategy() == ErrorReturnStrategy::Encoded
+            && self.fallible_ok_type().is_some()
+    }
 }
 
 #[derive(Clone, Copy)]

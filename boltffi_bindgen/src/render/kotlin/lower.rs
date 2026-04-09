@@ -2693,6 +2693,7 @@ impl<'a> KotlinLowerer<'a> {
             AbiType::F32 => "Float".to_string(),
             AbiType::F64 => "Double".to_string(),
             AbiType::Pointer(_)
+            | AbiType::PointerToHandle(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
@@ -3027,6 +3028,7 @@ impl<'a> KotlinLowerer<'a> {
             AbiType::F32 => "Float".to_string(),
             AbiType::F64 => "Double".to_string(),
             AbiType::Pointer(_)
+            | AbiType::PointerToHandle(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
@@ -4114,7 +4116,8 @@ impl<'a> KotlinLowerer<'a> {
                 .iter()
                 .filter_map(|param| self.input_read_ops(param));
             let error_seq = match &call.error {
-                ErrorTransport::Encoded { decode_ops, .. } => Some(decode_ops),
+                ErrorTransport::Encoded { decode_ops, .. }
+                | ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } => Some(decode_ops),
                 ErrorTransport::None | ErrorTransport::StatusCode => None,
             };
             let async_seq = match &call.mode {

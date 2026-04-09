@@ -873,6 +873,7 @@ impl<'a> JniLowerer<'a> {
             AbiType::F32 => "jfloat".to_string(),
             AbiType::F64 => "jdouble".to_string(),
             AbiType::Pointer(_)
+            | AbiType::PointerToHandle(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
@@ -2322,6 +2323,7 @@ impl<'a> JniLowerer<'a> {
                 format!("{} (*)({})", c_return, param_types.join(", "))
             }
             AbiType::Handle(class_id) => format!("const struct {} *", class_id.as_str()),
+            AbiType::PointerToHandle(class_id) => format!("struct {} *", class_id.as_str()),
             AbiType::CallbackHandle => "BoltFFICallbackHandle".to_string(),
             AbiType::Struct(record_id) => format!("___{}", record_id.as_str()),
         }
@@ -2344,6 +2346,7 @@ impl<'a> JniLowerer<'a> {
             AbiType::F64 => "double".to_string(),
             AbiType::Void
             | AbiType::Pointer(_)
+            | AbiType::PointerToHandle(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)

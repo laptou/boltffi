@@ -1,5 +1,6 @@
 use super::common::{
-    fallible_handle_export_body, impl_type_name, is_factory_constructor, is_result_of_self_type_path,
+    fallible_direct_ok_export_body, impl_type_name, is_factory_constructor,
+    is_result_of_self_type_path,
 };
 
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
@@ -773,7 +774,7 @@ fn generate_sync_method_export(
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
     let FfiParams {
-        ffi_params,
+        mut ffi_params,
         conversions,
         call_args,
     } = transform_method_params(
@@ -817,18 +818,18 @@ fn generate_sync_method_export(
     ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
     {
         let full_ty = return_abi.rust_type();
-        let ok_ty = return_abi
+        let _ok_ty = return_abi
             .fallible_ok_type()
             .expect("fallible handle return must parse Result ok type");
         let result_ident = syn::Ident::new("result", method_name.span());
-        let body = fallible_handle_export_body(
+        let body = fallible_direct_ok_export_body(
             quote! { #call_expr },
             &conversions,
             has_conversions,
             full_ty,
             &result_ident,
         );
-        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        let return_type = quote! { -> ::boltffi::__private::FfiStatus };
         (body, return_type, false)
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
@@ -963,6 +964,18 @@ fn generate_sync_method_export(
         });
     };
 
+    if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+        && return_abi.fallible_ok_type().is_some()
+    {
+        let ok_ty = return_abi.fallible_ok_type().unwrap();
+        ffi_params.push(quote! { out_ok: *mut <#ok_ty as ::boltffi::__private::Passable>::Out });
+        ffi_params.push(quote! { err_out_ptr: *mut *mut u8 });
+        ffi_params.push(quote! { err_out_len: *mut usize });
+    }
+
     if is_wire_encoded {
         return Some(
             InstanceMethodExport::new(&visibility, &export_name, type_name, &ffi_params)
@@ -1073,7 +1086,7 @@ fn generate_static_method_export(
     let on_wire_record_error = return_abi.invalid_arg_early_return_statement();
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
-        ffi_params,
+        mut ffi_params,
         conversions,
         call_args,
     } = transform_method_params(
@@ -1117,18 +1130,18 @@ fn generate_static_method_export(
     ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
     {
         let full_ty = return_abi.rust_type();
-        let ok_ty = return_abi
+        let _ok_ty = return_abi
             .fallible_ok_type()
             .expect("fallible handle return must parse Result ok type");
         let result_ident = syn::Ident::new("result", method_name.span());
-        let body = fallible_handle_export_body(
+        let body = fallible_direct_ok_export_body(
             quote! { #call_expr },
             &conversions,
             has_conversions,
             full_ty,
             &result_ident,
         );
-        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        let return_type = quote! { -> ::boltffi::__private::FfiStatus };
         (body, return_type, false)
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
@@ -1275,6 +1288,18 @@ fn generate_static_method_export(
         });
     };
 
+    if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+        && return_abi.fallible_ok_type().is_some()
+    {
+        let ok_ty = return_abi.fallible_ok_type().unwrap();
+        ffi_params.push(quote! { out_ok: *mut <#ok_ty as ::boltffi::__private::Passable>::Out });
+        ffi_params.push(quote! { err_out_ptr: *mut *mut u8 });
+        ffi_params.push(quote! { err_out_len: *mut usize });
+    }
+
     if is_wire_encoded {
         return Some(
             StaticMethodExport::new(&visibility, &export_name, &ffi_params)
@@ -1381,6 +1406,7 @@ fn generate_async_method_export(
         ffi_return_type: quote! { #ffi_return_type },
         complete_conversion,
         default_value,
+        complete_err_carrier: return_abi.async_complete_needs_err_carrier(),
     }
     .render(wasm_complete);
 
@@ -1472,6 +1498,7 @@ fn generate_async_static_method_export(
         ffi_return_type: quote! { #ffi_return_type },
         complete_conversion,
         default_value,
+        complete_err_carrier: return_abi.async_complete_needs_err_carrier(),
     }
     .render(wasm_complete);
 
@@ -2073,6 +2100,9 @@ mod tests {
 
         assert!(!generated.contains("wire_encode (& result)"));
         assert!(generated.contains("Passable :: pack (value)"));
-        assert!(generated.contains("set_last_error"));
+        assert!(generated.contains("out_ok"));
+        assert!(generated.contains("err_out_ptr"));
+        assert!(generated.contains("wire_encode (& err)"));
+        assert!(!generated.contains("set_last_error"));
     }
 }

@@ -1595,8 +1595,10 @@ impl<'a> TypeScriptLowerer<'a> {
             ErrorReturnStrategy::None => (false, String::new()),
             ErrorReturnStrategy::StatusCode => (true, "FfiError".to_string()),
             ErrorReturnStrategy::Encoded => {
-                let ErrorTransport::Encoded { decode_ops, .. } = transport else {
-                    unreachable!("encoded error strategy requires encoded error transport");
+                let decode_ops = match transport {
+                    ErrorTransport::Encoded { decode_ops, .. }
+                    | ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } => decode_ops,
+                    _ => unreachable!("encoded error strategy requires encoded error transport"),
                 };
                 let err_type = infer_ts_type_from_read_ops(decode_ops);
                 (true, err_type)
@@ -1942,6 +1944,7 @@ fn ts_abi_type(abi_type: &AbiType) -> String {
         AbiType::ISize | AbiType::USize => "number".to_string(),
         AbiType::F32 | AbiType::F64 => "number".to_string(),
         AbiType::Pointer(_)
+        | AbiType::PointerToHandle(_)
         | AbiType::OwnedBuffer
         | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
@@ -1973,6 +1976,7 @@ fn scalar_async_decode_expr(abi_type: &AbiType) -> String {
         AbiType::F64 => "reader.readF64()".to_string(),
         AbiType::Void
         | AbiType::Pointer(_)
+        | AbiType::PointerToHandle(_)
         | AbiType::OwnedBuffer
         | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
@@ -1991,6 +1995,7 @@ fn abi_type_to_wasm(abi_type: &AbiType) -> String {
         AbiType::I64 | AbiType::U64 => "bigint".to_string(),
         AbiType::F32 | AbiType::F64 => "number".to_string(),
         AbiType::Pointer(_)
+        | AbiType::PointerToHandle(_)
         | AbiType::OwnedBuffer
         | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
@@ -2081,6 +2086,7 @@ fn direct_write_info(abi_type: &AbiType) -> DirectWriteInfo {
             byte_width: 8,
         },
         AbiType::Pointer(_)
+        | AbiType::PointerToHandle(_)
         | AbiType::OwnedBuffer
         | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
@@ -2115,6 +2121,7 @@ fn primitive_buffer_ts_type(abi_type: &AbiType) -> String {
         | AbiType::F64 => "number[]".to_string(),
         AbiType::Void
         | AbiType::Pointer(_)
+        | AbiType::PointerToHandle(_)
         | AbiType::OwnedBuffer
         | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)

@@ -8,12 +8,12 @@ use boltffi_ffi_rules::transport::{
 };
 use heck::ToLowerCamelCase;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::emit;
 use super::plan::{
-    CompositeFieldMapping, DirectBufferCompositeMapping, SwiftAsyncConversion, SwiftAsyncResult,
-    SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam, SwiftClass,
+    AsyncEncodedErrInfo, CompositeFieldMapping, DirectBufferCompositeMapping, SwiftAsyncConversion,
+    SwiftAsyncResult, SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam, SwiftClass,
     SwiftClosureTrampoline, SwiftClosureTrampolineParam, SwiftConstructor, SwiftConversion,
     SwiftCustomType, SwiftEnum, SwiftEnumStyle, SwiftField, SwiftFunction, SwiftMethod,
     SwiftModule, SwiftNativeConversion, SwiftNativeMapping, SwiftParam, SwiftRecord, SwiftReturn,
@@ -407,11 +407,10 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             } => SwiftConstructor::Designated {
                 mode: sync_mode.clone(),
-                params: ctor
-                    .params()
-                    .into_iter()
-                    .map(|p| self.lower_param(p, call))
-                    .collect(),
+                params: {
+                    let semantic: Vec<ParamDef> = ctor.params().into_iter().cloned().collect();
+                    self.lower_params_for_swift_call(&semantic, call)
+                },
                 is_fallible: *is_fallible,
                 is_optional: *is_optional,
                 throw_decode_expr: throw_decode_expr.clone(),
@@ -441,13 +440,15 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             } => {
                 let label = camel_case(name.as_str());
-                let mut first = self.lower_param(first_param, call);
-                first.label = Some(label.clone());
-                let rest = rest_params.iter().map(|p| self.lower_param(p, call));
+                let semantic: Vec<ParamDef> = ctor.params().into_iter().cloned().collect();
+                let mut params = self.lower_params_for_swift_call(&semantic, call);
+                if let Some(first) = params.first_mut() {
+                    first.label = Some(label.clone());
+                }
                 SwiftConstructor::Convenience {
                     name: label,
                     mode: sync_mode,
-                    params: std::iter::once(first).chain(rest).collect(),
+                    params,
                     is_fallible: *is_fallible,
                     is_optional: *is_optional,
                     throw_decode_expr,
@@ -459,7 +460,8 @@ impl<'a> SwiftLowerer<'a> {
 
     fn constructor_throw_decode_expr(&self, call: &AbiCall) -> Option<String> {
         match &call.error {
-            ErrorTransport::Encoded { decode_ops, .. } => {
+            ErrorTransport::Encoded { decode_ops, .. }
+            | ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } => {
                 let decode_expr = emit::emit_reader_read(decode_ops);
                 let throw_expr = match decode_ops.ops.first() {
                     Some(ReadOp::String { .. }) => {
@@ -520,11 +522,7 @@ impl<'a> SwiftLowerer<'a> {
             mode: SwiftCallMode::Sync {
                 symbol: call.symbol.as_str().to_string(),
             },
-            params: method
-                .params
-                .iter()
-                .map(|p| self.lower_param(p, call))
-                .collect(),
+            params: self.lower_params_for_swift_call(&method.params, call),
             returns,
             is_static: method.callable_form() == CallableForm::StaticMethod,
             value_self,
@@ -774,11 +772,11 @@ impl<'a> SwiftLowerer<'a> {
                                 ..
                             } => SwiftConstructor::Designated {
                                 mode,
-                                params: ctor
-                                    .params()
-                                    .into_iter()
-                                    .map(|p| self.lower_param(p, call))
-                                    .collect(),
+                                params: {
+                                    let semantic: Vec<ParamDef> =
+                                        ctor.params().into_iter().cloned().collect();
+                                    self.lower_params_for_swift_call(&semantic, call)
+                                },
                                 is_fallible: *is_fallible,
                                 is_optional: *is_optional,
                                 throw_decode_expr: throw_decode_expr.clone(),
@@ -808,13 +806,16 @@ impl<'a> SwiftLowerer<'a> {
                                 ..
                             } => {
                                 let label = camel_case(name.as_str());
-                                let mut first = self.lower_param(first_param, call);
-                                first.label = Some(label.clone());
-                                let rest = rest_params.iter().map(|p| self.lower_param(p, call));
+                                let semantic: Vec<ParamDef> =
+                                    ctor.params().into_iter().cloned().collect();
+                                let mut params = self.lower_params_for_swift_call(&semantic, call);
+                                if let Some(first) = params.first_mut() {
+                                    first.label = Some(label.clone());
+                                }
                                 SwiftConstructor::Convenience {
                                     name: label,
                                     mode,
-                                    params: std::iter::once(first).chain(rest).collect(),
+                                    params,
                                     is_fallible: *is_fallible,
                                     is_optional: *is_optional,
                                     throw_decode_expr,
@@ -849,11 +850,7 @@ impl<'a> SwiftLowerer<'a> {
                             SwiftMethod {
                                 name: camel_case(method.id.as_str()),
                                 mode,
-                                params: method
-                                    .params
-                                    .iter()
-                                    .map(|p| self.lower_param(p, call))
-                                    .collect(),
+                                params: self.lower_params_for_swift_call(&method.params, call),
                                 returns,
                                 is_static: method.callable_form() == CallableForm::StaticMethod,
                                 value_self: None,
@@ -1241,11 +1238,7 @@ impl<'a> SwiftLowerer<'a> {
                 SwiftFunction {
                     name: camel_case(def.id.as_str()),
                     mode,
-                    params: def
-                        .params
-                        .iter()
-                        .map(|p| self.lower_param(p, call))
-                        .collect(),
+                    params: self.lower_params_for_swift_call(&def.params, call),
                     returns,
                     doc: def.doc.clone(),
                 }
@@ -1259,6 +1252,33 @@ impl<'a> SwiftLowerer<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl<'a> SwiftLowerer<'a> {
+    /// abi call params include synthetic out slots (`out_ok`, `err_out_*`) not present on [`ParamDef`].
+    fn lower_params_for_swift_call(
+        &self,
+        semantic_params: &[ParamDef],
+        call: &AbiCall,
+    ) -> Vec<SwiftParam> {
+        let semantic_names: HashSet<&str> = semantic_params
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        let mut out = Vec::new();
+        for abi in &call.params {
+            if abi.name.as_str() == "self" {
+                continue;
+            }
+            if semantic_names.contains(abi.name.as_str()) {
+                let pd = semantic_params
+                    .iter()
+                    .find(|p| p.name.as_str() == abi.name.as_str())
+                    .expect("semantic param should exist for abi param");
+                out.push(self.lower_param(pd, call));
+            }
+            // `out_ok` / `err_out_*` are template locals + appended in `sync_call_expr`, not public params.
+        }
+        out
+    }
+
     fn lower_param(&self, param: &ParamDef, call: &AbiCall) -> SwiftParam {
         let abi_param = self.abi_param_for_semantic(call, &param.name);
         let swift_name = camel_case(param.name.as_str());
@@ -1603,16 +1623,34 @@ impl<'a> SwiftLowerer<'a> {
             }
         };
 
-        match error.return_strategy() {
-            ErrorReturnStrategy::None => base,
-            ErrorReturnStrategy::Encoded => {
-                let ErrorTransport::Encoded {
-                    decode_ops,
-                    encode_ops,
-                } = error
-                else {
-                    unreachable!("encoded error strategy requires encoded error transport");
-                };
+        match error {
+            ErrorTransport::None => base,
+            ErrorTransport::StatusCode => SwiftReturn::Throws {
+                ok: Box::new(base),
+                err_type: "FfiError".to_string(),
+                result_decode: ReadSeq {
+                    size: SizeExpr::Fixed(0),
+                    ops: vec![],
+                    shape: WireShape::Value,
+                },
+                err_decode: ReadSeq {
+                    size: SizeExpr::Fixed(0),
+                    ops: vec![],
+                    shape: WireShape::Value,
+                },
+                err_is_string: false,
+                err_encode: None,
+                direct_ok_carrier: false,
+            },
+            ErrorTransport::Encoded {
+                decode_ops,
+                encode_ops,
+            }
+            | ErrorTransport::DirectOkWithEncodedErr {
+                decode_ops,
+                encode_ops,
+            } => {
+                let direct_ok_carrier = matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. });
                 let result_decode = return_shape.decode_ops.clone().unwrap_or_else(|| ReadSeq {
                     size: SizeExpr::Fixed(0),
                     ops: vec![],
@@ -1632,24 +1670,9 @@ impl<'a> SwiftLowerer<'a> {
                     err_decode: decode_ops.clone(),
                     err_is_string: self.error_is_string(returns),
                     err_encode: encode_ops.clone(),
+                    direct_ok_carrier,
                 }
             }
-            ErrorReturnStrategy::StatusCode => SwiftReturn::Throws {
-                ok: Box::new(base),
-                err_type: "FfiError".to_string(),
-                result_decode: ReadSeq {
-                    size: SizeExpr::Fixed(0),
-                    ops: vec![],
-                    shape: WireShape::Value,
-                },
-                err_decode: ReadSeq {
-                    size: SizeExpr::Fixed(0),
-                    ops: vec![],
-                    shape: WireShape::Value,
-                },
-                err_is_string: false,
-                err_encode: None,
-            },
         }
     }
 
@@ -1945,6 +1968,7 @@ impl<'a> SwiftLowerer<'a> {
                 err_decode,
                 err_is_string,
                 err_encode,
+                direct_ok_carrier,
             } => SwiftReturn::Throws {
                 ok: Box::new(Self::rebase_return_encode(*ok, new_base)),
                 err_type,
@@ -1953,6 +1977,7 @@ impl<'a> SwiftLowerer<'a> {
                 err_is_string,
                 err_encode: err_encode
                     .map(|seq| remap_root_in_seq(&seq, ValueExpr::Var("error".to_string()))),
+                direct_ok_carrier,
             },
             other => other,
         }
@@ -2252,6 +2277,7 @@ impl<'a> SwiftLowerer<'a> {
             AbiType::F32 => "Float".to_string(),
             AbiType::F64 => "Double".to_string(),
             AbiType::Pointer(_)
+            | AbiType::PointerToHandle(_)
             | AbiType::OwnedBuffer
             | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_) => "OpaquePointer".to_string(),
@@ -2299,13 +2325,18 @@ impl<'a> SwiftLowerer<'a> {
         returns: &ReturnDef,
     ) -> SwiftAsyncResult {
         let returns_is_result = matches!(returns, ReturnDef::Result { .. });
-        let throws = returns_is_result || matches!(error, ErrorTransport::Encoded { .. });
+        let throws = returns_is_result
+            || matches!(
+                error,
+                ErrorTransport::Encoded { .. } | ErrorTransport::DirectOkWithEncodedErr { .. }
+            );
 
         match &result_shape.transport {
             None => SwiftAsyncResult::Void,
             Some(Transport::Scalar(origin)) => SwiftAsyncResult::Direct {
                 swift_type: self.abi_to_swift(&AbiType::from(origin.primitive())),
                 conversion: SwiftAsyncConversion::None,
+                typed_async_err: None,
             },
             Some(Transport::Span(SpanContent::Scalar(origin))) => {
                 let primitive = origin.primitive();
@@ -2351,17 +2382,30 @@ impl<'a> SwiftLowerer<'a> {
                     swift_record_type: self.swift_name_for_record(&layout.record_id),
                     fields: self.composite_field_mappings(layout),
                 }),
+                typed_async_err: None,
             },
-            Some(Transport::Handle { class_id, nullable }) => SwiftAsyncResult::Direct {
-                swift_type: if *nullable {
-                    format!("{}?", self.swift_name_for_class(class_id))
-                } else {
-                    self.swift_name_for_class(class_id)
-                },
-                conversion: SwiftAsyncConversion::Handle {
-                    class_name: self.swift_name_for_class(class_id),
-                    nullable: *nullable,
-                },
+            Some(Transport::Handle { class_id, nullable }) => {
+                let typed_async_err = match error {
+                    ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } => {
+                        Some(AsyncEncodedErrInfo {
+                            err_decode: decode_ops.clone(),
+                            err_is_string: self.error_is_string(returns),
+                        })
+                    }
+                    _ => None,
+                };
+                SwiftAsyncResult::Direct {
+                    swift_type: if *nullable {
+                        format!("{}?", self.swift_name_for_class(class_id))
+                    } else {
+                        self.swift_name_for_class(class_id)
+                    },
+                    conversion: SwiftAsyncConversion::Handle {
+                        class_name: self.swift_name_for_class(class_id),
+                        nullable: *nullable,
+                    },
+                    typed_async_err,
+                }
             },
             Some(Transport::Callback {
                 callback_id,
@@ -2377,6 +2421,7 @@ impl<'a> SwiftLowerer<'a> {
                     protocol: pascal_case(callback_id.as_str()),
                     nullable: *nullable,
                 },
+                typed_async_err: None,
             },
         }
     }
@@ -2402,7 +2447,8 @@ impl<'a> SwiftLowerer<'a> {
             ReturnDef::Void => ("Void".to_string(), false),
         };
         let err_decode = match error {
-            ErrorTransport::Encoded { decode_ops, .. } => decode_ops.clone(),
+            ErrorTransport::Encoded { decode_ops, .. }
+            | ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } => decode_ops.clone(),
             ErrorTransport::None | ErrorTransport::StatusCode => {
                 self.error_decode_from_result_read(&decode_ops)
             }
@@ -2450,8 +2496,13 @@ impl<'a> SwiftLowerer<'a> {
                 },
                 err_is_string: false,
                 err_encode: None,
+                direct_ok_carrier: false,
             },
             ErrorTransport::Encoded {
+                decode_ops,
+                encode_ops,
+            }
+            | ErrorTransport::DirectOkWithEncodedErr {
                 decode_ops,
                 encode_ops,
             } => SwiftReturn::Throws {
@@ -2461,6 +2512,7 @@ impl<'a> SwiftLowerer<'a> {
                 err_decode: decode_ops.clone(),
                 err_is_string: self.error_is_string(returns),
                 err_encode: encode_ops.clone(),
+                direct_ok_carrier: matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. }),
             },
         }
     }

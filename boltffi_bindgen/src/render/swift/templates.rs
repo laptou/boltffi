@@ -1044,6 +1044,7 @@ mod tests {
                             },
                         ],
                     }),
+                    typed_async_err: None,
                 }),
             },
             params: vec![],

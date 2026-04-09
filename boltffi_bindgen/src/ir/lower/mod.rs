@@ -1587,7 +1587,10 @@ mod tests {
             abi.returns.transport,
             Some(Transport::Handle { nullable: true, .. })
         ));
-        assert!(matches!(abi.error, ErrorTransport::Encoded { .. }));
+        assert!(matches!(
+            abi.error,
+            ErrorTransport::DirectOkWithEncodedErr { .. }
+        ));
     }
 
     fn contract_with_closure(

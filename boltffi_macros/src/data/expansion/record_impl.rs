@@ -1,5 +1,5 @@
 use crate::exports::common::{
-    exported_methods, fallible_handle_export_body, impl_type_name, is_factory_constructor,
+    exported_methods, fallible_direct_ok_export_body, impl_type_name, is_factory_constructor,
     is_result_of_self_type_path,
 };
 
@@ -302,7 +302,7 @@ fn generate_record_instance_export(
     let self_input: syn::FnArg = syn::parse_quote!(#self_ident: #type_name);
     let all_inputs = std::iter::once(self_input).chain(method.sig.inputs.iter().skip(1).cloned());
     let FfiParams {
-        ffi_params: all_ffi_params,
+        ffi_params: mut all_ffi_params,
         conversions: mut all_conversions,
         call_args,
     } = transform_method_params(all_inputs, return_lowering, callback_registry, &on_error);
@@ -335,6 +335,7 @@ fn generate_record_instance_export(
         custom_types,
         method_name,
     )?;
+    append_fallible_direct_ok_carrier_params(&mut all_ffi_params, &return_abi);
 
     Some(emit_ffi_function(
         &export_name,
@@ -401,7 +402,7 @@ fn generate_record_static_export(
 
     let all_inputs = method.sig.inputs.iter().cloned();
     let FfiParams {
-        ffi_params,
+        mut ffi_params,
         conversions,
         call_args,
     } = transform_method_params(all_inputs, return_lowering, callback_registry, &on_error);
@@ -415,6 +416,7 @@ fn generate_record_static_export(
         custom_types,
         method_name,
     )?;
+    append_fallible_direct_ok_carrier_params(&mut ffi_params, &return_abi);
 
     Some(emit_ffi_function(
         &export_name,
@@ -510,6 +512,23 @@ fn generate_value_return_export(
     }
 }
 
+fn append_fallible_direct_ok_carrier_params(
+    ffi_params: &mut Vec<proc_macro2::TokenStream>,
+    return_abi: &ResolvedReturn,
+) {
+    if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+        && return_abi.fallible_ok_type().is_some()
+    {
+        let ok_ty = return_abi.fallible_ok_type().unwrap();
+        ffi_params.push(quote! { out_ok: *mut <#ok_ty as ::boltffi::__private::Passable>::Out });
+        ffi_params.push(quote! { err_out_ptr: *mut *mut u8 });
+        ffi_params.push(quote! { err_out_len: *mut usize });
+    }
+}
+
 fn build_return_arms(
     return_abi: &ResolvedReturn,
     call_expr: proc_macro2::TokenStream,
@@ -551,19 +570,19 @@ fn build_return_arms(
     ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
     {
         let full_ty = return_abi.rust_type();
-        let ok_ty = return_abi
+        let _ok_ty = return_abi
             .fallible_ok_type()
             .expect("fallible handle return must parse Result ok type");
         let result_ident = syn::Ident::new("result", method_name.span());
         let has_conversions = !conversions.is_empty();
-        let body = fallible_handle_export_body(
+        let body = fallible_direct_ok_export_body(
             call_expr,
             conversions,
             has_conversions,
             full_ty,
             &result_ident,
         );
-        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        let return_type = quote! { -> ::boltffi::__private::FfiStatus };
         Some((body, return_type, false))
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();

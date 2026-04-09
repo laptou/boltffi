@@ -3,6 +3,7 @@ use proc_macro2::Span;
 use quote::quote;
 use syn::Type;
 
+use crate::exports::common::wire_encode_err_to_err_out_buffers;
 use crate::index::custom_types::{self, CustomTypeRegistry};
 
 use super::classify::ReturnTypeDescriptor;
@@ -145,12 +146,31 @@ impl ResolvedReturn {
                     let _ = self
                         .fallible_ok_type()
                         .expect("fallible handle async return must parse Result ok type");
+                    let err_ident = syn::Ident::new("err", Span::call_site());
+                    let err_wire = wire_encode_err_to_err_out_buffers(&err_ident);
                     quote! {
-                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
                         match result {
-                            Ok(value) => ::boltffi::__private::Passable::pack(value),
-                            Err(err) => {
-                                ::boltffi::__private::set_last_error(format!("{err:?}"));
+                            Ok(value) => {
+                                if !out_status.is_null() {
+                                    *out_status = ::boltffi::__private::FfiStatus::OK;
+                                }
+                                if !err_out_ptr.is_null() {
+                                    unsafe {
+                                        *err_out_ptr = ::core::ptr::null_mut();
+                                    }
+                                }
+                                if !err_out_len.is_null() {
+                                    unsafe {
+                                        *err_out_len = 0;
+                                    }
+                                }
+                                ::boltffi::__private::Passable::pack(value)
+                            }
+                            Err(#err_ident) => {
+                                if !out_status.is_null() {
+                                    *out_status = ::boltffi::__private::FfiStatus { code: 1 };
+                                }
+                                #err_wire
                                 ::core::default::Default::default()
                             }
                         }

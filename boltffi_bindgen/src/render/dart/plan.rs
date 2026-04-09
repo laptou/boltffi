@@ -40,7 +40,9 @@ impl DartNativeType {
                 params: params.iter().map(Self::from_abi_type).collect(),
                 return_ty: Box::new(Self::from_abi_type(return_type)),
             },
-            AbiType::Handle(_) => DartNativeType::Pointer(Box::new(DartNativeType::Void)),
+            AbiType::Handle(_) | AbiType::PointerToHandle(_) => {
+                DartNativeType::Pointer(Box::new(DartNativeType::Void))
+            }
             AbiType::CallbackHandle => DartNativeType::Custom("BoltFFICallbackHandle".to_string()),
             AbiType::Struct(record_id) => {
                 DartNativeType::Custom(format!("___{}", record_id.as_str()))

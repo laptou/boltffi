@@ -294,6 +294,12 @@ pub enum ErrorTransport {
         decode_ops: ReadSeq,
         encode_ops: Option<WriteSeq>,
     },
+    /// ok value uses direct return/out storage (handle, scalar, composite, etc.);
+    /// failure carries a wire-encoded `Err` in a separate buffer (not `last_error` strings).
+    DirectOkWithEncodedErr {
+        decode_ops: ReadSeq,
+        encode_ops: Option<WriteSeq>,
+    },
 }
 
 impl ErrorTransport {
@@ -307,7 +313,18 @@ impl ErrorTransport {
         match self {
             Self::None => ErrorReturnStrategy::None,
             Self::StatusCode => ErrorReturnStrategy::StatusCode,
-            Self::Encoded { .. } => ErrorReturnStrategy::Encoded,
+            Self::Encoded { .. } | Self::DirectOkWithEncodedErr { .. } => {
+                ErrorReturnStrategy::Encoded
+            }
+        }
+    }
+
+    pub fn encoded_err_decode_ops(&self) -> Option<&ReadSeq> {
+        match self {
+            Self::Encoded { decode_ops, .. } | Self::DirectOkWithEncodedErr { decode_ops, .. } => {
+                Some(decode_ops)
+            }
+            _ => None,
         }
     }
 }

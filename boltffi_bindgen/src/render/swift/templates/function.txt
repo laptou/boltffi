@@ -10,6 +10,18 @@
 
 {%- if result.is_direct() || result.is_unit() %}
 {%- if result.is_direct() %}
+{%- if result.has_typed_async_err() %}
+    let rawResult = try await boltffiAsyncCallDirectWithErrOut(
+        futureHandle: futureHandle,
+        pollFn: {{ poll }},
+        completeFn: {{ complete }},
+        cancelFn: {{ cancel }},
+        freeFn: {{ free }},
+        decodeTypedErr: { ptr, len in
+            try boltffiDecodeOwnedBuf(ptr, len) { reader in {{ result.typed_async_err_throw_expr().unwrap() }} }
+        }
+    )
+{%- else %}
     let rawResult = try await boltffiAsyncCallDirect(
         futureHandle: futureHandle,
         pollFn: {{ poll }},
@@ -17,9 +29,22 @@
         cancelFn: {{ cancel }},
         freeFn: {{ free }}
     )
+{%- endif %}
 {%- if let Some(expr) = result.direct_return_expr("rawResult") %}
     return {{ expr }}
 {%- endif %}
+{%- else %}
+{%- if result.has_typed_async_err() %}
+    return try await boltffiAsyncCallDirectWithErrOut(
+        futureHandle: futureHandle,
+        pollFn: {{ poll }},
+        completeFn: {{ complete }},
+        cancelFn: {{ cancel }},
+        freeFn: {{ free }},
+        decodeTypedErr: { ptr, len in
+            try boltffiDecodeOwnedBuf(ptr, len) { reader in {{ result.typed_async_err_throw_expr().unwrap() }} }
+        }
+    )
 {%- else %}
     return try await boltffiAsyncCallDirect(
         futureHandle: futureHandle,
@@ -28,6 +53,7 @@
         cancelFn: {{ cancel }},
         freeFn: {{ free }}
     )
+{%- endif %}
 {%- endif %}
 {%- elif result.is_direct_buffer() %}
     return try await boltffiAsyncCall(
@@ -121,6 +147,24 @@
 {{ func.body_indent() }}let wire = WireBuffer(ptr: buf.ptr!, len: Int(buf.len))
 {{ func.body_indent() }}return {{ decode_expr }}
 {%- endif %}
+{%- elif func.returns.throws_direct_ok_carrier() %}
+    var outOk: OpaquePointer?
+    var errOutPtr: UnsafeMutablePointer<UInt8>?
+    var errLen: UInt = 0
+{{ func.body_indent() }}let status = {{ func.sync_call_expr() }}
+{{ func.body_indent() }}if status.code == 0 {
+{{ func.body_indent() }}    guard let h = outOk else { throw FfiError(message: "ffi call failed") }
+{{ func.body_indent() }}    return {{ func.returns.throws_ok_handle_class_name().unwrap() }}(handle: h)
+{{ func.body_indent() }}
+{{ func.body_indent() }}
+{{ func.body_indent() }}}
+{{ func.body_indent() }}if errLen > 0, let p = errOutPtr {
+{{ func.body_indent() }}    defer { free(UnsafeMutableRawPointer(p)) }
+{{ func.body_indent() }}    throw try boltffiDecodeOwnedBuf(UnsafePointer(p), Int(errLen)) { reader in {{ func.returns.throws_direct_err_throw_expr().unwrap() }} }
+{{ func.body_indent() }}
+{{ func.body_indent() }}
+{{ func.body_indent() }}}
+{{ func.body_indent() }}throw FfiError(message: "ffi call failed")
 {%- elif func.returns.is_throws() %}
 {{ func.body_indent() }}fatalError("throwing functions not yet implemented in IR backend")
 {%- elif let Some((class_name, nullable)) = func.returns.handle_info() %}

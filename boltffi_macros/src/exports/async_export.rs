@@ -1,5 +1,8 @@
+use proc_macro2::Span;
 use quote::quote;
+use syn::Ident;
 
+use crate::exports::common::wire_encode_err_to_err_out_buffers;
 use crate::index::custom_types;
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
 use crate::lowering::returns::model::{
@@ -23,6 +26,8 @@ pub(crate) struct AsyncRuntimeExports<'a> {
     pub(crate) ffi_return_type: proc_macro2::TokenStream,
     pub(crate) complete_conversion: proc_macro2::TokenStream,
     pub(crate) default_value: proc_macro2::TokenStream,
+    /// `complete` takes `err_out_ptr` / `err_out_len` for `Result<Handle, E>` async returns.
+    pub(crate) complete_err_carrier: bool,
 }
 
 pub(crate) struct AsyncWasmCompleteExport {
@@ -99,17 +104,39 @@ pub(crate) fn wasm_complete_export_for_async(
         let ok_ty = return_abi
             .fallible_ok_type()
             .expect("fallible handle async return must parse Result ok type");
+        let err_ident = Ident::new("err", Span::call_site());
+        let err_wire = wire_encode_err_to_err_out_buffers(&err_ident);
         AsyncWasmCompleteExport {
-            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            params: quote! {
+                handle: ::boltffi::__private::RustFutureHandle,
+                err_out_ptr: *mut *mut u8,
+                err_out_len: *mut usize,
+            },
             return_type: quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out },
             body: quote! {
                 match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                    Some(Ok(value)) => ::boltffi::__private::Passable::pack(value),
-                    Some(Err(err)) => {
-                        ::boltffi::__private::set_last_error(format!("{err:?}"));
+                    Some(Ok(value)) => {
+                        if !err_out_ptr.is_null() {
+                            unsafe { *err_out_ptr = ::core::ptr::null_mut(); }
+                        }
+                        if !err_out_len.is_null() {
+                            unsafe { *err_out_len = 0; }
+                        }
+                        ::boltffi::__private::Passable::pack(value)
+                    }
+                    Some(Err(#err_ident)) => {
+                        #err_wire
                         ::core::default::Default::default()
                     }
-                    None => ::core::default::Default::default(),
+                    None => {
+                        if !err_out_ptr.is_null() {
+                            unsafe { *err_out_ptr = ::core::ptr::null_mut(); }
+                        }
+                        if !err_out_len.is_null() {
+                            unsafe { *err_out_len = 0; }
+                        }
+                        ::core::default::Default::default()
+                    }
                 }
             },
         }
@@ -226,18 +253,41 @@ impl<'a> AsyncRuntimeExports<'a> {
         let ffi_return_type = &self.ffi_return_type;
         let complete_conversion = &self.complete_conversion;
         let default_value = &self.default_value;
+        let err_carrier_params = if self.complete_err_carrier {
+            quote! {
+                ,
+                err_out_ptr: *mut *mut u8,
+                err_out_len: *mut usize,
+            }
+        } else {
+            quote! {}
+        };
+        let none_clear_err = if self.complete_err_carrier {
+            quote! {
+                if !err_out_ptr.is_null() {
+                    unsafe { *err_out_ptr = ::core::ptr::null_mut(); }
+                }
+                if !err_out_len.is_null() {
+                    unsafe { *err_out_len = 0; }
+                }
+            }
+        } else {
+            quote! {}
+        };
 
         quote! {
             #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             #visibility unsafe extern "C" fn #complete_ident(
                 handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus,
+                out_status: *mut ::boltffi::__private::FfiStatus
+                #err_carrier_params
             ) -> #ffi_return_type {
                 match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
                     Some(result) => { #complete_conversion }
                     None => {
                         if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::CANCELLED; }
+                        #none_clear_err
                         #default_value
                     }
                 }
