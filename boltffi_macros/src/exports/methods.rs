@@ -323,6 +323,22 @@ impl<'a> StaticMethodExport<'a> {
         }
     }
 
+    fn render_async_entry(self, body: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        ExternExport {
+            visibility: self.visibility,
+            export_name: self.export_name,
+            safety: ExportSafety::Unsafe,
+            receiver: ReceiverParameter::None,
+            params: self.ffi_params,
+            allow_ptr_deref: false,
+            body: ExportBody {
+                return_type: quote! { -> ::boltffi::__private::RustFutureHandle },
+                body,
+            },
+        }
+        .render(ExportCondition::Always)
+    }
+
     fn render_dual_platform(
         self,
         safety: ExportSafety,
@@ -519,7 +535,15 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                         &callback_registry,
                     )
                 }
-                (CallableForm::StaticMethod, ExecutionKind::Async) => None,
+                (CallableForm::StaticMethod, ExecutionKind::Async) => {
+                    generate_async_static_method_export(
+                        callable,
+                        &type_name,
+                        &type_name_str,
+                        &return_lowering,
+                        &callback_registry,
+                    )
+                }
                 (CallableForm::Function, _) => None,
             }
         })
@@ -1346,6 +1370,206 @@ fn generate_async_method_export(
     };
     let entry_fn =
         InstanceMethodExport::new(&visibility, export_names.entry(), type_name, ffi_params)
+            .render_async_entry(entry_body);
+
+    let wasm_complete = if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::CompositeValue
+    ) {
+        AsyncWasmCompleteExport {
+            params: quote! {
+                out: *mut ::boltffi::__private::FfiBuf,
+                handle: ::boltffi::__private::RustFutureHandle,
+                _out_status: *mut ::boltffi::__private::FfiStatus
+            },
+            return_type: quote! {},
+            body: quote! {
+                if out.is_null() {
+                    return;
+                }
+                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::FfiBuf::from_vec(vec![result]),
+                    None => ::boltffi::__private::FfiBuf::empty(),
+                };
+                out.write(buf);
+            },
+        }
+    } else if return_abi.is_passable_value() {
+        let rust_type = return_abi.rust_type();
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::Passable::pack(result),
+                    None => Default::default(),
+                }
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle async return must parse Result ok type");
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(Ok(value)) => ::boltffi::__private::Passable::pack(value),
+                    Some(Err(err)) => {
+                        ::boltffi::__private::set_last_error(format!("{err:?}"));
+                        ::core::default::Default::default()
+                    }
+                    None => ::core::default::Default::default(),
+                }
+            },
+        }
+    } else if let Some(strategy) = return_abi.encoded_return_strategy() {
+        let rust_type = return_abi.rust_type();
+        let registry = custom_types::registry_for_current_crate().ok();
+        let result_ident = syn::Ident::new("result", proc_macro2::Span::call_site());
+        let encode_expression = if matches!(strategy, EncodedReturnStrategy::Utf8String) {
+            quote! { ::boltffi::__private::FfiBuf::wire_encode(&#result_ident) }
+        } else {
+            encoded_return_buffer_expression(rust_type, strategy, &result_ident, registry.as_ref())
+        };
+        AsyncWasmCompleteExport {
+            params: quote! {
+                out: *mut ::boltffi::__private::FfiBuf,
+                handle: ::boltffi::__private::RustFutureHandle,
+                _out_status: *mut ::boltffi::__private::FfiStatus
+            },
+            return_type: quote! {},
+            body: quote! {
+                if out.is_null() {
+                    return;
+                }
+                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(#result_ident) => { #encode_expression },
+                    None => ::boltffi::__private::FfiBuf::empty(),
+                };
+                out.write(buf);
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
+        let rust_type = return_abi.rust_type();
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::Passable::pack(result),
+                    None => ::core::default::Default::default(),
+                }
+            },
+        }
+    } else {
+        AsyncWasmCompleteExport {
+            params: quote! {
+                out: *mut ::boltffi::__private::FfiBuf,
+                handle: ::boltffi::__private::RustFutureHandle,
+                _out_status: *mut ::boltffi::__private::FfiStatus
+            },
+            return_type: quote! {},
+            body: quote! {
+                if out.is_null() {
+                    return;
+                }
+                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::FfiBuf::wire_encode(&result),
+                    None => ::boltffi::__private::FfiBuf::empty(),
+                };
+                out.write(buf);
+            },
+        }
+    };
+    let runtime_exports = AsyncRuntimeExports {
+        visibility: &visibility,
+        names: &export_names,
+        rust_return_type: quote! { #rust_return_type },
+        ffi_return_type: quote! { #ffi_return_type },
+        complete_conversion,
+        default_value,
+    }
+    .render(wasm_complete);
+
+    Some(quote! {
+        #entry_fn
+
+        #runtime_exports
+    })
+}
+
+fn generate_async_static_method_export(
+    callable: MethodCallable<'_>,
+    type_name: &syn::Ident,
+    class_name: &str,
+    return_lowering: &ReturnLoweringContext<'_>,
+    callback_registry: &CallbackTraitRegistry,
+) -> Option<proc_macro2::TokenStream> {
+    let method = callable.method();
+    let method_name = &method.sig.ident;
+    let method_name_str = method_name.to_string();
+
+    if matches!(method.sig.inputs.first(), Some(FnArg::Receiver(_))) {
+        return None;
+    }
+
+    let base_name = naming::method_ffi_name(class_name, &method_name_str);
+    let export_names = AsyncExportNames::new(base_name.as_str(), method_name.span());
+    let visibility: syn::Visibility = syn::parse_quote! { pub };
+
+    let other_inputs = method.sig.inputs.iter().cloned();
+    let on_wire_record_error = quote! { ::core::ptr::null() };
+    // unsupported shapes (e.g. trait-object callbacks) cannot be lowered for async ffi; skip export
+    let params = match transform_method_params_async(
+        other_inputs,
+        return_lowering,
+        callback_registry,
+        &on_wire_record_error,
+    ) {
+        Ok(params) => params,
+        Err(_) => return None,
+    };
+
+    let fn_output = &method.sig.output;
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(r) => r,
+        Err(e) => return Some(e.to_compile_error()),
+    };
+
+    let ffi_return_type = return_abi.async_ffi_return_type();
+    let rust_return_type = return_abi.async_rust_return_type();
+    let complete_conversion = return_abi.async_complete_conversion(return_lowering);
+    let default_value = return_abi.async_default_ffi_value();
+
+    let ffi_params = &params.ffi_params;
+    let pre_spawn = &params.pre_spawn;
+    let thread_setup = &params.thread_setup;
+    let call_args = &params.call_args;
+    let move_vars = &params.move_vars;
+
+    let future_body = quote! {
+        #(#thread_setup)*
+        #type_name::#method_name(#(#call_args),*).await
+    };
+
+    let entry_body = quote! {
+        #(#pre_spawn)*
+        #(let _ = &#move_vars;)*
+        ::boltffi::__private::rustfuture::rust_future_new(async move {
+            #future_body
+        })
+    };
+    let entry_fn =
+        StaticMethodExport::new(&visibility, export_names.entry(), ffi_params)
             .render_async_entry(entry_body);
 
     let wasm_complete = if matches!(
