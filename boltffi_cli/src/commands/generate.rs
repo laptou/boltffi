@@ -241,7 +241,11 @@ fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
     let swift_module = render::swift::SwiftLowerer::new(&contract, &abi_contract)
         .with_type_mappings(type_mappings)
-        .lower();
+        .lower()
+        .map_err(|e| CliError::CommandFailed {
+            command: format!("generate swift: {e}"),
+            status: None,
+        })?;
     let swift_code = render::swift::SwiftEmitter::with_prefix(boltffi_bindgen::ffi_prefix())
         .with_ffi_module(&ffi_module_name)
         .emit(&swift_module);

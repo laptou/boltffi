@@ -28,8 +28,8 @@ use crate::ir::abi::{
 use crate::ir::codec::CodecPlan;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    CallbackKind, CallbackMethodDef, ClassDef, ConstructorDef, DefaultValue, EnumRepr, MethodDef,
-    ParamDef, Receiver, ReturnDef, StreamDef, StreamMode,
+    CallbackKind, CallbackMethodDef, ClassDef, ConstructorDef, DefaultValue, EnumDef, EnumRepr,
+    MethodDef, ParamDef, Receiver, RecordDef, ReturnDef, StreamDef, StreamMode,
 };
 use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
 use crate::ir::ops::{
@@ -135,15 +135,15 @@ impl<'a> SwiftLowerer<'a> {
         self
     }
 
-    pub fn lower(self) -> SwiftModule {
+    pub fn lower(self) -> Result<SwiftModule, String> {
         let custom_types = self.lower_custom_types();
-        let records = self.lower_records();
-        let enums = self.lower_enums();
+        let records = self.lower_records()?;
+        let enums = self.lower_enums()?;
         let classes = self.lower_classes();
         let callbacks = self.lower_callbacks();
         let functions = self.lower_functions();
 
-        SwiftModule {
+        Ok(SwiftModule {
             imports: vec!["Foundation".to_string()],
             custom_types,
             records,
@@ -151,7 +151,7 @@ impl<'a> SwiftLowerer<'a> {
             classes,
             callbacks,
             functions,
-        }
+        })
     }
 
     fn resolve_swift_type(&self, type_expr: &TypeExpr) -> String {
@@ -288,85 +288,99 @@ impl<'a> SwiftLowerer<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl<'a> SwiftLowerer<'a> {
-    fn lower_records(&self) -> Vec<SwiftRecord> {
+    fn lower_records(&self) -> Result<Vec<SwiftRecord>, String> {
         self.contract
             .catalog
             .all_records()
-            .map(|def| {
-                let abi_record = self.abi_index.record(self.abi, &def.id);
-                let decode_fields = self.record_decode_fields(abi_record);
-                let encode_fields = self.record_encode_fields(abi_record);
-                let fields =
-                    def.fields
-                        .iter()
-                        .map(|field| {
-                            let swift_name = camel_case(field.name.as_str());
-                            let decode =
-                                decode_fields.get(&field.name).cloned().unwrap_or_else(|| {
-                                    ReadSeq {
-                                        size: SizeExpr::Fixed(0),
-                                        ops: vec![],
-                                        shape: WireShape::Value,
-                                    }
-                                });
-                            let encode =
-                                encode_fields.get(&field.name).cloned().unwrap_or_else(|| {
-                                    WriteSeq {
-                                        size: SizeExpr::Fixed(0),
-                                        ops: vec![],
-                                        shape: WireShape::Value,
-                                    }
-                                });
-                            let c_offset = if abi_record.is_blittable {
-                                decode_fields
-                                    .get(&field.name)
-                                    .and_then(|seq| self.record_field_offset(seq))
-                            } else {
-                                None
-                            };
-                            let native_conversion =
-                                self.native_conversion_for_type(&field.type_expr);
-                            SwiftField {
-                                swift_name,
-                                swift_type: self.swift_type(&field.type_expr),
-                                default_expr: field.default.as_ref().map(swift_default_literal),
-                                decode,
-                                encode,
-                                doc: field.doc.clone(),
-                                c_offset,
-                                native_conversion,
-                            }
-                        })
-                        .collect();
-
-                let constructors = def
-                    .constructor_calls()
-                    .filter_map(|(call_id, ctor)| {
-                        let call = self.resolve_abi_call(&call_id)?;
-                        Some(self.lower_value_type_constructor(ctor, call))
-                    })
-                    .collect();
-                let methods = def
-                    .method_calls()
-                    .filter(|(_, method)| !method.is_async())
-                    .filter_map(|(call_id, method)| {
-                        let call = self.resolve_abi_call(&call_id)?;
-                        Some(self.lower_value_type_method(method, call, &abi_record.encode_ops))
-                    })
-                    .collect();
-
-                SwiftRecord {
-                    class_name: self.swift_name_for_record(&def.id),
-                    fields,
-                    is_blittable: abi_record.is_blittable,
-                    is_error: def.is_error,
-                    blittable_size: abi_record.size,
-                    constructors,
-                    methods,
-                    doc: def.doc.clone(),
-                }
-            })
+            .map(|def| self.lower_record(def))
             .collect()
+    }
+
+    fn lower_record(&self, def: &RecordDef) -> Result<SwiftRecord, String> {
+        let abi_record = self.abi_index.record(self.abi, &def.id);
+        let decode_fields = self.record_decode_fields(abi_record);
+        let encode_fields = self.record_encode_fields(abi_record);
+        let mut fields = Vec::with_capacity(def.fields.len());
+        for field in &def.fields {
+            let swift_name = camel_case(field.name.as_str());
+            let decode = decode_fields.get(&field.name).cloned().ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing decode sequence for field `{}` in record `{}`",
+                    field.name.as_str(),
+                    def.id.as_str()
+                )
+            })?;
+            let encode = encode_fields.get(&field.name).cloned().ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing encode sequence for field `{}` in record `{}`",
+                    field.name.as_str(),
+                    def.id.as_str()
+                )
+            })?;
+            let c_offset = if abi_record.is_blittable {
+                decode_fields
+                    .get(&field.name)
+                    .and_then(|seq| self.record_field_offset(seq))
+            } else {
+                None
+            };
+            let native_conversion = self.native_conversion_for_type(&field.type_expr);
+            fields.push(SwiftField {
+                swift_name,
+                swift_type: self.swift_type(&field.type_expr),
+                default_expr: field.default.as_ref().map(swift_default_literal),
+                decode,
+                encode,
+                doc: field.doc.clone(),
+                c_offset,
+                native_conversion,
+            });
+        }
+
+        let mut constructors = Vec::new();
+        for (call_id, ctor) in def.constructor_calls() {
+            let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing abi call for constructor on record `{}`",
+                    def.id.as_str()
+                )
+            })?;
+            constructors.push(self.lower_value_type_constructor(ctor, call));
+        }
+
+        let mut methods = Vec::new();
+        for (call_id, method) in def.method_calls() {
+            if method.is_async() {
+                return Err(format!(
+                    "boltffi bindgen (swift): async methods on value types are not supported yet (method `{}` on record `{}`)",
+                    method.id.as_str(),
+                    def.id.as_str()
+                ));
+            }
+            let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing abi call for method `{}` on record `{}`",
+                    method.id.as_str(),
+                    def.id.as_str()
+                )
+            })?;
+            methods.push(self.lower_value_type_method(
+                method,
+                call,
+                &abi_record.encode_ops,
+            ));
+        }
+
+        Ok(SwiftRecord {
+            class_name: self.swift_name_for_record(&def.id),
+            fields,
+            is_blittable: abi_record.is_blittable,
+            is_error: def.is_error,
+            blittable_size: abi_record.size,
+            constructors,
+            methods,
+            doc: def.doc.clone(),
+        })
     }
 
     fn resolve_abi_call(&self, call_id: &CallId) -> Option<&AbiCall> {
@@ -575,63 +589,84 @@ impl<'a> SwiftLowerer<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl<'a> SwiftLowerer<'a> {
-    fn lower_enums(&self) -> Vec<SwiftEnum> {
+    fn lower_enums(&self) -> Result<Vec<SwiftEnum>, String> {
         self.contract
             .catalog
             .all_enums()
-            .map(|def| {
-                let abi_enum = self.abi_index.enumeration(self.abi, &def.id);
-                let variant_docs = def.variant_docs();
-                let variants = abi_enum
-                    .variants
-                    .iter()
-                    .enumerate()
-                    .map(|(i, variant)| SwiftVariant {
-                        swift_name: emit::escape_swift_keyword(
-                            &variant.name.as_str().to_lower_camel_case(),
-                        ),
-                        discriminant: variant.discriminant,
-                        payload: self.lower_variant_payload(variant),
-                        doc: variant_docs.get(i).cloned().flatten(),
-                    })
-                    .collect();
-
-                let style = if abi_enum.is_c_style {
-                    SwiftEnumStyle::CStyle
-                } else {
-                    SwiftEnumStyle::Data
-                };
-                let constructors = def
-                    .constructor_calls()
-                    .filter_map(|(call_id, ctor)| {
-                        let call = self.resolve_abi_call(&call_id)?;
-                        Some(self.lower_value_type_constructor(ctor, call))
-                    })
-                    .collect();
-                let methods = def
-                    .method_calls()
-                    .filter(|(_, method)| !method.is_async())
-                    .filter_map(|(call_id, method)| {
-                        let call = self.resolve_abi_call(&call_id)?;
-                        Some(self.lower_value_type_method(method, call, &abi_enum.encode_ops))
-                    })
-                    .collect();
-
-                SwiftEnum {
-                    name: self.swift_name_for_enum(&def.id),
-                    variants,
-                    style,
-                    c_style_tag_type: match &def.repr {
-                        EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
-                        _ => None,
-                    },
-                    is_error: def.is_error,
-                    constructors,
-                    methods,
-                    doc: def.doc.clone(),
-                }
-            })
+            .map(|def| self.lower_enum(def))
             .collect()
+    }
+
+    fn lower_enum(&self, def: &EnumDef) -> Result<SwiftEnum, String> {
+        let abi_enum = self.abi_index.enumeration(self.abi, &def.id);
+        let variant_docs = def.variant_docs();
+        let variants = abi_enum
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, variant)| SwiftVariant {
+                swift_name: emit::escape_swift_keyword(
+                    &variant.name.as_str().to_lower_camel_case(),
+                ),
+                discriminant: variant.discriminant,
+                payload: self.lower_variant_payload(variant),
+                doc: variant_docs.get(i).cloned().flatten(),
+            })
+            .collect();
+
+        let style = if abi_enum.is_c_style {
+            SwiftEnumStyle::CStyle
+        } else {
+            SwiftEnumStyle::Data
+        };
+
+        let mut constructors = Vec::new();
+        for (call_id, ctor) in def.constructor_calls() {
+            let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing abi call for constructor on enum `{}`",
+                    def.id.as_str()
+                )
+            })?;
+            constructors.push(self.lower_value_type_constructor(ctor, call));
+        }
+
+        let mut methods = Vec::new();
+        for (call_id, method) in def.method_calls() {
+            if method.is_async() {
+                return Err(format!(
+                    "boltffi bindgen (swift): async methods on value types are not supported yet (method `{}` on enum `{}`)",
+                    method.id.as_str(),
+                    def.id.as_str()
+                ));
+            }
+            let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
+                format!(
+                    "boltffi bindgen (swift): missing abi call for method `{}` on enum `{}`",
+                    method.id.as_str(),
+                    def.id.as_str()
+                )
+            })?;
+            methods.push(self.lower_value_type_method(
+                method,
+                call,
+                &abi_enum.encode_ops,
+            ));
+        }
+
+        Ok(SwiftEnum {
+            name: self.swift_name_for_enum(&def.id),
+            variants,
+            style,
+            c_style_tag_type: match &def.repr {
+                EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
+                _ => None,
+            },
+            is_error: def.is_error,
+            constructors,
+            methods,
+            doc: def.doc.clone(),
+        })
     }
 
     fn lower_variant_payload(&self, variant: &AbiEnumVariant) -> SwiftVariantPayload {
@@ -2484,7 +2519,7 @@ mod tests {
 
     fn lower_contract(contract: &FfiContract) -> SwiftModule {
         let abi = IrLowerer::new(contract).to_abi_contract();
-        SwiftLowerer::new(contract, &abi).lower()
+        SwiftLowerer::new(contract, &abi).lower().expect("lower")
     }
 
     #[test]
