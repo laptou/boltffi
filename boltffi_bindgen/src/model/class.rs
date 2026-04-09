@@ -1,6 +1,11 @@
+use boltffi_ffi_rules::callable::ExecutionKind;
 use serde::{Deserialize, Serialize};
 
 use super::method::Method;
+
+fn default_execution_kind() -> ExecutionKind {
+    ExecutionKind::Sync
+}
 use super::stream::StreamMethod;
 use super::types::Deprecation;
 
@@ -78,6 +83,8 @@ pub struct Constructor {
     pub is_fallible: bool,
     #[serde(default)]
     pub is_optional: bool,
+    #[serde(default = "default_execution_kind")]
+    pub execution_kind: ExecutionKind,
     pub inputs: Vec<ConstructorParam>,
     pub doc: Option<String>,
 }
@@ -88,9 +95,17 @@ impl Constructor {
             name: "new".to_string(),
             is_fallible: false,
             is_optional: false,
+            execution_kind: ExecutionKind::Sync,
             inputs: Vec::new(),
             doc: None,
         }
+    }
+
+    pub fn maybe_async(mut self, is_async: bool) -> Self {
+        if is_async {
+            self.execution_kind = ExecutionKind::Async;
+        }
+        self
     }
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {

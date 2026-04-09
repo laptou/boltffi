@@ -143,10 +143,28 @@ impl<'c> Lowerer<'c> {
         let plan = self.lower_constructor(class, ctor);
         let symbol = self.call_symbol(&plan);
         let params = self.abi_params_from_plan(&plan.params);
-        let (returns, error) = self.return_shape_and_error(match &plan.kind {
-            CallPlanKind::Sync { returns } => returns,
-            CallPlanKind::Async { .. } => panic!("constructors cannot be async"),
-        });
+        let (mode, returns, error) = match &plan.kind {
+            CallPlanKind::Sync { returns: ret } => {
+                let (r, e) = self.return_shape_and_error(ret);
+                (CallMode::Sync, r, e)
+            }
+            CallPlanKind::Async { async_plan } => {
+                let mode = CallMode::Async(Box::new(
+                    self.async_call_for_constructor(class, ctor, async_plan),
+                ));
+                let ret = ReturnShape {
+                    contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
+                        ScalarReturnStrategy::PrimitiveValue,
+                    )),
+                    transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
+                        PrimitiveType::USize,
+                    ))),
+                    decode_ops: None,
+                    encode_ops: None,
+                };
+                (mode, ret, ErrorTransport::None)
+            }
+        };
 
         AbiCall {
             id: CallId::Constructor {
@@ -154,7 +172,7 @@ impl<'c> Lowerer<'c> {
                 index,
             },
             symbol,
-            mode: CallMode::Sync,
+            mode,
             params,
             returns,
             error,
@@ -486,6 +504,24 @@ impl<'c> Lowerer<'c> {
             complete: naming::method_ffi_complete(class.id.as_str(), method.id.as_str()),
             cancel: naming::method_ffi_cancel(class.id.as_str(), method.id.as_str()),
             free: naming::method_ffi_free(class.id.as_str(), method.id.as_str()),
+            result: result.with_error_strategy(ErrorReturnStrategy::StatusCode),
+            error: ErrorTransport::StatusCode,
+        }
+    }
+
+    pub(super) fn async_call_for_constructor(
+        &self,
+        class: &ClassDef,
+        ctor: &ConstructorDef,
+        plan: &AsyncPlan,
+    ) -> AsyncCall {
+        let method_name = ctor.name().map(|n| n.as_str()).unwrap_or("new");
+        let (result, _) = self.return_shape_and_error(&plan.result);
+        AsyncCall {
+            poll: naming::method_ffi_poll(class.id.as_str(), method_name),
+            complete: naming::method_ffi_complete(class.id.as_str(), method_name),
+            cancel: naming::method_ffi_cancel(class.id.as_str(), method_name),
+            free: naming::method_ffi_free(class.id.as_str(), method_name),
             result: result.with_error_strategy(ErrorReturnStrategy::StatusCode),
             error: ErrorTransport::StatusCode,
         }

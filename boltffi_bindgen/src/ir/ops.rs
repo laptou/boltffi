@@ -8,6 +8,8 @@
 //! Backends walk these sequences and emit target-language code for each operation.
 //! They do not restructure or reinterpret the operations.
 
+use heck::ToLowerCamelCase;
+
 use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::{BuiltinId, CustomTypeId, EnumId, FieldName, RecordId};
 use crate::ir::types::{PrimitiveType, TypeExpr};
@@ -304,7 +306,7 @@ fn remap_root_in_size(size: &SizeExpr, new_root: &ValueExpr) -> SizeExpr {
         ),
         SizeExpr::OptionSize { value, inner } => SizeExpr::OptionSize {
             value: value.remap_root(new_root.clone()),
-            inner: inner.clone(),
+            inner: Box::new(remap_root_in_size(inner, new_root)),
         },
         SizeExpr::VecSize {
             value,
@@ -312,13 +314,13 @@ fn remap_root_in_size(size: &SizeExpr, new_root: &ValueExpr) -> SizeExpr {
             layout,
         } => SizeExpr::VecSize {
             value: value.remap_root(new_root.clone()),
-            inner: inner.clone(),
+            inner: Box::new(remap_root_in_size(inner, new_root)),
             layout: layout.clone(),
         },
         SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
             value: value.remap_root(new_root.clone()),
-            ok: ok.clone(),
-            err: err.clone(),
+            ok: Box::new(remap_root_in_size(ok, new_root)),
+            err: Box::new(remap_root_in_size(err, new_root)),
         },
     }
 }
@@ -337,7 +339,7 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
         },
         WriteOp::Option { value, some } => WriteOp::Option {
             value: value.remap_root(new_root.clone()),
-            some: some.clone(),
+            some: Box::new(remap_root_in_seq(some, new_root.clone())),
         },
         WriteOp::Vec {
             value,
@@ -347,7 +349,7 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
         } => WriteOp::Vec {
             value: value.remap_root(new_root.clone()),
             element_type: element_type.clone(),
-            element: element.clone(),
+            element: Box::new(remap_root_in_seq(element, new_root.clone())),
             layout: layout.clone(),
         },
         WriteOp::Record { id, value, fields } => WriteOp::Record {
@@ -369,8 +371,8 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
         },
         WriteOp::Result { value, ok, err } => WriteOp::Result {
             value: value.remap_root(new_root.clone()),
-            ok: ok.clone(),
-            err: err.clone(),
+            ok: Box::new(remap_root_in_seq(ok, new_root.clone())),
+            err: Box::new(remap_root_in_seq(err, new_root.clone())),
         },
         WriteOp::Builtin { id, value } => WriteOp::Builtin {
             id: id.clone(),
@@ -383,7 +385,138 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
         } => WriteOp::Custom {
             id: id.clone(),
             value: value.remap_root(new_root.clone()),
-            underlying: underlying.clone(),
+            underlying: Box::new(remap_root_in_seq(underlying, new_root.clone())),
+        },
+    }
+}
+
+/// rewrite `Field(Instance, f)` to `Var(fCamel)` and bare `Instance` to `Var("value")` so enum
+/// `encode(to:)` matches switch bindings instead of `self.*` / tuple field names from the record codec.
+pub fn remap_enum_encode_bindings_in_write_seq(seq: &WriteSeq) -> WriteSeq {
+    WriteSeq {
+        size: remap_enum_encode_bindings_in_size_expr(&seq.size),
+        ops: seq.ops.iter().map(remap_enum_encode_bindings_in_write_op).collect(),
+        shape: seq.shape,
+    }
+}
+
+fn remap_enum_encode_bindings_in_value_expr(expr: &ValueExpr) -> ValueExpr {
+    match expr {
+        ValueExpr::Field(parent, name) if matches!(**parent, ValueExpr::Instance) => {
+            ValueExpr::Var(name.as_str().to_lower_camel_case())
+        }
+        ValueExpr::Field(parent, name) => ValueExpr::Field(
+            Box::new(remap_enum_encode_bindings_in_value_expr(parent)),
+            name.clone(),
+        ),
+        ValueExpr::Instance => ValueExpr::Var("value".into()),
+        ValueExpr::Var(_) | ValueExpr::Named(_) => expr.clone(),
+    }
+}
+
+fn remap_enum_encode_bindings_in_size_expr(size: &SizeExpr) -> SizeExpr {
+    match size {
+        SizeExpr::Fixed(value) => SizeExpr::Fixed(*value),
+        SizeExpr::Runtime => SizeExpr::Runtime,
+        SizeExpr::StringLen(value) => SizeExpr::StringLen(remap_enum_encode_bindings_in_value_expr(value)),
+        SizeExpr::BytesLen(value) => SizeExpr::BytesLen(remap_enum_encode_bindings_in_value_expr(value)),
+        SizeExpr::ValueSize(value) => SizeExpr::ValueSize(remap_enum_encode_bindings_in_value_expr(value)),
+        SizeExpr::WireSize { value, owner } => SizeExpr::WireSize {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            owner: owner.clone(),
+        },
+        SizeExpr::BuiltinSize { id, value } => SizeExpr::BuiltinSize {
+            id: id.clone(),
+            value: remap_enum_encode_bindings_in_value_expr(value),
+        },
+        SizeExpr::Sum(parts) => SizeExpr::Sum(
+            parts
+                .iter()
+                .map(remap_enum_encode_bindings_in_size_expr)
+                .collect(),
+        ),
+        SizeExpr::OptionSize { value, inner } => SizeExpr::OptionSize {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            inner: Box::new(remap_enum_encode_bindings_in_size_expr(inner)),
+        },
+        SizeExpr::VecSize {
+            value,
+            inner,
+            layout,
+        } => SizeExpr::VecSize {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            inner: Box::new(remap_enum_encode_bindings_in_size_expr(inner)),
+            layout: layout.clone(),
+        },
+        SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            ok: Box::new(remap_enum_encode_bindings_in_size_expr(ok)),
+            err: Box::new(remap_enum_encode_bindings_in_size_expr(err)),
+        },
+    }
+}
+
+fn remap_enum_encode_bindings_in_write_op(op: &WriteOp) -> WriteOp {
+    match op {
+        WriteOp::Primitive { primitive, value } => WriteOp::Primitive {
+            primitive: *primitive,
+            value: remap_enum_encode_bindings_in_value_expr(value),
+        },
+        WriteOp::String { value } => WriteOp::String {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+        },
+        WriteOp::Bytes { value } => WriteOp::Bytes {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+        },
+        WriteOp::Option { value, some } => WriteOp::Option {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            some: Box::new(remap_enum_encode_bindings_in_write_seq(some)),
+        },
+        WriteOp::Vec {
+            value,
+            element_type,
+            element,
+            layout,
+        } => WriteOp::Vec {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            element_type: element_type.clone(),
+            element: Box::new(remap_enum_encode_bindings_in_write_seq(element)),
+            layout: layout.clone(),
+        },
+        WriteOp::Record { id, value, fields } => WriteOp::Record {
+            id: id.clone(),
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            fields: fields
+                .iter()
+                .map(|field| FieldWriteOp {
+                    name: field.name.clone(),
+                    accessor: remap_enum_encode_bindings_in_value_expr(&field.accessor),
+                    seq: remap_enum_encode_bindings_in_write_seq(&field.seq),
+                })
+                .collect(),
+        },
+        WriteOp::Enum { id, value, layout } => WriteOp::Enum {
+            id: id.clone(),
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            layout: layout.clone(),
+        },
+        WriteOp::Result { value, ok, err } => WriteOp::Result {
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            ok: Box::new(remap_enum_encode_bindings_in_write_seq(ok)),
+            err: Box::new(remap_enum_encode_bindings_in_write_seq(err)),
+        },
+        WriteOp::Builtin { id, value } => WriteOp::Builtin {
+            id: id.clone(),
+            value: remap_enum_encode_bindings_in_value_expr(value),
+        },
+        WriteOp::Custom {
+            id,
+            value,
+            underlying,
+        } => WriteOp::Custom {
+            id: id.clone(),
+            value: remap_enum_encode_bindings_in_value_expr(value),
+            underlying: Box::new(remap_enum_encode_bindings_in_write_seq(underlying)),
         },
     }
 }

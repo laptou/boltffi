@@ -260,6 +260,7 @@ pub enum ConstructorDef {
         params: Vec<ParamDef>,
         is_fallible: bool,
         is_optional: bool,
+        execution_kind: ExecutionKind,
         doc: Option<String>,
         deprecated: Option<DeprecationInfo>,
     },
@@ -267,6 +268,7 @@ pub enum ConstructorDef {
         name: MethodId,
         is_fallible: bool,
         is_optional: bool,
+        execution_kind: ExecutionKind,
         doc: Option<String>,
         deprecated: Option<DeprecationInfo>,
     },
@@ -276,6 +278,7 @@ pub enum ConstructorDef {
         rest_params: Vec<ParamDef>,
         is_fallible: bool,
         is_optional: bool,
+        execution_kind: ExecutionKind,
         doc: Option<String>,
         deprecated: Option<DeprecationInfo>,
     },
@@ -322,6 +325,14 @@ impl ConstructorDef {
             Self::Default { doc, .. }
             | Self::NamedFactory { doc, .. }
             | Self::NamedInit { doc, .. } => doc.as_deref(),
+        }
+    }
+
+    pub fn execution_kind(&self) -> ExecutionKind {
+        match self {
+            Self::Default { execution_kind, .. }
+            | Self::NamedFactory { execution_kind, .. }
+            | Self::NamedInit { execution_kind, .. } => *execution_kind,
         }
     }
 }

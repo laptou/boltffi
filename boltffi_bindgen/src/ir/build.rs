@@ -295,6 +295,7 @@ impl<'m> ContractBuilder<'m> {
                 params,
                 is_fallible: ctor.is_fallible,
                 is_optional: ctor.is_optional,
+                execution_kind: ctor.execution_kind,
                 doc: ctor.doc.clone(),
                 deprecated: None,
             }
@@ -303,6 +304,7 @@ impl<'m> ContractBuilder<'m> {
                 name: MethodId::new(&ctor.name),
                 is_fallible: ctor.is_fallible,
                 is_optional: ctor.is_optional,
+                execution_kind: ctor.execution_kind,
                 doc: ctor.doc.clone(),
                 deprecated: None,
             }
@@ -315,6 +317,7 @@ impl<'m> ContractBuilder<'m> {
                 rest_params: params_iter.collect(),
                 is_fallible: ctor.is_fallible,
                 is_optional: ctor.is_optional,
+                execution_kind: ctor.execution_kind,
                 doc: ctor.doc.clone(),
                 deprecated: None,
             }

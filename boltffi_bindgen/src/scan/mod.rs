@@ -1521,7 +1521,8 @@ impl SourceScanner {
                         .with_optional(is_optional),
                     |c, (name, ty)| c.with_param(ConstructorParam::new(&name, ty)),
                 )
-                .maybe_doc(extract_doc_string(&method.attrs)),
+                .maybe_doc(extract_doc_string(&method.attrs))
+                .maybe_async(sig.asyncness.is_some()),
         )
     }
 

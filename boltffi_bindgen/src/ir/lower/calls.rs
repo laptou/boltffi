@@ -87,6 +87,18 @@ impl<'c> Lowerer<'c> {
             .map(|param| self.lower_param(param))
             .collect();
 
+        let return_def = self.constructor_return_def(class, ctor);
+
+        if ctor.execution_kind() == ExecutionKind::Async {
+            return CallPlan {
+                target: CallTarget::GlobalSymbol(self.constructor_symbol(&class.id, ctor.name())),
+                params,
+                kind: CallPlanKind::Async {
+                    async_plan: self.build_async_plan(&return_def),
+                },
+            };
+        }
+
         let returns = if ctor.is_fallible() {
             ReturnPlan::Fallible {
                 ok: Transport::Handle {
@@ -106,6 +118,20 @@ impl<'c> Lowerer<'c> {
             target: CallTarget::GlobalSymbol(self.constructor_symbol(&class.id, ctor.name())),
             params,
             kind: CallPlanKind::Sync { returns },
+        }
+    }
+
+    /// return type for constructor lowering (async uses [`ReturnDef`] for async plan; sync uses [`ReturnPlan`]).
+    fn constructor_return_def(&self, class: &ClassDef, ctor: &ConstructorDef) -> ReturnDef {
+        if ctor.is_optional() {
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(class.id.clone()))))
+        } else if ctor.is_fallible() {
+            ReturnDef::Result {
+                ok: TypeExpr::Handle(class.id.clone()),
+                err: TypeExpr::String,
+            }
+        } else {
+            ReturnDef::Value(TypeExpr::Handle(class.id.clone()))
         }
     }
 
