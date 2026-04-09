@@ -411,7 +411,7 @@ impl<'a> SwiftLowerer<'a> {
                 ..
             } => SwiftConstructor::Factory {
                 name: camel_case(name.as_str()),
-                ffi_symbol: call.symbol.as_str().to_string(),
+                mode: sync_mode.clone(),
                 is_fallible: *is_fallible,
                 is_optional: *is_optional,
                 throw_decode_expr: throw_decode_expr.clone(),
@@ -757,7 +757,7 @@ impl<'a> SwiftLowerer<'a> {
                                 ..
                             } => SwiftConstructor::Factory {
                                 name: camel_case(name.as_str()),
-                                ffi_symbol: call.symbol.as_str().to_string(),
+                                mode: mode.clone(),
                                 is_fallible: *is_fallible,
                                 is_optional: *is_optional,
                                 throw_decode_expr: throw_decode_expr.clone(),

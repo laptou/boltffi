@@ -285,10 +285,13 @@ pub struct SwiftNativeMapping {
 impl SwiftModule {
     pub fn has_async(&self) -> bool {
         self.functions.iter().any(|f| f.mode.is_async())
-            || self
-                .classes
-                .iter()
-                .any(|c| c.methods.iter().any(|m| m.mode.is_async()))
+            || self.classes.iter().any(|c| {
+                c.methods.iter().any(|m| m.mode.is_async())
+                    || c
+                        .constructors
+                        .iter()
+                        .any(|ctor| ctor.is_async_constructor())
+            })
     }
 
     pub fn has_streams(&self) -> bool {
@@ -619,7 +622,7 @@ pub enum SwiftConstructor {
     },
     Factory {
         name: String,
-        ffi_symbol: String,
+        mode: SwiftCallMode,
         is_fallible: bool,
         is_optional: bool,
         throw_decode_expr: Option<String>,
@@ -651,18 +654,20 @@ impl SwiftConstructor {
 
     pub fn ffi_symbol(&self) -> &str {
         match self {
-            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => match mode {
+            Self::Designated { mode, .. }
+            | Self::Convenience { mode, .. }
+            | Self::Factory { mode, .. } => match mode {
                 SwiftCallMode::Sync { symbol } => symbol,
                 SwiftCallMode::Async { start, .. } => start,
             },
-            Self::Factory { ffi_symbol, .. } => ffi_symbol,
         }
     }
 
     pub fn constructor_mode(&self) -> Option<&SwiftCallMode> {
         match self {
-            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => Some(mode),
-            Self::Factory { .. } => None,
+            Self::Designated { mode, .. } | Self::Convenience { mode, .. } | Self::Factory { mode, .. } => {
+                Some(mode)
+            }
         }
     }
 
@@ -672,12 +677,11 @@ impl SwiftConstructor {
 
     /// only valid when [`Self::is_async_constructor`] is true; used by askama templates.
     pub fn expect_async_mode(&self) -> &SwiftCallMode {
-        match self {
-            Self::Designated { mode, .. } | Self::Convenience { mode, .. } => match mode {
-                m @ SwiftCallMode::Async { .. } => m,
-                SwiftCallMode::Sync { .. } => panic!("expect_async_mode on sync constructor"),
-            },
-            Self::Factory { .. } => panic!("expect_async_mode on factory constructor"),
+        match self.constructor_mode() {
+            Some(m @ SwiftCallMode::Async { .. }) => m,
+            Some(SwiftCallMode::Sync { .. }) | None => {
+                panic!("expect_async_mode on sync constructor")
+            }
         }
     }
 
@@ -755,7 +759,10 @@ impl SwiftConstructor {
                     SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], params),
                 }
             }
-            Self::Factory { ffi_symbol, .. } => ffi_call_expr(ffi_symbol, &[], &[]),
+            Self::Factory { mode, .. } => match mode {
+                SwiftCallMode::Sync { symbol } => ffi_call_expr(symbol, &[], &[]),
+                SwiftCallMode::Async { start, .. } => ffi_call_expr(start, &[], &[]),
+            },
         }
     }
 

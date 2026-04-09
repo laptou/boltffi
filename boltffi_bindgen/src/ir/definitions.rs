@@ -335,6 +335,10 @@ impl ConstructorDef {
             | Self::NamedInit { execution_kind, .. } => *execution_kind,
         }
     }
+
+    pub fn is_async(&self) -> bool {
+        self.execution_kind() == ExecutionKind::Async
+    }
 }
 
 #[derive(Debug, Clone)]

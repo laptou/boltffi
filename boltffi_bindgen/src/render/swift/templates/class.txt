@@ -72,8 +72,43 @@
     }
 {%- else if ctor.is_factory() %}
 
-{{ self::swift_doc_block(ctor.doc(), "    ") }}    public static func {{ ctor.name().unwrap() }}(){% if ctor.is_fallible() %} throws{% endif %} -> {{ cls.name }}{% if ctor.is_optional() %}?{% endif %} {
-{%- if ctor.is_optional() %}
+{{ self::swift_doc_block(ctor.doc(), "    ") }}    public static func {{ ctor.name().unwrap() }}(){% if ctor.is_async_constructor() %} async throws{% elif ctor.is_fallible() %} throws{% endif %} -> {{ cls.name }}{% if ctor.is_optional() %}?{% endif %} {
+{%- if ctor.is_async_constructor() %}
+{%- match ctor.expect_async_mode() %}
+{%- when SwiftCallMode::Async { start, poll, complete, cancel, free, result } %}
+        let futureHandle = {{ ctor.call_expr() }}
+{%- if result.is_direct() || result.is_unit() %}
+        let rawResult = try await boltffiAsyncCallDirect(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        )
+        return {{ cls.name }}(handle: rawResult)
+{%- else %}
+        let ptr: OpaquePointer = try await boltffiAsyncCall(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        ) { buf, status in
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+{%- if result.throws() %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- else %}
+            defer { {{ prefix }}_free_buf(buf) }
+            return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
+{%- endif %}
+        }
+        return {{ cls.name }}(handle: ptr)
+{%- endif %}
+{%- when SwiftCallMode::Sync { .. } %}
+        fatalError("internal: sync factory matched async template")
+{%- endmatch %}
+{%- elif ctor.is_optional() %}
         guard let ptr = {{ ctor.ffi_symbol() }}() else {
             return nil
         }
@@ -84,7 +119,9 @@
 {%- else %}
         let ptr = {{ ctor.ffi_symbol() }}()!
 {%- endif %}
+{%- if !ctor.is_async_constructor() %}
         return {{ cls.name }}(handle: ptr)
+{%- endif %}
     }
 {%- else if ctor.is_convenience() %}
 

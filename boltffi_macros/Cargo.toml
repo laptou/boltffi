@@ -13,7 +13,7 @@ categories = ["development-tools::ffi", "development-tools::procedural-macro-hel
 proc-macro = true
 
 [dependencies]
-syn = { version = "2", features = ["full", "parsing", "printing", "visit"] }
+syn = { version = "2", features = ["full", "parsing", "printing", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
 boltffi_ffi_rules = { version = "0.23.0", path = "../boltffi_ffi_rules" }

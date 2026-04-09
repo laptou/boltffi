@@ -3,6 +3,7 @@ pub use boltffi_ffi_rules::transport::{
     ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy, ValueReturnMethod,
     ValueReturnStrategy,
 };
+use syn::visit_mut::{self, VisitMut};
 use syn::{ReturnType, Type};
 
 use crate::index::callback_traits::CallbackTraitRegistry;
@@ -207,6 +208,40 @@ impl<'a> ReturnLoweringContext<'a> {
                 ErrorReturnStrategy::None,
             ),
         ))
+    }
+}
+
+/// replace `Self` in a type tree with the concrete impl type so lowered exports can use the type
+/// outside the `impl` block (e.g. `rust_future_poll::<Result<T, E>>`).
+pub fn replace_self_in_type(ty: &Type, concrete: &syn::Ident) -> Type {
+    let mut ty = ty.clone();
+    ReplaceSelfWithType { concrete }.visit_type_mut(&mut ty);
+    ty
+}
+
+pub fn normalize_return_type_for_self(output: &ReturnType, concrete: &syn::Ident) -> ReturnType {
+    match output {
+        ReturnType::Default => ReturnType::Default,
+        ReturnType::Type(arrow, ty) => {
+            ReturnType::Type(*arrow, Box::new(replace_self_in_type(ty.as_ref(), concrete)))
+        }
+    }
+}
+
+struct ReplaceSelfWithType<'a> {
+    concrete: &'a syn::Ident,
+}
+
+impl VisitMut for ReplaceSelfWithType<'_> {
+    fn visit_type_path_mut(&mut self, i: &mut syn::TypePath) {
+        if i.qself.is_none() && i.path.is_ident("Self") {
+            *i = syn::TypePath {
+                qself: None,
+                path: syn::Path::from(self.concrete.clone()),
+            };
+        } else {
+            visit_mut::visit_type_path_mut(self, i);
+        }
     }
 }
 

@@ -243,9 +243,7 @@ impl<'a> AsyncParamLowerer<'a> {
             ParamTransform::BoxedDynTrait(_)
             | ParamTransform::ArcDynTrait(_)
             | ParamTransform::OptionBoxedDynTrait(_)
-            | ParamTransform::OptionArcDynTrait(_) => Some(
-                "boltffi: async exports do not support trait object callback parameters (`Box<dyn Trait>`, `Arc<dyn Trait>`, `Option<Box<dyn Trait>>`, `Option<Arc<dyn Trait>>`) yet",
-            ),
+            | ParamTransform::OptionArcDynTrait(_) => None,
             ParamTransform::StrRef
             | ParamTransform::OwnedString
             | ParamTransform::SliceRef(_)
@@ -284,12 +282,39 @@ impl<'a> AsyncParamLowerer<'a> {
                         ParamTransform::ImplTrait(trait_path) => self
                             .callback_param_lowerer
                             .lower_impl_trait_param(&mut acc, &name, &trait_path),
-                        ParamTransform::Callback { .. }
-                        | ParamTransform::BoxedDynTrait(_)
-                        | ParamTransform::ArcDynTrait(_)
-                        | ParamTransform::OptionBoxedDynTrait(_)
-                        | ParamTransform::OptionArcDynTrait(_)
-                        | ParamTransform::SliceMut(_) => {
+                        ParamTransform::BoxedDynTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::Boxed,
+                            ),
+                        ParamTransform::ArcDynTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::Arc,
+                            ),
+                        ParamTransform::OptionBoxedDynTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::OptionBoxed,
+                            ),
+                        ParamTransform::OptionArcDynTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::OptionArc,
+                            ),
+                        ParamTransform::Callback { .. } | ParamTransform::SliceMut(_) => {
                             unreachable!(
                                 "unsupported async params must be rejected during validation"
                             );
@@ -390,6 +415,7 @@ pub fn transform_method_params_async(
 
 #[cfg(test)]
 mod tests {
+    use super::transform_params_async;
     use super::AsyncParamLowerer;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
@@ -447,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_async_trait_object_params() {
+    fn async_trait_object_callback_params_transform() {
         let function: syn::ItemFn = parse_quote! {
             async fn demo(
                 boxed: Box<dyn ExampleTrait>,
@@ -456,14 +482,28 @@ mod tests {
             ) {}
         };
 
-        let error = async_param_lowerer()
-            .validate_inputs(&function.sig.inputs)
-            .expect_err("expected rejection");
-        assert!(
-            error
-                .to_string()
-                .contains("do not support trait object callback parameters")
-        );
+        let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let exported_classes = Box::leak(Box::new(
+            crate::index::exported_classes::ExportedClassRegistry::default(),
+        ));
+        let callback_registry = Box::leak(Box::new(CallbackTraitRegistry::default()));
+        let return_lowering = Box::leak(Box::new(ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_registry,
+        )));
+        let on_wire_record_error = Box::leak(Box::new(proc_macro2::TokenStream::new()));
+
+        let params = transform_params_async(
+            &function.sig.inputs,
+            return_lowering,
+            callback_registry,
+            on_wire_record_error,
+        )
+        .expect("async trait-object callback params should lower");
+        assert_eq!(params.ffi_params.len(), 3);
     }
 
     #[test]

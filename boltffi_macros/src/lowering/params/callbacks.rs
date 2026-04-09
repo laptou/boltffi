@@ -794,4 +794,64 @@ impl<'a> AsyncCallbackParamLowerer<'a> {
         acc.move_vars.push(boxed_name.clone());
         acc.call_args.push(quote! { *#boxed_name });
     }
+
+    /// mirrors sync trait-object bridging so async futures can take `Arc<dyn Trait>` etc.
+    pub(super) fn lower_trait_object_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        trait_path: &syn::Path,
+        kind: TraitObjectParamKind,
+    ) {
+        acc.ffi_params.push(quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            #name: ::boltffi::__private::CallbackHandle,
+            #[cfg(target_arch = "wasm32")]
+            #name: u32
+        });
+        let setup = match kind {
+            TraitObjectParamKind::Boxed => quote! {
+                #[cfg(not(target_arch = "wasm32"))]
+                assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                #[cfg(target_arch = "wasm32")]
+                let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
+                let #name: Box<dyn #trait_path> = unsafe {
+                    <dyn #trait_path as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#name)
+                };
+            },
+            TraitObjectParamKind::Arc => quote! {
+                #[cfg(not(target_arch = "wasm32"))]
+                assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                #[cfg(target_arch = "wasm32")]
+                let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
+                let #name: ::std::sync::Arc<dyn #trait_path> = unsafe {
+                    <dyn #trait_path as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#name)
+                };
+            },
+            TraitObjectParamKind::OptionBoxed => quote! {
+                #[cfg(target_arch = "wasm32")]
+                let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
+                let #name: Option<Box<dyn #trait_path>> = if #name.is_null() {
+                    None
+                } else {
+                    Some(unsafe {
+                        <dyn #trait_path as ::boltffi::__private::BoxFromCallbackHandle>::box_from_callback_handle(#name)
+                    })
+                };
+            },
+            TraitObjectParamKind::OptionArc => quote! {
+                #[cfg(target_arch = "wasm32")]
+                let #name = ::boltffi::__private::CallbackHandle::from_wasm_handle(#name);
+                let #name: Option<::std::sync::Arc<dyn #trait_path>> = if #name.is_null() {
+                    None
+                } else {
+                    Some(unsafe {
+                        <dyn #trait_path as ::boltffi::__private::ArcFromCallbackHandle>::arc_from_callback_handle(#name)
+                    })
+                };
+            },
+        };
+        acc.setup.push(setup);
+        acc.call_args.push(quote! { #name });
+    }
 }

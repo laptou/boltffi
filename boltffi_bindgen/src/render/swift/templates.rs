@@ -1155,7 +1155,9 @@ mod tests {
                 },
                 SwiftConstructor::Factory {
                     name: "withDefaults".to_string(),
-                    ffi_symbol: "boltffi_data_store_with_defaults".to_string(),
+                    mode: SwiftCallMode::Sync {
+                        symbol: "boltffi_data_store_with_defaults".to_string(),
+                    },
                     is_fallible: false,
                     is_optional: false,
                     throw_decode_expr: None,
