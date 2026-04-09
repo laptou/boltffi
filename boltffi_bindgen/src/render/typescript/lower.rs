@@ -2343,6 +2343,26 @@ mod tests {
         }
     }
 
+    fn error_enum(name: &str) -> EnumDef {
+        EnumDef {
+            id: EnumId::new(name),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::U8,
+                variants: vec![DataVariant {
+                    name: VariantName::new("Failure"),
+                    discriminant: 0,
+                    payload: VariantPayload::Unit,
+                    doc: None,
+                }],
+            },
+            is_error: true,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
     fn lower_contract_result(contract: &FfiContract) -> Result<TsModule, TypeScriptLowerError> {
         let abi = IrLowerer::new(contract).to_abi_contract();
         TypeScriptLowerer::new(
@@ -3618,6 +3638,50 @@ mod tests {
             }
             _ => panic!("expected sync method"),
         }
+    }
+
+    #[test]
+    fn class_result_method_handle_ok_keeps_handle_return_and_error_exception() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("TransferError"));
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Receiver"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("receive"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Handle(ClassId::new("Transfer")),
+                    err: TypeExpr::Enum(EnumId::new("TransferError")),
+                },
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Receiver")
+            .expect("Receiver class");
+        let method = class
+            .methods
+            .iter()
+            .find(|m| m.ts_name == "receive")
+            .expect("receive method");
+        let handle = method
+            .return_handle
+            .as_ref()
+            .expect("handle return for Result<class, E>");
+        assert_eq!(handle.class_name, "Transfer");
+        assert!(handle.nullable);
     }
 
     #[test]

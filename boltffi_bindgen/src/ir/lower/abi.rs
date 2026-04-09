@@ -1067,3 +1067,54 @@ impl<'c> Lowerer<'c> {
         }
     }
 }
+
+#[cfg(test)]
+mod return_shape_tests {
+    use super::*;
+    use crate::ir::abi::ErrorTransport;
+    use crate::ir::codec::CodecPlan;
+    use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
+    use crate::ir::ids::ClassId;
+    use crate::ir::plan::{ReturnPlan, Transport};
+    use boltffi_ffi_rules::transport::{ErrorReturnStrategy, ValueReturnStrategy};
+
+    fn empty_contract() -> FfiContract {
+        FfiContract {
+            package: PackageInfo {
+                name: "test".into(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        }
+    }
+
+    #[test]
+    fn fallible_handle_return_shape_uses_object_handle_and_encoded_error() {
+        let contract = empty_contract();
+        let lowerer = Lowerer::new(&contract);
+        let plan = ReturnPlan::Fallible {
+            ok: Transport::Handle {
+                class_id: ClassId::new("Transfer"),
+                nullable: false,
+            },
+            err_codec: CodecPlan::Void,
+        };
+        let (shape, err_transport) = lowerer.return_shape_and_error(&plan);
+        assert_eq!(
+            shape.value_return_strategy(),
+            ValueReturnStrategy::ObjectHandle
+        );
+        assert_eq!(
+            shape.error_return_strategy(),
+            ErrorReturnStrategy::Encoded
+        );
+        assert!(shape.encode_ops.is_none());
+        assert!(shape.decode_ops.is_none());
+        assert!(matches!(
+            &shape.transport,
+            Some(Transport::Handle { nullable: true, .. })
+        ));
+        assert!(matches!(err_transport, ErrorTransport::Encoded { .. }));
+    }
+}

@@ -313,7 +313,7 @@ impl<'a> CallbackBindingBuilder<'a> {
 
         let return_abi = returns.map(|return_type| {
             self.return_lowering
-                .lower_type(return_type)
+                .lower_return_type(return_type)
                 .expect("boltffi: failed to classify closure callback return")
         });
         let wasm_return_method = return_abi.as_ref().map(|return_abi| {
@@ -539,7 +539,7 @@ impl<'a> SyncCallbackParamLowerer<'a> {
         let closure_return_abi = returns.as_ref().map(|return_type| {
             self.builder
                 .return_lowering
-                .lower_type(return_type)
+                .lower_return_type(return_type)
                 .expect("boltffi: failed to classify native closure callback return")
         });
         let closure_return_method = closure_return_abi.as_ref().map(|return_abi| {

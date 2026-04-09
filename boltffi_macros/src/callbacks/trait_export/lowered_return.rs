@@ -13,7 +13,7 @@ pub(super) struct LoweredCallbackReturn {
 impl LoweredCallbackReturn {
     pub(super) fn new(ty: &Type, return_lowering: &ReturnLoweringContext<'_>) -> syn::Result<Self> {
         Ok(Self {
-            resolved_return: return_lowering.lower_type(ty)?,
+            resolved_return: return_lowering.lower_return_type(ty)?,
         })
     }
 

@@ -1,8 +1,10 @@
 use crate::exports::common::{
-    exported_methods, impl_type_name, is_factory_constructor, is_result_of_self_type_path,
+    exported_methods, fallible_handle_export_body, impl_type_name, is_factory_constructor,
+    is_result_of_self_type_path,
 };
 
 use boltffi_ffi_rules::naming;
+use boltffi_ffi_rules::transport::ErrorReturnStrategy;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{FnArg, ReturnType, Type};
@@ -12,7 +14,9 @@ use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types;
 use crate::lowering::params::{FfiParams, transform_method_params};
 use crate::lowering::returns::lower::encoded_return_body;
-use crate::lowering::returns::model::{ResolvedReturn, ReturnLoweringContext};
+use crate::lowering::returns::model::{
+    ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy,
+};
 
 enum RecordMethodKind {
     Constructor,
@@ -541,6 +545,26 @@ fn build_return_arms(
             call_expr
         };
         Some((body, fn_output, false))
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let full_ty = return_abi.rust_type();
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle return must parse Result ok type");
+        let result_ident = syn::Ident::new("result", method_name.span());
+        let has_conversions = !conversions.is_empty();
+        let body = fallible_handle_export_body(
+            call_expr,
+            conversions,
+            has_conversions,
+            full_ty,
+            &result_ident,
+        );
+        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        Some((body, return_type, false))
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
         let result_ident = syn::Ident::new("result", method_name.span());
@@ -554,6 +578,23 @@ fn build_return_arms(
         );
         Some((body, quote! { -> ::boltffi::__private::FfiBuf }, true))
     } else if return_abi.is_passable_value() {
+        let rust_type = return_abi.rust_type();
+        let body = if has_conversions {
+            quote! {
+                #(#conversions)*
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        } else {
+            quote! {
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        };
+        let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
+        Some((body, return_type, false))
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
         let rust_type = return_abi.rust_type();
         let body = if has_conversions {
             quote! {

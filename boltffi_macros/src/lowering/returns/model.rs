@@ -9,9 +9,9 @@ use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::data_types::DataTypeRegistry;
 use crate::index::exported_classes::ExportedClassRegistry;
-use crate::lowering::transport::NamedTypeTransportClassifier;
+use crate::lowering::transport::{NamedTypeTransportClassifier, StandardContainer, TypeDescriptor};
 
-use super::classify::classify_value_return_strategy;
+use super::classify::{ReturnTypeDescriptor, classify_value_return_strategy};
 
 #[derive(Clone)]
 pub struct ResolvedReturn {
@@ -80,6 +80,21 @@ impl ResolvedReturn {
         self.return_contract
             .direct_buffer_return_method(context, platform)
     }
+
+    pub fn error_strategy(&self) -> ErrorReturnStrategy {
+        self.return_contract.error_strategy()
+    }
+
+    /// For `Result<OkT, ErrT>` lowered as a fallible handle return, the success value type.
+    pub fn fallible_ok_type(&self) -> Option<Type> {
+        if self.error_strategy() != ErrorReturnStrategy::Encoded {
+            return None;
+        }
+        match TypeDescriptor::new(self.rust_type()).standard_container() {
+            Some(StandardContainer::Result { ok, .. }) => Some(ok.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,10 +150,55 @@ impl<'a> ReturnLoweringContext<'a> {
                 syn::parse_quote!(()),
                 ReturnContract::infallible(ValueReturnStrategy::Void),
             )),
-            ReturnType::Type(_, rust_type) => self.lower_type(rust_type),
+            ReturnType::Type(_, rust_type) => self.lower_return_type(rust_type),
         }
     }
 
+    /// Return-type classification (exports, callback returns). Handles `Result` + handle `Ok` specially.
+    pub fn lower_return_type(&self, rust_type: &Type) -> syn::Result<ResolvedReturn> {
+        if let Some(StandardContainer::Result { ok, err }) =
+            TypeDescriptor::new(rust_type).standard_container()
+        {
+            if ReturnTypeDescriptor::parse(ok).is_primitive()
+                && ReturnTypeDescriptor::parse(err).is_primitive()
+            {
+                return Ok(ResolvedReturn::new(
+                    rust_type.clone(),
+                    ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                        EncodedReturnStrategy::ResultScalar,
+                    )),
+                ));
+            }
+
+            let ok_strategy = classify_value_return_strategy(ok, self)?;
+            if matches!(
+                ok_strategy,
+                ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+            ) {
+                return Ok(ResolvedReturn::new(
+                    rust_type.clone(),
+                    ReturnContract::new(ok_strategy, ErrorReturnStrategy::Encoded),
+                ));
+            }
+
+            return Ok(ResolvedReturn::new(
+                rust_type.clone(),
+                ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                )),
+            ));
+        }
+
+        Ok(ResolvedReturn::new(
+            rust_type.clone(),
+            ReturnContract::new(
+                classify_value_return_strategy(rust_type, self)?,
+                ErrorReturnStrategy::None,
+            ),
+        ))
+    }
+
+    /// Params and non-return contexts: keep wire `Result` classification from [`classify_value_return_strategy`].
     pub fn lower_type(&self, rust_type: &Type) -> syn::Result<ResolvedReturn> {
         Ok(ResolvedReturn::new(
             rust_type.clone(),

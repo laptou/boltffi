@@ -7,8 +7,8 @@ pub(crate) mod model;
 mod tests {
     use super::model::{ResolvedReturn, WasmOptionScalarEncoding};
     use boltffi_ffi_rules::transport::{
-        EncodedReturnStrategy, ReturnContract, ReturnInvocationContext, ReturnPlatform,
-        ValueReturnMethod, ValueReturnStrategy,
+        EncodedReturnStrategy, ErrorReturnStrategy, ReturnContract, ReturnInvocationContext,
+        ReturnPlatform, ValueReturnMethod, ValueReturnStrategy,
     };
     use syn::parse_quote;
 
@@ -70,5 +70,34 @@ mod tests {
                 .to_string(),
             "return ;"
         );
+    }
+
+    #[test]
+    fn fallible_handle_return_contract_pairs_object_handle_with_encoded_error() {
+        let resolved_return = ResolvedReturn::new(
+            parse_quote!(Result<Transfer, TransferError>),
+            ReturnContract::new(
+                ValueReturnStrategy::ObjectHandle,
+                ErrorReturnStrategy::Encoded,
+            ),
+        );
+
+        assert_eq!(
+            resolved_return.error_strategy(),
+            ErrorReturnStrategy::Encoded
+        );
+        assert!(matches!(
+            resolved_return.value_return_strategy(),
+            ValueReturnStrategy::ObjectHandle
+        ));
+        let ok = resolved_return
+            .fallible_ok_type()
+            .expect("fallible ok type");
+        assert!(::quote::quote!(#ok).to_string().contains("Transfer"));
+
+        let stmt = resolved_return
+            .invalid_arg_early_return_statement()
+            .to_string();
+        assert!(stmt.contains("Default :: default ()"));
     }
 }

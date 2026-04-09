@@ -315,7 +315,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         return_type: &syn::Type,
         invoke_expression: &TokenStream,
     ) -> Result<(Vec<TokenStream>, TokenStream), syn::Error> {
-        let resolved_return = self.return_lowering.lower_type(return_type)?;
+        let resolved_return = self.return_lowering.lower_return_type(return_type)?;
         let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
         let uses_wire_payload = matches!(
             lowered_return.value_return_method(
@@ -523,7 +523,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         return_type: &syn::Type,
         invoke_expression: &TokenStream,
     ) -> Result<TokenStream, syn::Error> {
-        let resolved_return = self.return_lowering.lower_type(return_type)?;
+        let resolved_return = self.return_lowering.lower_return_type(return_type)?;
         let lowered_return = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
         let uses_wire_payload = matches!(
             lowered_return.value_return_method(

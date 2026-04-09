@@ -1,4 +1,6 @@
-use super::common::{impl_type_name, is_factory_constructor, is_result_of_self_type_path};
+use super::common::{
+    fallible_handle_export_body, impl_type_name, is_factory_constructor, is_result_of_self_type_path,
+};
 
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
 use boltffi_ffi_rules::naming;
@@ -23,7 +25,7 @@ use crate::lowering::returns::model::{
     ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
     ValueReturnStrategy, WasmOptionScalarEncoding,
 };
-use boltffi_ffi_rules::transport::EncodedReturnStrategy;
+use boltffi_ffi_rules::transport::{EncodedReturnStrategy, ErrorReturnStrategy};
 
 struct ClassExportConfig {
     single_threaded: bool,
@@ -784,6 +786,25 @@ fn generate_sync_method_export(
             call_expr
         };
         (body, quote! { #fn_output }, false)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let full_ty = return_abi.rust_type();
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle return must parse Result ok type");
+        let result_ident = syn::Ident::new("result", method_name.span());
+        let body = fallible_handle_export_body(
+            quote! { #call_expr },
+            &conversions,
+            has_conversions,
+            full_ty,
+            &result_ident,
+        );
+        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
         let result_ident = syn::Ident::new("result", method_name.span());
@@ -1065,6 +1086,25 @@ fn generate_static_method_export(
             call_expr
         };
         (body, quote! { #fn_output }, false)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let full_ty = return_abi.rust_type();
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle return must parse Result ok type");
+        let result_ident = syn::Ident::new("result", method_name.span());
+        let body = fallible_handle_export_body(
+            quote! { #call_expr },
+            &conversions,
+            has_conversions,
+            full_ty,
+            &result_ident,
+        );
+        let return_type = quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
         let result_ident = syn::Ident::new("result", method_name.span());
@@ -1174,6 +1214,23 @@ fn generate_static_method_export(
         );
         (body, quote! { -> ::boltffi::__private::FfiBuf }, true)
     } else if return_abi.is_passable_value() {
+        let rust_type = return_abi.rust_type();
+        let body = if has_conversions {
+            quote! {
+                #(#conversions)*
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        } else {
+            quote! {
+                ::boltffi::__private::Passable::pack(#call_expr)
+            }
+        };
+        let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
         let rust_type = return_abi.rust_type();
         let body = if has_conversions {
             quote! {
@@ -1325,6 +1382,28 @@ fn generate_async_method_export(
                 }
             },
         }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle async return must parse Result ok type");
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(Ok(value)) => ::boltffi::__private::Passable::pack(value),
+                    Some(Err(err)) => {
+                        ::boltffi::__private::set_last_error(format!("{err:?}"));
+                        ::core::default::Default::default()
+                    }
+                    None => ::core::default::Default::default(),
+                }
+            },
+        }
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let rust_type = return_abi.rust_type();
         let registry = custom_types::registry_for_current_crate().ok();
@@ -1350,6 +1429,21 @@ fn generate_async_method_export(
                     None => ::boltffi::__private::FfiBuf::empty(),
                 };
                 out.write(buf);
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
+        let rust_type = return_abi.rust_type();
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::Passable::pack(result),
+                    None => ::core::default::Default::default(),
+                }
             },
         }
     } else {
@@ -1555,9 +1649,9 @@ mod tests {
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
         let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
-        let exported_classes = Box::leak(Box::new(
-            crate::index::exported_classes::ExportedClassRegistry::default(),
-        ));
+        let mut exported_classes = crate::index::exported_classes::ExportedClassRegistry::default();
+        exported_classes.register_simple_name_for_test("Transfer");
+        let exported_classes = Box::leak(Box::new(exported_classes));
         ReturnLoweringContext::new(
             custom_types,
             data_types,
@@ -1945,5 +2039,41 @@ mod tests {
         assert!(
             generated.contains("let result : Vec < Summary > = (* handle) . summarize (profile) ;")
         );
+    }
+
+    #[test]
+    fn instance_method_result_exported_class_uses_handle_not_wire_encode_whole_result() {
+        let impl_block = parse_impl(
+            r#"
+            impl Receiver {
+                pub fn receive(&self) -> Result<Transfer, TransferError> {
+                    todo!()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("receive method should exist");
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+
+        let generated = generate_sync_method_export(
+            MethodCallable::new(method),
+            &type_name,
+            "Receiver",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("instance export should be generated")
+        .to_string();
+
+        assert!(!generated.contains("wire_encode (& result)"));
+        assert!(generated.contains("Passable :: pack (value)"));
+        assert!(generated.contains("set_last_error"));
     }
 }
