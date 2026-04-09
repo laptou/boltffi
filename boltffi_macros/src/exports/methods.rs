@@ -958,10 +958,9 @@ fn generate_sync_method_export(
         let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
         (body, return_type, false)
     } else {
-        unreachable!(
-            "unsupported instance method return strategy: {:?}",
-            return_abi.value_return_strategy()
-        )
+        return Some(quote! {
+            ::core::compile_error!("boltffi: unsupported instance method return strategy for this export");
+        });
     };
 
     if is_wire_encoded {
@@ -1271,10 +1270,9 @@ fn generate_static_method_export(
         let return_type = quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
         (body, return_type, false)
     } else {
-        unreachable!(
-            "unsupported static method return strategy: {:?}",
-            return_abi.value_return_strategy()
-        )
+        return Some(quote! {
+            ::core::compile_error!("boltffi: unsupported static method return strategy for this export");
+        });
     };
 
     if is_wire_encoded {
@@ -1323,8 +1321,8 @@ fn generate_async_method_export(
     let visibility: syn::Visibility = syn::parse_quote! { pub };
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
-    // async entry has no pointer return to short-circuit with; diverge after set_last_error.
-    let on_wire_record_error = quote! { ::core::unreachable!() };
+    // wire decode failures already called set_last_error; return null future handle (invalid).
+    let on_wire_record_error = quote! { return ::core::ptr::null(); };
     let params = match transform_method_params_async(
         other_inputs,
         return_lowering,
@@ -1422,7 +1420,7 @@ fn generate_async_static_method_export(
     let visibility: syn::Visibility = syn::parse_quote! { pub };
 
     let other_inputs = method.sig.inputs.iter().cloned();
-    let on_wire_record_error = quote! { ::core::unreachable!() };
+    let on_wire_record_error = quote! { return ::core::ptr::null(); };
     let params = match transform_method_params_async(
         other_inputs,
         return_lowering,

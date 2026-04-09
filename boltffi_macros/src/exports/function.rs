@@ -590,10 +590,10 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
             }
         }
     } else {
-        unreachable!(
-            "unsupported function export return strategy: {:?}",
-            return_abi.value_return_strategy()
-        )
+        return quote! {
+            #input
+            ::core::compile_error!("boltffi: unsupported function export return strategy");
+        };
     }
 }
 
@@ -630,7 +630,7 @@ fn generate_async_export(
         callback_for_lower,
     );
 
-    let on_wire_record_error = quote! { ::core::unreachable!() };
+    let on_wire_record_error = quote! { return ::core::ptr::null(); };
     let params = match transform_params_async(
         fn_inputs,
         &return_lowering,
