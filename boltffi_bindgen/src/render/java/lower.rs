@@ -4837,6 +4837,7 @@ mod tests {
             params,
             is_fallible: false,
             is_optional: false,
+                execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -4847,6 +4848,7 @@ mod tests {
             params,
             is_fallible: true,
             is_optional: false,
+                execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -4857,6 +4859,7 @@ mod tests {
             name: name.into(),
             is_fallible: false,
             is_optional: false,
+                execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -4873,6 +4876,7 @@ mod tests {
             rest_params: params_iter.collect(),
             is_fallible: false,
             is_optional: false,
+                execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -4889,6 +4893,7 @@ mod tests {
             rest_params: params_iter.collect(),
             is_fallible: true,
             is_optional: false,
+                execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
