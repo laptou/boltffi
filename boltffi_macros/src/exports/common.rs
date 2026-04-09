@@ -1,4 +1,5 @@
-use syn::{FnArg, ReturnType, Type};
+use quote::quote;
+use syn::{FnArg, Ident, ReturnType, Type};
 
 pub(crate) fn is_factory_constructor(method: &syn::ImplItemFn, type_name: &syn::Ident) -> bool {
     FactoryMethodDescriptor::from_method(method, type_name).is_constructor()
@@ -126,5 +127,35 @@ impl FactoryReturnShape {
 
     fn is_result_of_self(&self) -> bool {
         matches!(self, Self::ResultOfSelf)
+    }
+}
+
+/// `Result<OkT, ErrT>` where `OkT` is a handle: pack `Ok`, null/default on `Err` with last error.
+pub(crate) fn fallible_handle_export_body(
+    call_expr: proc_macro2::TokenStream,
+    conversions: &[proc_macro2::TokenStream],
+    has_conversions: bool,
+    full_result_ty: &Type,
+    result_ident: &Ident,
+) -> proc_macro2::TokenStream {
+    let bind = if has_conversions {
+        quote! {
+            #(#conversions)*
+            let #result_ident: #full_result_ty = #call_expr;
+        }
+    } else {
+        quote! {
+            let #result_ident: #full_result_ty = #call_expr;
+        }
+    };
+    quote! {
+        #bind
+        match #result_ident {
+            Ok(value) => ::boltffi::__private::Passable::pack(value),
+            Err(err) => {
+                ::boltffi::__private::set_last_error(format!("{err:?}"));
+                ::core::default::Default::default()
+            }
+        }
     }
 }

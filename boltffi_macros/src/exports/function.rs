@@ -1,6 +1,6 @@
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
 use boltffi_ffi_rules::naming;
-use boltffi_ffi_rules::transport::EncodedReturnStrategy;
+use boltffi_ffi_rules::transport::{EncodedReturnStrategy, ErrorReturnStrategy};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::ItemFn;
@@ -9,6 +9,7 @@ use crate::exports::async_export::{
     AsyncExportNames, AsyncRuntimeExports, AsyncWasmCompleteExport,
 };
 use crate::exports::callable::FunctionCallable;
+use crate::exports::common::fallible_handle_export_body;
 use crate::exports::callback_return::resolve_sync_callback_return;
 use crate::exports::extern_export::{
     DirectBufferCarrier, DualPlatformExternExport, ExportBody, ExportCondition, ExportSafety,
@@ -397,6 +398,48 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                     }
                 }
         }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let full_ty = return_abi.rust_type();
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle return must parse Result ok type");
+        let result_ident = syn::Ident::new("result", fn_name.span());
+        let body = fallible_handle_export_body(
+            quote! { #fn_name(#(#call_args),*) },
+            &conversions,
+            !conversions.is_empty(),
+            full_ty,
+            &result_ident,
+        );
+        let return_type = quote! { <#ok_ty as ::boltffi::__private::Passable>::Out };
+
+        if has_params {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#ffi_params),*
+                ) -> #return_type {
+                    #body
+                }
+            }
+        } else {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis extern "C" fn #export_ident() -> #return_type {
+                    #body
+                }
+            }
+        }
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let inner_ty = return_abi.rust_type();
         let result_ident = syn::Ident::new("result", fn_name.span());
@@ -480,6 +523,41 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
         )
         .into()
     } else if return_abi.is_passable_value() {
+        let rust_type = return_abi.rust_type();
+        let body = quote! {
+            #(#conversions)*
+            ::boltffi::__private::Passable::pack(#fn_name(#(#call_args),*))
+        };
+
+        let return_type = quote! { <#rust_type as ::boltffi::__private::Passable>::Out };
+
+        if has_params {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#ffi_params),*
+                ) -> #return_type {
+                    #body
+                }
+            }
+        } else {
+            quote! {
+            #input
+
+            #[allow(clippy::not_unsafe_ptr_arg_deref)]
+            #[unsafe(no_mangle)]
+            #fn_vis extern "C" fn #export_ident() -> #return_type {
+                #body
+            }
+            }
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
         let rust_type = return_abi.rust_type();
         let body = quote! {
             #(#conversions)*
@@ -635,6 +713,40 @@ fn generate_async_export(
                 out.write(buf);
             },
         }
+    } else if return_abi.is_passable_value() {
+        let rust_type = return_abi.rust_type();
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::Passable::pack(result),
+                    None => Default::default(),
+                }
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) && return_abi.error_strategy() == ErrorReturnStrategy::Encoded
+    {
+        let ok_ty = return_abi
+            .fallible_ok_type()
+            .expect("fallible handle async return must parse Result ok type");
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#ok_ty as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(Ok(value)) => ::boltffi::__private::Passable::pack(value),
+                    Some(Err(err)) => {
+                        ::boltffi::__private::set_last_error(format!("{err:?}"));
+                        ::core::default::Default::default()
+                    }
+                    None => ::core::default::Default::default(),
+                }
+            },
+        }
     } else if let Some(strategy) = return_abi.encoded_return_strategy() {
         let rust_type = return_abi.rust_type();
         let registry = custom_types::registry_for_current_crate().ok();
@@ -662,7 +774,10 @@ fn generate_async_export(
                 out.write(buf);
             },
         }
-    } else if return_abi.is_passable_value() {
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
+    ) {
         let rust_type = return_abi.rust_type();
         AsyncWasmCompleteExport {
             params: quote! { handle: ::boltffi::__private::RustFutureHandle },
@@ -670,15 +785,29 @@ fn generate_async_export(
             body: quote! {
                 match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
                     Some(result) => ::boltffi::__private::Passable::pack(result),
-                    None => Default::default(),
+                    None => ::core::default::Default::default(),
                 }
             },
         }
     } else {
-        unreachable!(
-            "unsupported async function export return strategy: {:?}",
-            return_abi.value_return_strategy()
-        )
+        AsyncWasmCompleteExport {
+            params: quote! {
+                out: *mut ::boltffi::__private::FfiBuf,
+                handle: ::boltffi::__private::RustFutureHandle,
+                _out_status: *mut ::boltffi::__private::FfiStatus
+            },
+            return_type: quote! {},
+            body: quote! {
+                if out.is_null() {
+                    return;
+                }
+                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(result) => ::boltffi::__private::FfiBuf::wire_encode(&result),
+                    None => ::boltffi::__private::FfiBuf::empty(),
+                };
+                out.write(buf);
+            },
+        }
     };
     let runtime_exports = AsyncRuntimeExports {
         visibility: fn_vis,

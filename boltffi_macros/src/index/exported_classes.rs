@@ -138,6 +138,12 @@ impl ExportedClassRegistry {
             },
         );
     }
+
+    #[cfg(test)]
+    pub(crate) fn register_simple_name_for_test(&mut self, name: &str) {
+        self.paths.insert(vec![name.to_string()], ());
+        self.finalize_unique_names();
+    }
 }
 
 fn has_export_attr(item_impl: &ItemImpl) -> bool {

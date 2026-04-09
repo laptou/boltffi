@@ -6,6 +6,8 @@ use syn::Type;
 use crate::index::custom_types::{self, CustomTypeRegistry};
 
 use super::classify::ReturnTypeDescriptor;
+use boltffi_ffi_rules::transport::ErrorReturnStrategy;
+
 use super::model::{
     DirectBufferReturnMethod, EncodedReturnStrategy, ResolvedReturn, ReturnInvocationContext,
     ReturnPlatform, ScalarReturnStrategy, ValueReturnStrategy, WasmOptionScalarEncoding,
@@ -87,7 +89,14 @@ impl ResolvedReturn {
             }
             ValueReturnStrategy::Buffer(_) => quote! { ::boltffi::__private::FfiBuf },
             ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
-                quote! { #rust_type }
+                if self.error_strategy() == ErrorReturnStrategy::Encoded {
+                    let ok_ty = self
+                        .fallible_ok_type()
+                        .expect("fallible handle async return must parse Result ok type");
+                    quote! { <#ok_ty as ::boltffi::__private::Passable>::Out }
+                } else {
+                    quote! { #rust_type }
+                }
             }
         }
     }
@@ -131,10 +140,28 @@ impl ResolvedReturn {
                     #encode_expression
                 }
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => quote! {
-                if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
-                result
-            },
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                if self.error_strategy() == ErrorReturnStrategy::Encoded {
+                    let _ = self
+                        .fallible_ok_type()
+                        .expect("fallible handle async return must parse Result ok type");
+                    quote! {
+                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
+                        match result {
+                            Ok(value) => ::boltffi::__private::Passable::pack(value),
+                            Err(err) => {
+                                ::boltffi::__private::set_last_error(format!("{err:?}"));
+                                ::core::default::Default::default()
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
+                        result
+                    }
+                }
+            }
         }
     }
 
