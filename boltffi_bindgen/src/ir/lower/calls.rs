@@ -493,6 +493,8 @@ impl<'c> Lowerer<'c> {
         }
     }
 
+    /// callback vtable params historically use wire-encoded spans for non-scalar types; handle and
+    /// callback ids cannot be wire-encoded and use the same [`ParamPlan`] path as normal ffi.
     pub(super) fn lower_callback_param(&self, param: &ParamDef) -> AbiCallbackParamPlan {
         let strategy = match self.classify_type(&param.type_expr) {
             Transport::Scalar(origin) => AbiCallbackParamStrategy::Scalar(origin),

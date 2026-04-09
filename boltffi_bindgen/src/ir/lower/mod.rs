@@ -40,8 +40,6 @@ use crate::ir::types::{PrimitiveType, TypeExpr};
 mod calls;
 mod codec;
 
-use self::calls::{AbiCallbackParamPlan, AbiCallbackParamStrategy};
-
 trait MethodHost {
     fn classify(&self, lowerer: &Lowerer) -> Transport;
     fn type_expr(&self) -> TypeExpr;
