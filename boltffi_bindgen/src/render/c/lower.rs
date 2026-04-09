@@ -339,12 +339,17 @@ impl<'a> CHeaderLowerer<'a> {
             }
             CallMode::Async(async_call) => {
                 let complete_ret = self.async_complete_return_type(&async_call.result);
+                let complete_has_err_carrier = matches!(
+                    async_call.error,
+                    ErrorTransport::DirectOkWithEncodedErr { .. }
+                );
                 AsyncFunctionTemplate {
                     symbol: call.symbol.as_str(),
                     params: &params,
                     poll: async_call.poll.as_str(),
                     complete: async_call.complete.as_str(),
                     complete_return_type: &complete_ret,
+                    complete_has_err_carrier,
                     cancel: async_call.cancel.as_str(),
                     free: async_call.free.as_str(),
                 }
@@ -385,6 +390,11 @@ impl<'a> CHeaderLowerer<'a> {
     }
 
     fn return_c_type(&self, returns: &ReturnShape, error: &ErrorTransport) -> String {
+        // sync `Result<Handle|Callback, E>` with encoded err: return is `FfiStatus`; ok is `out_ok`.
+        if matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. }) {
+            return "FfiStatus".to_string();
+        }
+
         if let Some(Transport::Handle { class_id, .. }) = &returns.transport {
             return format!("struct {} *", class_id.as_str());
         }
@@ -646,6 +656,62 @@ mod tests {
             );
         let header = generate_header(&mut module);
         assert!(header.contains("___Point boltffi_fetch_point_complete("));
+    }
+
+    #[test]
+    fn fallible_handle_sync_method_returns_ffi_status_with_carrier_params() {
+        let mut module = Module::new("test")
+            .with_enum(
+                Enumeration::new("AppErr")
+                    .as_error()
+                    .with_variant(Variant::new("e").with_discriminant(0)),
+            )
+            .with_class(Class::new("Widget").with_constructor(Constructor::new()))
+            .with_class(
+                Class::new("Svc")
+                    .with_constructor(Constructor::new())
+                    .with_method(
+                        Method::new("take", Receiver::Ref).with_return(ReturnType::fallible(
+                            Type::Object("Widget".into()),
+                            Type::Enum("AppErr".into()),
+                        )),
+                    ),
+            );
+        let header = generate_header(&mut module);
+        assert!(
+            header.contains("FfiStatus boltffi_svc_take("),
+            "direct-ok + encoded-err sync methods return FfiStatus, not the handle type"
+        );
+        assert!(
+            header.contains("struct Widget * *out_ok"),
+            "out_ok must be a typed handle out-pointer, not uint8_t**, for swift interop"
+        );
+        assert!(header.contains("err_out_ptr"));
+        assert!(header.contains("err_out_len"));
+    }
+
+    #[test]
+    fn async_fallible_handle_complete_includes_err_out_params() {
+        let mut module = Module::new("test")
+            .with_enum(
+                Enumeration::new("AppErr")
+                    .as_error()
+                    .with_variant(Variant::new("e").with_discriminant(0)),
+            )
+            .with_class(Class::new("Widget").with_constructor(Constructor::new()))
+            .with_function(
+                Function::new("make_widget")
+                    .with_return(ReturnType::fallible(
+                        Type::Object("Widget".into()),
+                        Type::Enum("AppErr".into()),
+                    ))
+                    .make_async(),
+            );
+        let header = generate_header(&mut module);
+        assert!(header.contains("boltffi_make_widget_complete("));
+        assert!(header.contains("FfiStatus* out_status"));
+        assert!(header.contains("uint8_t** err_out_ptr"));
+        assert!(header.contains("uintptr_t* err_out_len"));
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub fn abi_type_c(abi_type: &AbiType) -> String {
         AbiType::ISize => "intptr_t".to_string(),
         AbiType::USize => "uintptr_t".to_string(),
         AbiType::Pointer(element) => format!("{}*", primitive_c_type(*element)),
+        AbiType::PointerToHandle(class_id) => format!("struct {} *", class_id.as_str()),
         AbiType::OwnedBuffer => "FfiBuf_u8".to_string(),
         AbiType::InlineCallbackFn {
             params,

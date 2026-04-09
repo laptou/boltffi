@@ -41,6 +41,8 @@ pub struct AsyncFunctionTemplate<'a> {
     pub poll: &'a str,
     pub complete: &'a str,
     pub complete_return_type: &'a str,
+    /// matches rust `complete_err_carrier`: extra `err_out_ptr` / `err_out_len` on native `complete`.
+    pub complete_has_err_carrier: bool,
     pub cancel: &'a str,
     pub free: &'a str,
 }
