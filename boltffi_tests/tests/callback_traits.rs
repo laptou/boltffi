@@ -255,6 +255,11 @@ mod foreign_type_generation {
     fn async_multi_method_generates_foreign_type() {
         assert_type_exists::<ForeignAsyncMultiMethod>();
     }
+
+    #[test]
+    fn future_return_fetcher_generates_foreign_type() {
+        assert_type_exists::<ForeignFutureReturnFetcher>();
+    }
 }
 
 mod sync_value_callback {

@@ -81,6 +81,14 @@ pub trait AsyncMultiMethod {
     async fn compute(&self, a: i32, b: i32) -> i64;
 }
 
+/// boxed `Future` return — same ffi async path as `async fn -> T`
+#[export]
+pub trait FutureReturnFetcher {
+    fn fetch(&self, key: u32) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = u64> + Send + '_>,
+    >;
+}
+
 #[export]
 pub fn invoke_sync_boxed(callback: Box<dyn SyncValueCallback>, input: i32) -> i32 {
     callback.on_value(input)
@@ -251,6 +259,11 @@ pub async fn invoke_async_multi_impl(
     b: i32,
 ) -> i64 {
     callback.load(id).await + callback.compute(a, b).await
+}
+
+#[export]
+pub async fn invoke_future_return_impl(fetcher: impl FutureReturnFetcher, key: u32) -> u64 {
+    fetcher.fetch(key).await
 }
 
 pub struct SyncProcessor {
