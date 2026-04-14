@@ -1104,6 +1104,10 @@ pub mod transport {
         ///
         /// Example: `fn inventory() -> Inventory`
         ObjectHandle,
+        /// Returns an optional foreign object handle (`None` is null).
+        ///
+        /// Example: `fn maybe_widget() -> Option<Widget>`
+        NullableObjectHandle,
         /// Returns a callback or trait-object handle.
         ///
         /// The caller receives a handle that can be used to invoke a callback
@@ -1292,6 +1296,7 @@ pub mod transport {
                     | Self::Scalar(_)
                     | Self::CompositeValue
                     | Self::ObjectHandle
+                    | Self::NullableObjectHandle
                     | Self::CallbackHandle => ValueReturnMethod::DirectReturn,
                     Self::Buffer(_) => {
                         if matches!(error_strategy, ErrorReturnStrategy::Encoded) {
@@ -1315,6 +1320,7 @@ pub mod transport {
                     | (Self::CompositeValue, ReturnPlatform::Native)
                     | (Self::Buffer(_), ReturnPlatform::Native)
                     | (Self::ObjectHandle, ReturnPlatform::Native)
+                    | (Self::NullableObjectHandle, ReturnPlatform::Native)
                     | (Self::CallbackHandle, ReturnPlatform::Native) => {
                         ValueReturnMethod::DirectReturn
                     }
@@ -1323,7 +1329,7 @@ pub mod transport {
                 ReturnInvocationContext::CallbackVtable => match self {
                     Self::Void => ValueReturnMethod::DirectReturn,
                     Self::Scalar(_) => ValueReturnMethod::WriteToOutParameter,
-                    Self::ObjectHandle | Self::CallbackHandle => {
+                    Self::ObjectHandle | Self::NullableObjectHandle | Self::CallbackHandle => {
                         ValueReturnMethod::WriteToOutParameter
                     }
                     Self::CompositeValue | Self::Buffer(_) => {
