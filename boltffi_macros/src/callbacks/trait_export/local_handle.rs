@@ -11,6 +11,7 @@ use crate::lowering::returns::callback_return::resolve_sync_callback_return;
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::custom_types::{contains_custom_types, from_wire_expr_owned, wire_type_for};
+use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
 use crate::lowering::returns::model::{
     ReturnLoweringContext, ScalarReturnStrategy, ValueReturnStrategy,
@@ -350,7 +351,9 @@ impl<'a> LocalHandleMethodExpander<'a> {
                         let callback_bytes = unsafe { callback_buffer.as_byte_slice() };
                     }
                 }
-                ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                ValueReturnStrategy::ObjectHandle
+                | ValueReturnStrategy::NullableObjectHandle
+                | ValueReturnStrategy::CallbackHandle => {
                     return Err(syn::Error::new_spanned(
                         return_type,
                         "boltffi: internal error: handle returns should not use wire payload vtable path",
@@ -441,6 +444,12 @@ impl<'a> LocalHandleMethodExpander<'a> {
             ValueReturnStrategy::ObjectHandle => quote! {
                 ::boltffi::__private::Passable::pack(#result_name)
             },
+            ValueReturnStrategy::NullableObjectHandle => {
+                return Err(syn::Error::new_spanned(
+                    return_type,
+                    "boltffi: callback traits do not support returning `Option<exported class>` yet",
+                ));
+            }
             ValueReturnStrategy::CallbackHandle => {
                 let output: syn::ReturnType = syn::parse_quote! { -> #return_type };
                 let sync = resolve_sync_callback_return(&output, self.callback_traits)?;
@@ -544,7 +553,9 @@ impl<'a> LocalHandleMethodExpander<'a> {
                 | ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag) => quote! {
                     ::boltffi::__private::FfiBuf::wire_encode(&#callback_result_name)
                 },
-                ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+                ValueReturnStrategy::ObjectHandle
+                | ValueReturnStrategy::NullableObjectHandle
+                | ValueReturnStrategy::CallbackHandle => {
                     return Err(syn::Error::new_spanned(
                         return_type,
                         "boltffi: internal error: handle returns should not use wire payload wasm path",
@@ -591,6 +602,12 @@ impl<'a> LocalHandleMethodExpander<'a> {
             ValueReturnStrategy::ObjectHandle => quote! {
                 ::boltffi::__private::Passable::pack(#callback_result_name)
             },
+            ValueReturnStrategy::NullableObjectHandle => {
+                return Err(syn::Error::new_spanned(
+                    return_type,
+                    "boltffi: callback traits do not support returning `Option<exported class>` yet",
+                ));
+            }
             ValueReturnStrategy::CallbackHandle => {
                 let output: syn::ReturnType = syn::parse_quote! { -> #return_type };
                 let sync = resolve_sync_callback_return(&output, self.callback_traits)?;
@@ -661,6 +678,27 @@ impl<'a> LocalHandleMethodExpander<'a> {
                 decode_steps: vec![quote! {
                     let #param_name: #param_type = unsafe {
                         <#param_type as ::boltffi::__private::Passable>::unpack(#param_name)
+                    };
+                }],
+                call_arg: quote! { #param_name },
+            });
+        }
+        if matches!(value_strategy, ValueReturnStrategy::NullableObjectHandle) {
+            let inner = option_inner_type(param_type).ok_or_else(|| {
+                syn::Error::new_spanned(
+                    param_type,
+                    "boltffi: expected Option<exported class> for nullable object handle param",
+                )
+            })?;
+            return Ok(LocalHandleParam {
+                ffi_params: vec![quote! { #param_name: *mut #inner }],
+                decode_steps: vec![quote! {
+                    let #param_name: #param_type = if #param_name.is_null() {
+                        None
+                    } else {
+                        Some(unsafe {
+                            <#inner as ::boltffi::__private::Passable>::unpack(#param_name)
+                        })
                     };
                 }],
                 call_arg: quote! { #param_name },
