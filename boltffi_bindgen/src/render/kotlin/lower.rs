@@ -2013,7 +2013,9 @@ impl<'a> KotlinLowerer<'a> {
                 };
                 self.jni_type_for_abi(&AbiType::from(origin.primitive()))
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
                 "Long".to_string()
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
@@ -2074,7 +2076,9 @@ impl<'a> KotlinLowerer<'a> {
                 };
                 self.invoker_suffix_from_primitive(origin.primitive())
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
                 "Handle".to_string()
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
@@ -2133,7 +2137,7 @@ impl<'a> KotlinLowerer<'a> {
                     .unwrap_or_default();
                 ("ByteArray".to_string(), "byteArrayOf()".to_string(), to_jni)
             }
-            ValueReturnStrategy::ObjectHandle => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
                 let Some(Transport::Handle { class_id, nullable }) = &ret_shape.transport else {
                     unreachable!("object handle return strategy requires handle transport");
                 };
@@ -2668,7 +2672,9 @@ impl<'a> KotlinLowerer<'a> {
                 };
                 self.jni_type_for_abi(&AbiType::from(origin.primitive()))
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
                 "Long".to_string()
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
@@ -3079,7 +3085,7 @@ impl<'a> KotlinLowerer<'a> {
                     cast,
                 }
             }
-            ValueReturnStrategy::ObjectHandle => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
                 let Some(Transport::Handle { class_id, nullable }) = &ret_shape.transport else {
                     unreachable!("object handle return strategy requires handle transport");
                 };

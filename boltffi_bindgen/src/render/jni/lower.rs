@@ -2002,7 +2002,9 @@ impl<'a> JniLowerer<'a> {
                 };
                 self.primitive_signature(origin.primitive())
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
                 "J".to_string()
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
@@ -2036,7 +2038,9 @@ impl<'a> JniLowerer<'a> {
                 };
                 self.primitive_signature(origin.primitive())
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
                 "J".to_string()
             }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
@@ -2097,14 +2101,16 @@ impl<'a> JniLowerer<'a> {
                     out_len_name: None,
                 })
             }
-            ValueReturnStrategy::ObjectHandle => Some(JniCallbackReturn {
-                jni_type: "jlong".to_string(),
-                jni_call_type: "Long".to_string(),
-                c_type: "uint8_t*".to_string(),
-                is_wire_encoded: false,
-                out_ptr_name: Some(out_ptr_name),
-                out_len_name: None,
-            }),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
+                Some(JniCallbackReturn {
+                    jni_type: "jlong".to_string(),
+                    jni_call_type: "Long".to_string(),
+                    c_type: "uint8_t*".to_string(),
+                    is_wire_encoded: false,
+                    out_ptr_name: Some(out_ptr_name),
+                    out_len_name: None,
+                })
+            }
             ValueReturnStrategy::CallbackHandle => Some(JniCallbackReturn {
                 jni_type: "jlong".to_string(),
                 jni_call_type: "Long".to_string(),
@@ -2135,7 +2141,9 @@ impl<'a> JniLowerer<'a> {
                 };
                 Some(self.c_return_type_for_abi(&AbiType::from(origin.primitive())))
             }
-            ValueReturnStrategy::ObjectHandle => Some("void*".to_string()),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
+                Some("void*".to_string())
+            }
             ValueReturnStrategy::CallbackHandle => Some("BoltFFICallbackHandle".to_string()),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 Some("wire".to_string())
@@ -2155,7 +2163,9 @@ impl<'a> JniLowerer<'a> {
                     .invoker_suffix
                     .to_string()
             }
-            ValueReturnStrategy::ObjectHandle => "Handle".to_string(),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
+                "Handle".to_string()
+            }
             ValueReturnStrategy::CallbackHandle => {
                 let Some(Transport::Callback { callback_id, .. }) = &ret_shape.transport else {
                     unreachable!("callback handle return must use callback transport");
@@ -2690,7 +2700,7 @@ impl<'a> JniLowerer<'a> {
                     _ => JniClosureTrampolineReturn::wire_encoded(),
                 }
             }
-            ValueReturnStrategy::ObjectHandle => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
                 let Some(Transport::Handle { class_id, .. }) = &ret_shape.transport else {
                     unreachable!("object handle closure return must use handle transport");
                 };

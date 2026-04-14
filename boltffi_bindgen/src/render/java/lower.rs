@@ -2815,14 +2815,16 @@ impl<'a> JavaLowerer<'a> {
                     render: self.encoded_return_render(encode_ops, "value"),
                 }
             }
-            ValueReturnStrategy::ObjectHandle => JavaValueBridgeReturn {
-                java_type: self.java_type(ty),
-                jni_type: "long".to_string(),
-                default_value: "0L".to_string(),
-                render: JavaValueBridgeRender::Direct {
-                    prefix: String::new(),
-                    suffix: ".handle".to_string(),
-                },
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
+                JavaValueBridgeReturn {
+                    java_type: self.java_type(ty),
+                    jni_type: "long".to_string(),
+                    default_value: "0L".to_string(),
+                    render: JavaValueBridgeRender::Direct {
+                        prefix: String::new(),
+                        suffix: ".handle".to_string(),
+                    },
+                }
             },
             ValueReturnStrategy::CallbackHandle => {
                 let Some(Transport::Callback { callback_id, .. }) = &ret_shape.transport else {
@@ -2936,7 +2938,9 @@ impl<'a> JavaLowerer<'a> {
                 };
                 self.invoker_suffix_from_primitive(origin.primitive())
             }
-            ValueReturnStrategy::ObjectHandle => "Handle".to_string(),
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
+                "Handle".to_string()
+            }
             ValueReturnStrategy::CallbackHandle => {
                 let Some(Transport::Callback { callback_id, .. }) = &ret_shape.transport else {
                     unreachable!("callback handle return must use callback transport");

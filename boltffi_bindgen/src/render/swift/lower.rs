@@ -3,7 +3,7 @@ use boltffi_ffi_rules::naming::{
     self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
 };
 use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ErrorReturnStrategy, ReturnInvocationContext, ReturnPlatform,
+    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform,
     ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
 };
 use heck::ToLowerCamelCase;
@@ -1597,14 +1597,15 @@ impl<'a> SwiftLowerer<'a> {
                     }),
                 }
             }
-            ValueReturnStrategy::ObjectHandle => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
                 let Some(Transport::Handle { class_id, nullable }) = &return_shape.transport else {
                     unreachable!("object handle return strategy requires handle transport");
                 };
                 let class_name = self.swift_name_for_class(class_id);
                 SwiftReturn::Handle {
                     class_name,
-                    nullable: *nullable,
+                    nullable: matches!(strategy, ValueReturnStrategy::NullableObjectHandle)
+                        || *nullable,
                 }
             }
             ValueReturnStrategy::CallbackHandle => {

@@ -1649,6 +1649,7 @@ impl SwiftClosureTrampoline {
             }
             ValueReturnStrategy::Buffer(_)
             | ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
             | ValueReturnStrategy::CallbackHandle => {
                 let encoded_expr = self
                     .returns

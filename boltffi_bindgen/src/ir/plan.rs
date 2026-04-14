@@ -104,6 +104,8 @@ impl Transport {
                 ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
             }
             Self::Span(_) => ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded),
+            // note: `nullable` is also true for fallible `Result<Handle, E>` out_ok; do not map to
+            // `NullableObjectHandle` here — that strategy is macro-only for `Option<Class>` returns.
             Self::Handle { .. } => ValueReturnStrategy::ObjectHandle,
             Self::Callback { .. } => ValueReturnStrategy::CallbackHandle,
         }

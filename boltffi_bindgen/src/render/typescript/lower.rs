@@ -1523,11 +1523,16 @@ impl<'a> TypeScriptLowerer<'a> {
                 };
                 self.scalar_output_route(AbiType::from(origin.primitive()), execution_model)
             }
-            ValueReturnStrategy::ObjectHandle => {
+            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::NullableObjectHandle => {
                 let Some(Transport::Handle { class_id, nullable }) = &returns.transport else {
                     unreachable!("object handle return strategy requires handle transport");
                 };
-                self.handle_output_route(class_id.as_str(), *nullable, execution_model)
+                let nullable = *nullable
+                    || matches!(
+                        returns.value_return_strategy(),
+                        ValueReturnStrategy::NullableObjectHandle
+                    );
+                self.handle_output_route(class_id.as_str(), nullable, execution_model)
             }
             ValueReturnStrategy::CallbackHandle => match execution_model {
                 TsExecutionModel::Sync => (
