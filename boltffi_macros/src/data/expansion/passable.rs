@@ -75,8 +75,18 @@ fn generate_passable_for_scalar_enum(
     let match_arms: Vec<proc_macro2::TokenStream> = variants
         .iter()
         .map(|variant| {
+            let cfg_attrs = variant
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("cfg"));
             let variant_name = &variant.ident;
-            quote! { value if value == (#enum_name::#variant_name as #repr_type) => #enum_name::#variant_name }
+            let arm = quote! {
+                value if value == (#enum_name::#variant_name as #repr_type) => #enum_name::#variant_name
+            };
+            quote! {
+                #(#cfg_attrs)*
+                #arm
+            }
         })
         .collect();
 

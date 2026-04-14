@@ -22,6 +22,9 @@ use crate::model::{
 };
 
 mod compiler_type_resolution;
+mod cfg_context;
+
+pub use cfg_context::CfgContext;
 
 pub enum PendingKind {
     Record,
@@ -453,6 +456,7 @@ pub struct SourceScanner {
     integer_constants: HashMap<String, i128>,
     source_root: Option<PathBuf>,
     target_pointer_width_bits: Option<u8>,
+    cfg_context: CfgContext,
 }
 
 impl SourceScanner {
@@ -463,6 +467,14 @@ impl SourceScanner {
     pub fn new_with_pointer_width(
         module_name: impl Into<String>,
         target_pointer_width_bits: Option<u8>,
+    ) -> Self {
+        Self::new_with_config(module_name, target_pointer_width_bits, CfgContext::default())
+    }
+
+    pub fn new_with_config(
+        module_name: impl Into<String>,
+        target_pointer_width_bits: Option<u8>,
+        cfg_context: CfgContext,
     ) -> Self {
         Self {
             module_name: module_name.into(),
@@ -475,6 +487,7 @@ impl SourceScanner {
             integer_constants: HashMap::new(),
             source_root: None,
             target_pointer_width_bits,
+            cfg_context,
         }
     }
 
@@ -1043,6 +1056,19 @@ impl SourceScanner {
     }
 
     fn process_item(&mut self, item: &Item, file_module_path: &[String]) -> Result<(), String> {
+        let item_attrs = match item {
+            Item::Struct(s) => Some(&s.attrs),
+            Item::Enum(e) => Some(&e.attrs),
+            Item::Impl(i) => Some(&i.attrs),
+            Item::Trait(t) => Some(&t.attrs),
+            Item::Fn(f) => Some(&f.attrs),
+            _ => None,
+        };
+        if let Some(attrs) = item_attrs {
+            if !self.cfg_context.is_active(attrs) {
+                return Ok(());
+            }
+        }
         match item {
             Item::Struct(item_struct) => {
                 if let Some(doc) = extract_doc_string(&item_struct.attrs) {
@@ -1178,6 +1204,9 @@ impl SourceScanner {
             Fields::Named(named) => {
                 let mut fields = Vec::new();
                 for f in &named.named {
+                    if !self.cfg_context.is_active(&f.attrs) {
+                        continue;
+                    }
                     let field_name = f.ident.as_ref().ok_or_else(|| {
                         format!(
                             "boltffi bindgen: tuple struct field in record `{name}` is not supported"
@@ -1237,6 +1266,7 @@ impl SourceScanner {
         let variants = item_enum
             .variants
             .iter()
+            .filter(|v| self.cfg_context.is_active(&v.attrs))
             .map(|v| -> Result<Variant, String> {
                 let variant_name = v.ident.to_string();
                 let discriminant = match v.discriminant.as_ref() {
@@ -2781,10 +2811,25 @@ pub fn scan_crate_with_pointer_width(
     module_name: &str,
     target_pointer_width_bits: Option<u8>,
 ) -> Result<Module, String> {
+    scan_crate_with_config(
+        crate_path,
+        module_name,
+        target_pointer_width_bits,
+        CfgContext::default(),
+    )
+}
+
+pub fn scan_crate_with_config(
+    crate_path: &Path,
+    module_name: &str,
+    target_pointer_width_bits: Option<u8>,
+    cfg_context: CfgContext,
+) -> Result<Module, String> {
     let src_path = crate_path.join("src");
-    let mut scanner = SourceScanner::new_with_pointer_width(
+    let mut scanner = SourceScanner::new_with_config(
         module_name,
         target_pointer_width_bits.or_else(parse_target_pointer_width),
+        cfg_context,
     );
     scanner.scan_directory(crate_path, &src_path)?;
     let module = scanner.into_module();
@@ -3506,6 +3551,47 @@ mod tests {
             scan_crate_with_pointer_width(&temp_root, "testlib", None).expect("scan failed");
         fs::remove_dir_all(&temp_root).expect("cleanup");
         module
+    }
+
+    fn scan_temp_crate_with_config(source: &str, pointer_width: Option<u8>, cfg: CfgContext) -> Module {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "boltffi_scan_cfg_{}_{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let src_dir = temp_root.join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+        fs::write(src_dir.join("lib.rs"), source).expect("write lib.rs");
+
+        let module = scan_crate_with_config(&temp_root, "testlib", pointer_width, cfg)
+            .expect("scan failed");
+        fs::remove_dir_all(&temp_root).expect("cleanup");
+        module
+    }
+
+    #[test]
+    fn cfg_context_excludes_inactive_enum_variants() {
+        let source = r#"
+            #[boltffi::data]
+            pub enum GatedEnum {
+                A = 0,
+                #[cfg(feature = "gated_variant")]
+                B = 1,
+            }
+        "#;
+        let cfg = CfgContext {
+            features: HashSet::new(),
+            target_arch: Some("wasm32".to_string()),
+            scan_all: false,
+        };
+        let module = scan_temp_crate_with_config(source, Some(32), cfg);
+        let enumeration = module.find_enum("GatedEnum").expect("GatedEnum");
+        assert_eq!(enumeration.variants.len(), 1);
+        assert_eq!(enumeration.variants[0].name, "A");
     }
 
     #[test]

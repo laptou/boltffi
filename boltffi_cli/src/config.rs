@@ -202,6 +202,9 @@ pub struct AppleConfig {
     pub xcframework: XcframeworkConfig,
     #[serde(default)]
     pub spm: SpmConfig,
+    /// cargo features for bindgen cfg filtering (e.g. `native`, `fs`)
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -220,6 +223,9 @@ pub struct AndroidConfig {
     pub header: HeaderConfig,
     #[serde(default)]
     pub pack: AndroidPackConfig,
+    /// cargo features for bindgen cfg filtering
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -344,6 +350,9 @@ pub struct WasmConfig {
     pub typescript: WasmTypeScriptConfig,
     #[serde(default)]
     pub npm: WasmNpmConfig,
+    /// cargo features for bindgen cfg filtering (empty = wasm32 without `fs`)
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -442,6 +451,7 @@ impl Default for AppleConfig {
             header: HeaderConfig::default(),
             xcframework: XcframeworkConfig::default(),
             spm: SpmConfig::default(),
+            features: Vec::new(),
         }
     }
 }
@@ -457,6 +467,7 @@ impl Default for AndroidConfig {
             kotlin: AndroidKotlinConfig::default(),
             header: HeaderConfig::default(),
             pack: AndroidPackConfig::default(),
+            features: Vec::new(),
         }
     }
 }
@@ -486,6 +497,7 @@ impl Default for WasmConfig {
             optimize: WasmOptimizeConfig::default(),
             typescript: WasmTypeScriptConfig::default(),
             npm: WasmNpmConfig::default(),
+            features: Vec::new(),
         }
     }
 }
@@ -712,6 +724,31 @@ impl Config {
 
     pub fn is_dart_enabled(&self) -> bool {
         self.targets.dart.enabled
+    }
+
+    /// bindgen scanner cfg for apple targets (swift, header when apple)
+    pub fn apple_scan_cfg_context(&self) -> boltffi_bindgen::CfgContext {
+        boltffi_bindgen::CfgContext {
+            features: self.targets.apple.features.iter().cloned().collect(),
+            target_arch: Some("aarch64".to_string()),
+            scan_all: false,
+        }
+    }
+
+    pub fn android_scan_cfg_context(&self) -> boltffi_bindgen::CfgContext {
+        boltffi_bindgen::CfgContext {
+            features: self.targets.android.features.iter().cloned().collect(),
+            target_arch: Some("aarch64".to_string()),
+            scan_all: false,
+        }
+    }
+
+    pub fn wasm_scan_cfg_context(&self) -> boltffi_bindgen::CfgContext {
+        boltffi_bindgen::CfgContext {
+            features: self.targets.wasm.features.iter().cloned().collect(),
+            target_arch: Some("wasm32".to_string()),
+            scan_all: false,
+        }
     }
 
     pub fn apple_include_macos(&self) -> bool {

@@ -906,3 +906,23 @@ impl FixturePoint {
         }
     }
 }
+
+// cfg-gated data enum: must compile without optional feature; discriminants explicit for wire stability.
+#[cfg(test)]
+mod cfg_gated_data_enum {
+    use boltffi::*;
+
+    #[data]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(i32)]
+    pub enum CfgWireEnum {
+        A = 0,
+        #[cfg(feature = "gated_variant")]
+        B = 1,
+    }
+
+    #[test]
+    fn compiles_without_gated_feature() {
+        let _ = CfgWireEnum::A;
+    }
+}

@@ -4,6 +4,10 @@ version = "0.23.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+gated_variant = []
+
 [dependencies]
 boltffi = { path = "../boltffi" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros"] }

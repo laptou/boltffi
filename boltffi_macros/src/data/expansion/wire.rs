@@ -5,6 +5,28 @@ use syn::{Fields, ItemEnum, ItemStruct, Type};
 use crate::data::analysis::StructDataShape;
 use crate::index::custom_types::{CustomTypeRegistry, contains_custom_types};
 
+fn cfg_attrs_filtered(attrs: &[syn::Attribute]) -> Vec<&syn::Attribute> {
+    attrs.iter().filter(|a| a.path().is_ident("cfg")).collect()
+}
+
+fn parse_int_expr_as_i32(expr: &syn::Expr) -> Option<i32> {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(i),
+            ..
+        }) => i.base10_parse().ok(),
+        _ => None,
+    }
+}
+
+/// wire discriminant: explicit integer literal if present, else variant index.
+fn variant_wire_discriminant_i32(variant: &syn::Variant, index_in_source: usize) -> i32 {
+    match &variant.discriminant {
+        Some((_, expr)) => parse_int_expr_as_i32(expr).unwrap_or(index_in_source as i32),
+        None => index_in_source as i32,
+    }
+}
+
 pub(super) struct StructWireExpansion<'a> {
     item_struct: &'a ItemStruct,
     custom_types: &'a CustomTypeRegistry,
@@ -22,6 +44,8 @@ struct StructWireRenderContext<'a> {
     where_clause: Option<&'a syn::WhereClause>,
     field_names: &'a [&'a syn::Ident],
     field_types: &'a [&'a Type],
+    /// per-field cfg attrs (same order as field_names)
+    field_cfg_attrs: Vec<Vec<syn::Attribute>>,
     is_blittable: bool,
 }
 
@@ -398,6 +422,19 @@ impl<'a> StructWireExpansion<'a> {
             .filter_map(|field| field.ident.as_ref())
             .collect::<Vec<_>>();
         let field_types = fields.iter().map(|field| &field.ty).collect::<Vec<_>>();
+        let field_cfg_attrs: Vec<Vec<syn::Attribute>> = fields
+            .iter()
+            .filter_map(|field| {
+                field.ident.as_ref().map(|_| {
+                    field
+                        .attrs
+                        .iter()
+                        .filter(|a| a.path().is_ident("cfg"))
+                        .cloned()
+                        .collect()
+                })
+            })
+            .collect();
         let render_context = StructWireRenderContext {
             struct_name,
             impl_generics: &impl_generics,
@@ -405,6 +442,7 @@ impl<'a> StructWireExpansion<'a> {
             where_clause,
             field_names: &field_names,
             field_types: &field_types,
+            field_cfg_attrs,
             is_blittable: StructDataShape::new(self.item_struct).is_blittable(),
         };
         let wire_encode_impl = self.render_wire_encode_impl(&render_context);
@@ -458,30 +496,46 @@ impl<'a> StructWireExpansion<'a> {
             };
         }
 
-        let all_fixed_check = render_context.field_types.iter().map(|field_type| {
-            if contains_custom_types(field_type, self.custom_types) {
+        let field_count = render_context.field_names.len();
+        let all_fixed_check = (0..field_count).map(|i| {
+            let field_type = render_context.field_types[i];
+            let cfg_attrs = &render_context.field_cfg_attrs[i];
+            let inner = if contains_custom_types(field_type, self.custom_types) {
                 let wire_type = WireTypePlan::new(field_type, self.custom_types).wire_type();
                 quote! { <#wire_type as ::boltffi::__private::wire::WireEncode>::is_fixed_size() }
             } else {
                 quote! { <#field_type as ::boltffi::__private::wire::WireEncode>::is_fixed_size() }
+            };
+            quote! {
+                #(#cfg_attrs)*
+                #inner
             }
         });
-        let fixed_size_sum = render_context.field_types.iter().map(|field_type| {
-            if contains_custom_types(field_type, self.custom_types) {
+        let fixed_size_sum = (0..field_count).map(|i| {
+            let field_type = render_context.field_types[i];
+            let cfg_attrs = &render_context.field_cfg_attrs[i];
+            let inner = if contains_custom_types(field_type, self.custom_types) {
                 let wire_type = WireTypePlan::new(field_type, self.custom_types).wire_type();
                 quote! { <#wire_type as ::boltffi::__private::wire::WireEncode>::fixed_size().unwrap_or(0) }
             } else {
                 quote! { <#field_type as ::boltffi::__private::wire::WireEncode>::fixed_size().unwrap_or(0) }
+            };
+            quote! {
+                #(#cfg_attrs)*
+                #inner
             }
         });
-        let field_wire_sizes = render_context
-            .field_names
-            .iter()
-            .zip(render_context.field_types.iter())
-            .map(|(field_name, field_type)| {
-                WireTypePlan::new(field_type, self.custom_types)
-                    .wire_size_expr(quote! { &self.#field_name })
-            });
+        let field_wire_sizes = (0..field_count).map(|i| {
+            let field_name = render_context.field_names[i];
+            let field_type = render_context.field_types[i];
+            let cfg_attrs = &render_context.field_cfg_attrs[i];
+            let inner = WireTypePlan::new(field_type, self.custom_types)
+                .wire_size_expr(quote! { &self.#field_name });
+            quote! {
+                #(#cfg_attrs)*
+                #inner
+            }
+        });
         quote! {
             fn is_fixed_size() -> bool {
                 #(#all_fixed_check)&&*
@@ -524,20 +578,20 @@ impl<'a> StructWireExpansion<'a> {
             };
         }
 
-        let encode_fields = render_context
-            .field_names
-            .iter()
-            .zip(render_context.field_types.iter())
-            .map(|(field_name, field_type)| {
-                let field_buffer =
-                    syn::Ident::new(&format!("__boltffi_buf_{}", field_name), field_name.span());
-                let encode_expr = WireTypePlan::new(field_type, self.custom_types)
-                    .encode_to_expr(quote! { &self.#field_name }, quote! { #field_buffer });
-                quote! {
-                    let #field_buffer = &mut buf[written..];
-                    written += #encode_expr;
-                }
-            });
+        let encode_fields = (0..render_context.field_names.len()).map(|i| {
+            let field_name = render_context.field_names[i];
+            let field_type = render_context.field_types[i];
+            let cfg_attrs = &render_context.field_cfg_attrs[i];
+            let field_buffer =
+                syn::Ident::new(&format!("__boltffi_buf_{}", field_name), field_name.span());
+            let encode_expr = WireTypePlan::new(field_type, self.custom_types)
+                .encode_to_expr(quote! { &self.#field_name }, quote! { #field_buffer });
+            quote! {
+                #(#cfg_attrs)*
+                let #field_buffer = &mut buf[written..];
+                written += #encode_expr;
+            }
+        });
         let struct_name = render_context.struct_name;
         let impl_generics = render_context.impl_generics;
         let ty_generics = render_context.ty_generics;
@@ -582,23 +636,23 @@ impl<'a> StructWireExpansion<'a> {
         }
 
         let struct_name_literal = render_context.struct_name.to_string();
-        let decode_fields = render_context
-            .field_names
-            .iter()
-            .zip(render_context.field_types.iter())
-            .map(|(field_name, field_type)| {
-                let decode_expr = WireTypePlan::new(field_type, self.custom_types)
-                    .decode_from_expr(quote! { &buf[position..] });
-                let field_name_literal = field_name.to_string();
-                quote! {
-                    let (#field_name, size) = #decode_expr.map_err(|error| {
-                        eprintln!("[boltffi] wire decode error in {}.{} at position {} (buf_len={}): {:?}",
-                            #struct_name_literal, #field_name_literal, position, buf.len(), error);
-                        error
-                    })?;
-                    position += size;
-                }
-            });
+        let decode_fields = (0..render_context.field_names.len()).map(|i| {
+            let field_name = render_context.field_names[i];
+            let field_type = render_context.field_types[i];
+            let cfg_attrs = &render_context.field_cfg_attrs[i];
+            let decode_expr = WireTypePlan::new(field_type, self.custom_types)
+                .decode_from_expr(quote! { &buf[position..] });
+            let field_name_literal = field_name.to_string();
+            quote! {
+                #(#cfg_attrs)*
+                let (#field_name, size) = #decode_expr.map_err(|error| {
+                    eprintln!("[boltffi] wire decode error in {}.{} at position {} (buf_len={}): {:?}",
+                        #struct_name_literal, #field_name_literal, position, buf.len(), error);
+                    error
+                })?;
+                position += size;
+            }
+        });
         let struct_name = render_context.struct_name;
         let impl_generics = render_context.impl_generics;
         let ty_generics = render_context.ty_generics;
@@ -658,8 +712,9 @@ impl<'a> EnumWireExpansion<'a> {
         let all_unit = variants.iter().all(|variant| variant.fields.is_empty());
         let wire_size_arms =
             variants.iter().map(|variant| {
+                let cfg_attrs = cfg_attrs_filtered(&variant.attrs);
                 let variant_name = &variant.ident;
-                match &variant.fields {
+                let arm = match &variant.fields {
                     Fields::Unit => quote! { Self::#variant_name => 4 },
                     Fields::Unnamed(fields) => {
                         let field_types = fields
@@ -705,6 +760,10 @@ impl<'a> EnumWireExpansion<'a> {
                             }
                         }
                     }
+                };
+                quote! {
+                    #(#cfg_attrs)*
+                    #arm
                 }
             });
 
@@ -735,12 +794,22 @@ impl<'a> EnumWireExpansion<'a> {
         where_clause: Option<&syn::WhereClause>,
         variants: &[&syn::Variant],
     ) -> TokenStream {
+        let cfg_without_explicit_discriminant = variants.iter().any(|variant| {
+            !cfg_attrs_filtered(&variant.attrs).is_empty() && variant.discriminant.is_none()
+        });
+        if cfg_without_explicit_discriminant {
+            return quote! {
+                compile_error!("cfg-gated enum variants must have explicit discriminant values for wire format stability");
+            };
+        }
+
         let wire_size_impl = self.render_wire_size_impl(variants);
         let encode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
+            let cfg_attrs = cfg_attrs_filtered(&variant.attrs);
             let variant_name = &variant.ident;
-            let discriminant_i32 = discriminant as i32;
+            let discriminant_i32 = variant_wire_discriminant_i32(variant, discriminant);
 
-            match &variant.fields {
+            let arm = match &variant.fields {
                 Fields::Unit => {
                     quote! {
                         Self::#variant_name => {
@@ -812,6 +881,10 @@ impl<'a> EnumWireExpansion<'a> {
                         }
                     }
                 }
+            };
+            quote! {
+                #(#cfg_attrs)*
+                #arm
             }
         });
 
@@ -837,10 +910,11 @@ impl<'a> EnumWireExpansion<'a> {
         variants: &[&syn::Variant],
     ) -> TokenStream {
         let decode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
+            let cfg_attrs = cfg_attrs_filtered(&variant.attrs);
             let variant_name = &variant.ident;
-            let discriminant_i32 = discriminant as i32;
+            let discriminant_i32 = variant_wire_discriminant_i32(variant, discriminant);
 
-            match &variant.fields {
+            let arm = match &variant.fields {
                 Fields::Unit => {
                     quote! {
                         #discriminant_i32 => Ok((Self::#variant_name, 4))
@@ -902,6 +976,10 @@ impl<'a> EnumWireExpansion<'a> {
                         }
                     }
                 }
+            };
+            quote! {
+                #(#cfg_attrs)*
+                #arm
             }
         });
 

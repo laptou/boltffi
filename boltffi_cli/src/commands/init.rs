@@ -104,6 +104,7 @@ fn create_default_config(package_name: &str) -> Config {
                     wrapper_sources: None,
                     skip_package_swift: false,
                 },
+                features: Vec::new(),
             },
             android: AndroidConfig {
                 enabled: true,
@@ -123,6 +124,7 @@ fn create_default_config(package_name: &str) -> Config {
                 },
                 header: HeaderConfig { output: None },
                 pack: AndroidPackConfig { output: None },
+                features: Vec::new(),
             },
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),

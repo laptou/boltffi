@@ -21,6 +21,7 @@ quote = "1.0"
 proc-macro2 = "1.0"
 walkdir = "2.4"
 indexmap = "2.7"
+cfg-expr = "0.20"
 
 [dev-dependencies]
 insta = "1.46"
