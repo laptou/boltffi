@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use syn::{
-    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, Type,
+    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, TraitItemFn,
+    Type,
 };
 use quote::ToTokens;
 use walkdir::WalkDir;
@@ -21,6 +22,7 @@ use crate::model::{
     TraitMethodParam, Type as MType, Variant,
 };
 
+mod boxed_future;
 mod compiler_type_resolution;
 mod cfg_context;
 
@@ -1409,10 +1411,19 @@ impl SourceScanner {
         Ok(())
     }
 
-    fn build_trait_method(&self, method: &syn::TraitItemFn) -> Result<TraitMethod, String> {
+    fn build_trait_method(&self, method: &TraitItemFn) -> Result<TraitMethod, String> {
         let sig = &method.sig;
         let params = self.resolve_typed_params(&sig.inputs, None)?;
-        let output = self.resolve_output(&sig.output, None)?;
+        let output = if let Some(inner_ty) =
+            boxed_future::boxed_future_inner_output_ty(&sig.output)
+        {
+            let rt: syn::ReturnType = syn::parse_quote! { -> #inner_ty };
+            self.resolve_output(&rt, None)?
+        } else {
+            self.resolve_output(&sig.output, None)?
+        };
+        let is_async =
+            sig.asyncness.is_some() || boxed_future::trait_method_returns_boxed_future(method);
 
         Ok(
             params
@@ -1422,7 +1433,7 @@ impl SourceScanner {
                 })
                 .maybe_doc(extract_doc_string(&method.attrs))
                 .maybe_return(output.map(ReturnType::from_output))
-                .maybe_async(sig.asyncness.is_some()),
+                .maybe_async(is_async),
         )
     }
 
