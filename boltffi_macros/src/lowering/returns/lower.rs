@@ -6,7 +6,7 @@ use syn::Type;
 use crate::exports::common::wire_encode_err_to_err_out_buffers;
 use crate::index::custom_types::{self, CustomTypeRegistry};
 
-use super::classify::ReturnTypeDescriptor;
+use super::classify::{ReturnTypeDescriptor, option_inner_type};
 use boltffi_ffi_rules::transport::ErrorReturnStrategy;
 
 use super::model::{
@@ -71,7 +71,9 @@ impl ResolvedReturn {
                     };
                 }
             }
-            ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => quote! {
+            ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
+            | ValueReturnStrategy::CallbackHandle => quote! {
                 return ::core::default::Default::default();
             },
         }
@@ -89,6 +91,11 @@ impl ResolvedReturn {
                 quote! { <#rust_type as ::boltffi::__private::Passable>::Out }
             }
             ValueReturnStrategy::Buffer(_) => quote! { ::boltffi::__private::FfiBuf },
+            ValueReturnStrategy::NullableObjectHandle => {
+                let inner = option_inner_type(rust_type)
+                    .expect("NullableObjectHandle return must be Option<ExportedClass>");
+                quote! { <#inner as ::boltffi::__private::Passable>::Out }
+            }
             ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                 if self.error_strategy() == ErrorReturnStrategy::Encoded {
                     let ok_ty = self
@@ -141,6 +148,17 @@ impl ResolvedReturn {
                     #encode_expression
                 }
             }
+            ValueReturnStrategy::NullableObjectHandle => {
+                let _ = option_inner_type(self.rust_type())
+                    .expect("NullableObjectHandle return must be Option<ExportedClass>");
+                quote! {
+                    if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
+                    match result {
+                        Some(value) => ::boltffi::__private::Passable::pack(value),
+                        None => ::core::ptr::null_mut(),
+                    }
+                }
+            }
             ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => {
                 if self.error_strategy() == ErrorReturnStrategy::Encoded {
                     let _ = self
@@ -191,6 +209,7 @@ impl ResolvedReturn {
             ValueReturnStrategy::Scalar(_)
             | ValueReturnStrategy::CompositeValue
             | ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::NullableObjectHandle
             | ValueReturnStrategy::CallbackHandle => quote! { Default::default() },
             ValueReturnStrategy::Buffer(_) => quote! { ::boltffi::__private::FfiBuf::default() },
         }

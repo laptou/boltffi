@@ -585,6 +585,24 @@ impl<'a> ValueParamDecoder<'a> {
         acc.call_args.push(quote! { #name });
     }
 
+    /// nullable exported-class param: ffi `*mut T`, rust `Option<T>` (null → `None`).
+    fn lower_sync_exported_class_option_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        inner_type: &syn::Type,
+    ) {
+        acc.ffi_params.push(quote! { #name: *mut #inner_type });
+        acc.setup.push(quote! {
+            let #name: Option<#inner_type> = if #name.is_null() {
+                None
+            } else {
+                Some(unsafe { <#inner_type as ::boltffi::__private::Passable>::unpack(#name) })
+            };
+        });
+        acc.call_args.push(quote! { #name });
+    }
+
     fn lower_async_passable_param(
         &self,
         acc: &mut ParamLoweringState,
@@ -595,6 +613,24 @@ impl<'a> ValueParamDecoder<'a> {
             .push(quote! { #name: <#rust_type as ::boltffi::__private::Passable>::In });
         acc.setup.push(quote! {
             let #name: #rust_type = unsafe { <#rust_type as ::boltffi::__private::Passable>::unpack(#name) };
+        });
+        acc.move_vars.push(name.clone());
+        acc.call_args.push(quote! { #name });
+    }
+
+    fn lower_async_exported_class_option_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        inner_type: &syn::Type,
+    ) {
+        acc.ffi_params.push(quote! { #name: *mut #inner_type });
+        acc.setup.push(quote! {
+            let #name: Option<#inner_type> = if #name.is_null() {
+                None
+            } else {
+                Some(unsafe { <#inner_type as ::boltffi::__private::Passable>::unpack(#name) })
+            };
         });
         acc.move_vars.push(name.clone());
         acc.call_args.push(quote! { #name });
@@ -682,6 +718,9 @@ impl<'a> SyncValueParamLowerer<'a> {
             ParamTransform::ExportedClass(rust_type) => self
                 .decoder
                 .lower_sync_passable_param(acc, name, &rust_type),
+            ParamTransform::ExportedClassOption(inner_type) => self
+                .decoder
+                .lower_sync_exported_class_option_param(acc, name, &inner_type),
             ParamTransform::PassThrough => {
                 self.decoder
                     .lower_sync_pass_through_param(acc, name, original_type)
@@ -754,6 +793,9 @@ impl<'a> AsyncValueParamLowerer<'a> {
             ParamTransform::ExportedClass(rust_type) => self
                 .decoder
                 .lower_async_passable_param(acc, name, &rust_type),
+            ParamTransform::ExportedClassOption(inner_type) => self
+                .decoder
+                .lower_async_exported_class_option_param(acc, name, &inner_type),
             ParamTransform::PassThrough => {
                 self.decoder
                     .lower_async_pass_through_param(acc, name, original_type)

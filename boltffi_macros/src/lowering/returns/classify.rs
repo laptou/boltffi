@@ -76,6 +76,11 @@ pub fn classify_value_return_strategy(
         RustTypeShape::StandardContainer(StandardContainer::Option(inner_type)) => {
             if ReturnTypeDescriptor::parse(inner_type).is_primitive() {
                 Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar))
+            } else if return_lowering
+                .exported_classes()
+                .is_exported_class_type(inner_type)
+            {
+                Ok(ValueReturnStrategy::NullableObjectHandle)
             } else {
                 Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
             }
@@ -115,5 +120,14 @@ pub fn classify_value_return_strategy(
                 }
             }
         }
+    }
+}
+
+/// inner `T` for `Option<T>` (used for nullable exported-class params/returns).
+pub(crate) fn option_inner_type(ty: &Type) -> Option<Type> {
+    use crate::lowering::transport::{StandardContainer, TypeDescriptor};
+    match TypeDescriptor::new(ty).standard_container() {
+        Some(StandardContainer::Option(inner)) => Some(inner.clone()),
+        _ => None,
     }
 }

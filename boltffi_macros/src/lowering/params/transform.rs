@@ -47,6 +47,8 @@ pub(super) enum ParamTransform {
     Passable(syn::Type),
     /// `#[export] impl` type — same ABI as `Passable` for the Rust type.
     ExportedClass(syn::Type),
+    /// `Option<exported class>` — nullable `*mut T` (null means `None`).
+    ExportedClassOption(syn::Type),
 }
 
 pub(super) struct ClassifiedParamTransform {
@@ -257,8 +259,19 @@ impl<'a> ParamTransformClassifier<'a> {
                             ),
                             transform,
                         }
+                    } else if matches!(
+                        self.named_type_transport_classifier
+                            .classify_named_type_transport(&inner_ty),
+                        NamedTypeTransport::ExportedClass
+                    ) {
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::ObjectHandle { nullable: true },
+                                Self::passing_strategy(ty),
+                            ),
+                            transform: ParamTransform::ExportedClassOption(inner_ty.clone()),
+                        }
                     } else {
-                        let _ = inner_ty;
                         ClassifiedParamTransform {
                             contract: ParamContract::new(
                                 ParamValueStrategy::WireEncoded(WireParamStrategy::Option),

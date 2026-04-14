@@ -252,6 +252,7 @@ impl<'a> AsyncParamLowerer<'a> {
             | ParamTransform::WireEncoded(_)
             | ParamTransform::Passable(_)
             | ParamTransform::ExportedClass(_)
+            | ParamTransform::ExportedClassOption(_)
             | ParamTransform::ImplTrait(_)
             | ParamTransform::PassThrough => None,
         }
@@ -357,6 +358,7 @@ fn param_transform_name(param_transform: &ParamTransform) -> &'static str {
         ParamTransform::WireEncoded(_) => "WireEncoded",
         ParamTransform::Passable(_) => "Passable",
         ParamTransform::ExportedClass(_) => "ExportedClass",
+        ParamTransform::ExportedClassOption(_) => "ExportedClassOption",
     }
 }
 
