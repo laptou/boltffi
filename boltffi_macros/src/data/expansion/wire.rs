@@ -794,15 +794,6 @@ impl<'a> EnumWireExpansion<'a> {
         where_clause: Option<&syn::WhereClause>,
         variants: &[&syn::Variant],
     ) -> TokenStream {
-        let cfg_without_explicit_discriminant = variants.iter().any(|variant| {
-            !cfg_attrs_filtered(&variant.attrs).is_empty() && variant.discriminant.is_none()
-        });
-        if cfg_without_explicit_discriminant {
-            return quote! {
-                compile_error!("cfg-gated enum variants must have explicit discriminant values for wire format stability");
-            };
-        }
-
         let wire_size_impl = self.render_wire_size_impl(variants);
         let encode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
             let cfg_attrs = cfg_attrs_filtered(&variant.attrs);

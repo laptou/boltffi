@@ -1263,96 +1263,100 @@ impl SourceScanner {
         let repr_type = extract_repr_int(&item_enum.attrs);
         let mut next_discriminant: i128 = 0;
 
-        let variants = item_enum
-            .variants
-            .iter()
-            .filter(|v| self.cfg_context.is_active(&v.attrs))
-            .map(|v| -> Result<Variant, String> {
-                let variant_name = v.ident.to_string();
-                let discriminant = match v.discriminant.as_ref() {
-                    Some((_, expr)) => parse_discriminant_expr(
-                        expr,
-                        &self.integer_constants,
-                        file_module_path,
-                        self.target_pointer_width_bits,
-                    )
-                    .ok_or_else(|| {
-                        format!(
-                            "failed to evaluate discriminant for enum `{}` variant `{}`",
-                            name, variant_name
-                        )
-                    })?,
-                    None => next_discriminant,
-                };
-                next_discriminant = discriminant.checked_add(1).ok_or_else(|| {
+        // advance `next_discriminant` for every variant in source order (including cfg-filtered),
+        // so wire tags match the proc macro's enumerate-based fallback in wire.rs.
+        let mut variants = Vec::new();
+        for v in &item_enum.variants {
+            let variant_name = v.ident.to_string();
+            let discriminant = match v.discriminant.as_ref() {
+                Some((_, expr)) => parse_discriminant_expr(
+                    expr,
+                    &self.integer_constants,
+                    file_module_path,
+                    self.target_pointer_width_bits,
+                )
+                .ok_or_else(|| {
                     format!(
-                        "discriminant overflow for enum `{}` variant `{}`",
+                        "failed to evaluate discriminant for enum `{}` variant `{}`",
                         name, variant_name
                     )
-                })?;
+                })?,
+                None => next_discriminant,
+            };
+            next_discriminant = discriminant.checked_add(1).ok_or_else(|| {
+                format!(
+                    "discriminant overflow for enum `{}` variant `{}`",
+                    name, variant_name
+                )
+            })?;
 
-                let fields: Vec<RecordField> = match &v.fields {
-                    Fields::Named(named) => {
-                        let mut fields = Vec::new();
-                        for f in &named.named {
-                            let field_name = f.ident.as_ref().ok_or_else(|| {
-                                format!(
-                                    "boltffi bindgen: tuple field in enum `{name}` variant `{variant_name}` is not supported"
-                                )
-                            })?;
-                            let field_name = field_name.to_string();
-                            let field_type = rust_type_to_ffi_type(
-                                &f.ty,
-                                &self.type_registry,
-                                &self.alias_resolver,
-                                &self.compiler_canonical_types,
-                                None,
-                            )
-                            .ok_or_else(|| {
-                                format!(
-                                    "boltffi bindgen: unresolved type `{}` for field `{field_name}` in enum `{name}` variant `{variant_name}`",
-                                    format_syn_type(&f.ty),
-                                )
-                            })?;
-                            let mut record_field = RecordField::new(&field_name, field_type);
-                            if let Some(doc) = extract_doc_string(&f.attrs) {
-                                record_field = record_field.with_doc(doc);
-                            }
-                            fields.push(record_field);
-                        }
-                        fields
-                    }
-                    Fields::Unnamed(unnamed) => {
-                        let mut fields = Vec::new();
-                        for (i, f) in unnamed.unnamed.iter().enumerate() {
-                            let field_type = rust_type_to_ffi_type(
-                                &f.ty,
-                                &self.type_registry,
-                                &self.alias_resolver,
-                                &self.compiler_canonical_types,
-                                None,
-                            )
-                            .ok_or_else(|| {
-                                format!(
-                                    "boltffi bindgen: unresolved type `{}` for tuple field `{i}` in enum `{name}` variant `{variant_name}`",
-                                    format_syn_type(&f.ty),
-                                )
-                            })?;
-                            fields.push(RecordField::new(format!("value_{i}"), field_type));
-                        }
-                        fields
-                    }
-                    Fields::Unit => Vec::new(),
-                };
+            if !self.cfg_context.is_active(&v.attrs) {
+                continue;
+            }
 
-                let variant = Variant::new(&variant_name)
-                    .with_discriminant(discriminant)
-                    .maybe_doc(extract_doc_string(&v.attrs));
-                Ok(fields
+            let fields: Vec<RecordField> = match &v.fields {
+                Fields::Named(named) => {
+                    let mut fields = Vec::new();
+                    for f in &named.named {
+                        let field_name = f.ident.as_ref().ok_or_else(|| {
+                            format!(
+                                "boltffi bindgen: tuple field in enum `{name}` variant `{variant_name}` is not supported"
+                            )
+                        })?;
+                        let field_name = field_name.to_string();
+                        let field_type = rust_type_to_ffi_type(
+                            &f.ty,
+                            &self.type_registry,
+                            &self.alias_resolver,
+                            &self.compiler_canonical_types,
+                            None,
+                        )
+                        .ok_or_else(|| {
+                            format!(
+                                "boltffi bindgen: unresolved type `{}` for field `{field_name}` in enum `{name}` variant `{variant_name}`",
+                                format_syn_type(&f.ty),
+                            )
+                        })?;
+                        let mut record_field = RecordField::new(&field_name, field_type);
+                        if let Some(doc) = extract_doc_string(&f.attrs) {
+                            record_field = record_field.with_doc(doc);
+                        }
+                        fields.push(record_field);
+                    }
+                    fields
+                }
+                Fields::Unnamed(unnamed) => {
+                    let mut fields = Vec::new();
+                    for (i, f) in unnamed.unnamed.iter().enumerate() {
+                        let field_type = rust_type_to_ffi_type(
+                            &f.ty,
+                            &self.type_registry,
+                            &self.alias_resolver,
+                            &self.compiler_canonical_types,
+                            None,
+                        )
+                        .ok_or_else(|| {
+                            format!(
+                                "boltffi bindgen: unresolved type `{}` for tuple field `{i}` in enum `{name}` variant `{variant_name}`",
+                                format_syn_type(&f.ty),
+                            )
+                        })?;
+                        fields.push(RecordField::new(format!("value_{i}"), field_type));
+                    }
+                    fields
+                }
+                Fields::Unit => Vec::new(),
+            };
+
+            let variant = Variant::new(&variant_name)
+                .with_discriminant(discriminant)
+                .maybe_doc(extract_doc_string(&v.attrs));
+            variants.push(
+                fields
                     .into_iter()
-                    .fold(variant, |v, field| v.with_field(field)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    .fold(variant, |v, field| v.with_field(field)),
+            );
+        }
 
         self.type_registry.fill(
             &name,
@@ -3592,6 +3596,31 @@ mod tests {
         let enumeration = module.find_enum("GatedEnum").expect("GatedEnum");
         assert_eq!(enumeration.variants.len(), 1);
         assert_eq!(enumeration.variants[0].name, "A");
+    }
+
+    #[test]
+    fn cfg_filtered_variant_preserves_discriminant_gaps() {
+        let source = r#"
+            #[boltffi::data]
+            pub enum GatedEnum {
+                A,
+                #[cfg(feature = "gated_variant")]
+                B(String),
+                C,
+            }
+        "#;
+        let cfg = CfgContext {
+            features: HashSet::new(),
+            target_arch: Some("wasm32".to_string()),
+            scan_all: false,
+        };
+        let module = scan_temp_crate_with_config(source, Some(32), cfg);
+        let enumeration = module.find_enum("GatedEnum").expect("GatedEnum");
+        assert_eq!(enumeration.variants.len(), 2);
+        assert_eq!(enumeration.variants[0].name, "A");
+        assert_eq!(enumeration.variants[0].discriminant, Some(0));
+        assert_eq!(enumeration.variants[1].name, "C");
+        assert_eq!(enumeration.variants[1].discriminant, Some(2));
     }
 
     #[test]
