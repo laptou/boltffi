@@ -21,6 +21,7 @@ use crate::exports::extern_export::{
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::CrateIndex;
 use crate::lowering::params::{FfiParams, transform_method_params, transform_method_params_async};
+use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
     normalize_return_type_for_self, ResolvedReturn, ReturnInvocationContext,
@@ -927,6 +928,31 @@ fn generate_sync_method_export(
             custom_types,
         );
         (body, quote! { -> ::boltffi::__private::FfiBuf }, true)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::NullableObjectHandle
+    ) {
+        let inner_ty = option_inner_type(return_abi.rust_type())
+            .expect("NullableObjectHandle return must be Option<ExportedClass>");
+        let body = if has_conversions {
+            quote! {
+                #(#conversions)*
+                let __result = #call_expr;
+                match __result {
+                    Some(value) => ::boltffi::__private::Passable::pack(value),
+                    None => ::core::ptr::null_mut(),
+                }
+            }
+        } else {
+            quote! {
+                match #call_expr {
+                    Some(value) => ::boltffi::__private::Passable::pack(value),
+                    None => ::core::ptr::null_mut(),
+                }
+            }
+        };
+        let return_type = quote! { -> <#inner_ty as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
     } else if return_abi.is_passable_value() {
         let rust_type = return_abi.rust_type();
         let body = if has_conversions {
@@ -1251,6 +1277,31 @@ fn generate_static_method_export(
             custom_types,
         );
         (body, quote! { -> ::boltffi::__private::FfiBuf }, true)
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::NullableObjectHandle
+    ) {
+        let inner_ty = option_inner_type(return_abi.rust_type())
+            .expect("NullableObjectHandle return must be Option<ExportedClass>");
+        let body = if has_conversions {
+            quote! {
+                #(#conversions)*
+                let __result = #call_expr;
+                match __result {
+                    Some(value) => ::boltffi::__private::Passable::pack(value),
+                    None => ::core::ptr::null_mut(),
+                }
+            }
+        } else {
+            quote! {
+                match #call_expr {
+                    Some(value) => ::boltffi::__private::Passable::pack(value),
+                    None => ::core::ptr::null_mut(),
+                }
+            }
+        };
+        let return_type = quote! { -> <#inner_ty as ::boltffi::__private::Passable>::Out };
+        (body, return_type, false)
     } else if return_abi.is_passable_value() {
         let rust_type = return_abi.rust_type();
         let body = if has_conversions {

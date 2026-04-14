@@ -169,6 +169,25 @@ pub(crate) fn wasm_complete_export_for_async(
         }
     } else if matches!(
         return_abi.value_return_strategy(),
+        ValueReturnStrategy::NullableObjectHandle
+    ) {
+        let inner_ty = crate::lowering::returns::classify::option_inner_type(return_abi.rust_type())
+            .expect("NullableObjectHandle async return must be Option<ExportedClass>");
+        AsyncWasmCompleteExport {
+            params: quote! { handle: ::boltffi::__private::RustFutureHandle },
+            return_type: quote! { -> <#inner_ty as ::boltffi::__private::Passable>::Out },
+            body: quote! {
+                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                    Some(maybe) => match maybe {
+                        Some(value) => ::boltffi::__private::Passable::pack(value),
+                        None => ::core::ptr::null_mut(),
+                    },
+                    None => ::core::default::Default::default(),
+                }
+            },
+        }
+    } else if matches!(
+        return_abi.value_return_strategy(),
         ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle
     ) {
         let rust_type = return_abi.rust_type();

@@ -19,6 +19,7 @@ use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::{CrateIndex, custom_types};
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
 use crate::lowering::returns::lower::encoded_return_body;
+use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::model::{
     ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
     ValueReturnStrategy, WasmOptionScalarEncoding,
@@ -525,6 +526,45 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
             encode_body,
         )
         .into()
+    } else if matches!(
+        return_abi.value_return_strategy(),
+        ValueReturnStrategy::NullableObjectHandle
+    ) {
+        let inner_ty = option_inner_type(return_abi.rust_type())
+            .expect("NullableObjectHandle return must be Option<ExportedClass>");
+        let body = quote! {
+            #(#conversions)*
+            let __result = #fn_name(#(#call_args),*);
+            match __result {
+                Some(value) => ::boltffi::__private::Passable::pack(value),
+                None => ::core::ptr::null_mut(),
+            }
+        };
+        let return_type = quote! { -> <#inner_ty as ::boltffi::__private::Passable>::Out };
+
+        if has_params {
+            quote! {
+                #input
+
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #export_ident(
+                    #(#ffi_params),*
+                ) #return_type {
+                    #body
+                }
+            }
+        } else {
+            quote! {
+            #input
+
+            #[allow(clippy::not_unsafe_ptr_arg_deref)]
+            #[unsafe(no_mangle)]
+            #fn_vis extern "C" fn #export_ident() #return_type {
+                #body
+            }
+            }
+        }
     } else if return_abi.is_passable_value() {
         let rust_type = return_abi.rust_type();
         let body = quote! {
