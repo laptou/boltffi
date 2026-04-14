@@ -1,7 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use syn::spanned::Spanned;
 use syn::{FnArg, Pat, ReturnType};
 
+use super::future;
 use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
@@ -42,6 +44,8 @@ impl<'a> WasmCallbackMethodExpander<'a> {
     pub(super) fn expand(&self) -> Result<WasmMethodExpansion, syn::Error> {
         if self.method.sig.asyncness.is_some() {
             self.expand_async()
+        } else if future::trait_method_returns_boxed_future(self.method) {
+            self.expand_future_boxed()
         } else {
             self.expand_sync()
         }
@@ -228,6 +232,96 @@ impl<'a> WasmCallbackMethodExpander<'a> {
             impl_body: quote! {
                 async fn #method_name(&self, #(#param_names,)*) #output_type {
                     #impl_body
+                }
+            },
+            complete_export: Some(complete_export),
+        })
+    }
+
+    /// `fn -> Box<dyn Future<Output = T>>` — same wasm imports as `async fn -> T`, body wrapped in `Box::new(async move { ... })`.
+    fn expand_future_boxed(&self) -> Result<WasmMethodExpansion, syn::Error> {
+        let method_name = &self.method.sig.ident;
+        let method_name_snake = self.method_name_snake();
+        let start_import_name = format_ident!(
+            "__boltffi_callback_{}_{}_start",
+            self.trait_name_snake,
+            method_name_snake
+        );
+        let complete_export_name = format_ident!(
+            "boltffi_callback_{}_{}_complete",
+            self.trait_name_snake,
+            method_name_snake
+        );
+        let lowered_params = self.lowered_params();
+        let ffi_param_types = &lowered_params.ffi_param_types;
+        let param_names = &lowered_params.param_names;
+        let call_args = &lowered_params.call_args;
+        let prelude_stmts = &lowered_params.prelude_stmts;
+        let inner = future::future_method_inner_output(self.method).ok_or_else(|| {
+            syn::Error::new(
+                self.method.sig.output.span(),
+                "boltffi: boxed future return must be Box<dyn Future<Output = T>> (or Pin<Box<...>>)",
+            )
+        })?;
+
+        let extern_import = quote! {
+            fn #start_import_name(handle: u32, request_id: u32, #(#ffi_param_types),*);
+        };
+
+        let complete_export = quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #complete_export_name(
+                request_id: u32,
+                completion_code: i32,
+                data_ptr: u32,
+                data_len: u32,
+                data_cap: u32,
+            ) -> i32 {
+                ::boltffi::__private::AsyncCallbackRegistry::current().complete_from_ffi(
+                    request_id,
+                    completion_code,
+                    data_ptr,
+                    data_len,
+                    data_cap,
+                )
+            }
+        };
+
+        let output_full = &self.method.sig.output;
+        let poll_arg = if future::is_unit_future_output(inner) {
+            None
+        } else {
+            Some(inner)
+        };
+        let poll_body = self.async_poll_body(poll_arg);
+        let receiver_cb = format_ident!("__boltffi_cb");
+
+        let impl_body = quote! {
+            let callback_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
+            let request_id = callback_registry.allocate();
+            let _guard = ::boltffi::__private::AsyncCallbackRequestGuard::new(request_id);
+            {
+                #(#prelude_stmts)*
+                unsafe {
+                    #start_import_name(
+                        (#receiver_cb).handle,
+                        request_id.as_u32(),
+                        #(#call_args),*
+                    );
+                }
+            }
+            #poll_body
+        };
+
+        Ok(WasmMethodExpansion {
+            extern_import,
+            impl_body: quote! {
+                fn #method_name(&self, #(#param_names,)*) #output_full {
+                    let #receiver_cb = self.clone();
+                    Box::pin(async move {
+                        #impl_body
+                    })
                 }
             },
             complete_export: Some(complete_export),

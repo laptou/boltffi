@@ -3,6 +3,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::Type;
 
+pub(crate) mod future;
 mod local_handle;
 mod lowered_return;
 mod native;
@@ -121,12 +122,25 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         quote! { pub clone: extern "C" fn(handle: u64) -> u64 },
     ];
 
-    let has_async_methods = item_trait
-        .items
-        .iter()
-        .any(|item| matches!(item, syn::TraitItem::Fn(method) if method.sig.asyncness.is_some()));
+    let has_async_methods = item_trait.items.iter().any(|item| {
+        matches!(
+            item,
+            syn::TraitItem::Fn(method)
+                if method.sig.asyncness.is_some()
+                    || self::future::trait_method_returns_boxed_future(method)
+        )
+    });
 
-    let is_object_safe = !has_async_methods || has_async_trait_attr;
+    // `async fn` without `#[async_trait]` is not dyn-safe; boxed future returns are dyn-safe.
+    let has_dyn_unsafe_async = item_trait.items.iter().any(|item| {
+        matches!(
+            item,
+            syn::TraitItem::Fn(method)
+                if method.sig.asyncness.is_some() && !has_async_trait_attr
+        )
+    });
+
+    let is_object_safe = !has_dyn_unsafe_async || has_async_trait_attr;
 
     let foreign_impls = item_trait
         .items
@@ -137,7 +151,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         })
         .map(|method| {
             NativeCallbackMethodExpander::new(method, &custom_types, &return_lowering)
-                .expand(&mut vtable_fields)
+                .expand(&mut vtable_fields, &foreign_name)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

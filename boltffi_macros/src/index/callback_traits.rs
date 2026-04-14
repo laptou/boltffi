@@ -1,6 +1,7 @@
 use boltffi_ffi_rules::naming;
 use syn::{Item, ItemMod, ItemTrait};
 
+use crate::callbacks::trait_export::future;
 use crate::index::{ModulePath, SourceModule};
 
 #[derive(Clone, Default)]
@@ -95,7 +96,7 @@ impl<'a> CallbackTraitCollector<'a> {
             module_path: self.module_path.clone(),
             trait_name: item_trait.ident.to_string(),
             is_object_safe: trait_descriptor.is_object_safe(),
-            has_async_methods: trait_descriptor.has_async_methods(),
+            has_async_methods: trait_descriptor.needs_async_runtime(),
         };
         self.entries.push(entry);
         Ok(())
@@ -129,13 +130,28 @@ impl<'a> CallbackTraitDescriptor<'a> {
         })
     }
 
-    fn has_async_methods(&self) -> bool {
+    /// `async fn` methods only (used for dyn-safety; boxed-future returns are still object-safe).
+    fn has_async_fn_methods(&self) -> bool {
         self.item_trait.items.iter().any(|item| {
             matches!(
                 item,
                 syn::TraitItem::Fn(method) if method.sig.asyncness.is_some()
             )
         })
+    }
+
+    fn has_future_return_methods(&self) -> bool {
+        self.item_trait.items.iter().any(|item| {
+            matches!(
+                item,
+                syn::TraitItem::Fn(method) if future::trait_method_returns_boxed_future(method)
+            )
+        })
+    }
+
+    /// async fn or boxed-future return — needs async completion path; disables local handle.
+    fn needs_async_runtime(&self) -> bool {
+        self.has_async_fn_methods() || self.has_future_return_methods()
     }
 
     fn has_async_trait_attr(&self) -> bool {
@@ -148,7 +164,7 @@ impl<'a> CallbackTraitDescriptor<'a> {
     }
 
     fn is_object_safe(&self) -> bool {
-        !self.has_async_methods() || self.has_async_trait_attr()
+        !self.has_async_fn_methods() || self.has_async_trait_attr()
     }
 }
 

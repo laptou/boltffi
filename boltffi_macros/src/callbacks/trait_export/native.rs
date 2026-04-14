@@ -1,7 +1,9 @@
 use boltffi_ffi_rules::transport::{ReturnInvocationContext, ReturnPlatform, ValueReturnMethod};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
+use syn::spanned::Spanned;
 
+use super::future;
 use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
@@ -30,12 +32,112 @@ impl<'a> NativeCallbackMethodExpander<'a> {
     pub(super) fn expand(
         &self,
         vtable_fields: &mut Vec<TokenStream>,
+        foreign_name: &syn::Ident,
     ) -> Result<TokenStream, syn::Error> {
         if self.method.sig.asyncness.is_some() {
             self.expand_async(vtable_fields)
+        } else if future::trait_method_returns_boxed_future(self.method) {
+            self.expand_future_boxed(vtable_fields, foreign_name)
         } else {
             self.expand_sync(vtable_fields)
         }
+    }
+
+    /// `fn -> Box<dyn Future<Output = T>>` — same native vtable as `async fn -> T`, wrapped in `Box::new(async move { ... })`.
+    fn expand_future_boxed(
+        &self,
+        vtable_fields: &mut Vec<TokenStream>,
+        foreign_name: &syn::Ident,
+    ) -> Result<TokenStream, syn::Error> {
+        let method_name = &self.method.sig.ident;
+        let method_name_snake = self.method_name_snake();
+        let lowered_params = self.lowered_params();
+        let ffi_param_types = &lowered_params.ffi_param_types;
+        let param_names = &lowered_params.param_names;
+        let call_args = &lowered_params.call_args;
+        let prelude_stmts = &lowered_params.prelude_stmts;
+        let inner = future::future_method_inner_output(self.method).ok_or_else(|| {
+            syn::Error::new(
+                self.method.sig.output.span(),
+                "boltffi: boxed future return must be Box<dyn Future<Output = T>> (or Pin<Box<...>>)",
+            )
+        })?;
+        let is_void_output = future::is_unit_future_output(inner);
+        let lowered_return = if is_void_output {
+            None
+        } else {
+            Some(LoweredCallbackReturn::new(inner, self.return_lowering)?)
+        };
+        let async_wire_return = lowered_return
+            .as_ref()
+            .is_some_and(LoweredCallbackReturn::uses_wire_payload);
+
+        let callback_type = if is_void_output {
+            quote! { extern "C" fn(callback_data: u64, status: ::boltffi::__private::FfiStatus) }
+        } else if async_wire_return {
+            quote! {
+                extern "C" fn(
+                    callback_data: u64,
+                    result_ptr: *const u8,
+                    result_len: usize,
+                    status: ::boltffi::__private::FfiStatus
+                )
+            }
+        } else {
+            let ffi_return_type = CallbackReturnType::new(inner).ffi_type();
+            quote! {
+                extern "C" fn(
+                    callback_data: u64,
+                    result: #ffi_return_type,
+                    status: ::boltffi::__private::FfiStatus
+                )
+            }
+        };
+
+        vtable_fields.push(quote! {
+            pub #method_name_snake: extern "C" fn(
+                handle: u64,
+                #(#ffi_param_types,)*
+                callback: #callback_type,
+                callback_data: u64
+            )
+        });
+
+        let output_full = &self.method.sig.output;
+        let receiver_cb = format_ident!("__boltffi_cb");
+        let recv = quote! { #receiver_cb };
+        let impl_inner = if future::is_unit_future_output(inner) {
+            self.async_void_impl_body(
+                &method_name_snake,
+                call_args,
+                prelude_stmts,
+                &recv,
+            )
+        } else {
+            self.async_returning_impl_body(
+                inner,
+                async_wire_return,
+                &method_name_snake,
+                call_args,
+                prelude_stmts,
+                &recv,
+            )
+        };
+
+        Ok(quote! {
+            fn #method_name(&self, #(#param_names,)*) #output_full {
+                // vtable as usize so the boxed future's async block is send (rustc send check on *const vtable)
+                let __boltffi_vtable_addr = self.vtable as usize;
+                let __boltffi_handle = self.handle;
+                Box::pin(async move {
+                    let #receiver_cb = #foreign_name {
+                        vtable: __boltffi_vtable_addr as *const _,
+                        handle: __boltffi_handle,
+                    };
+                    #impl_inner
+                })
+            }
+        })
     }
 
     fn expand_async(
@@ -92,6 +194,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         });
 
         let output_type = return_type.map(|ty| quote! { -> #ty }).unwrap_or_default();
+        let recv_self = quote! { self };
         let impl_body = match return_type {
             Some(return_type) => self.async_returning_impl_body(
                 return_type,
@@ -99,8 +202,14 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 &method_name_snake,
                 call_args,
                 prelude_stmts,
+                &recv_self,
             ),
-            None => self.async_void_impl_body(&method_name_snake, call_args, prelude_stmts),
+            None => self.async_void_impl_body(
+                &method_name_snake,
+                call_args,
+                prelude_stmts,
+                &recv_self,
+            ),
         };
 
         Ok(quote! {
@@ -179,6 +288,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         method_name_snake: &syn::Ident,
         call_args: &[TokenStream],
         prelude_stmts: &[TokenStream],
+        receiver: &TokenStream,
     ) -> TokenStream {
         let error_expr = CallbackReturnType::new(return_type)
             .result_types()
@@ -352,8 +462,8 @@ impl<'a> NativeCallbackMethodExpander<'a> {
             {
                 #(#prelude_stmts)*
                 unsafe {
-                    ((*self.vtable).#method_name_snake)(
-                        self.handle,
+                    ((* (#receiver).vtable).#method_name_snake)(
+                        (#receiver).handle,
                         #(#call_args,)*
                         callback,
                         ctx_ptr
@@ -370,6 +480,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         method_name_snake: &syn::Ident,
         call_args: &[TokenStream],
         prelude_stmts: &[TokenStream],
+        receiver: &TokenStream,
     ) -> TokenStream {
         quote! {
             use std::sync::{Arc, Mutex};
@@ -416,8 +527,8 @@ impl<'a> NativeCallbackMethodExpander<'a> {
             {
                 #(#prelude_stmts)*
                 unsafe {
-                    ((*self.vtable).#method_name_snake)(
-                        self.handle,
+                    ((* (#receiver).vtable).#method_name_snake)(
+                        (#receiver).handle,
                         #(#call_args,)*
                         callback,
                         ctx_ptr
