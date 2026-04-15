@@ -506,7 +506,11 @@ impl SourceScanner {
         self.global_aliases = Self::collect_global_aliases(&files)?;
         self.integer_constants =
             collect_integer_constants_from_files(dir, &files, self.target_pointer_width_bits)?;
-        let compiler_targets = Self::collect_compiler_type_targets(&files, &self.global_aliases)?;
+        let compiler_targets = Self::collect_compiler_type_targets(
+            &files,
+            &self.global_aliases,
+            &self.cfg_context,
+        )?;
         self.compiler_canonical_types =
             compiler_type_resolution::resolve(crate_path, &self.module_name, compiler_targets)?;
         files
@@ -522,6 +526,7 @@ impl SourceScanner {
     fn collect_compiler_type_targets(
         files: &[std::path::PathBuf],
         global_aliases: &HashMap<String, Vec<String>>,
+        cfg_context: &CfgContext,
     ) -> Result<Vec<String>, String> {
         let mut targets = Vec::<String>::new();
         let mut seen = HashSet::<String>::new();
@@ -536,7 +541,13 @@ impl SourceScanner {
             let alias_resolver =
                 AliasResolver::from_items(&syntax.items).with_global(global_aliases);
             syntax.items.iter().for_each(|item| {
-                Self::collect_item_type_targets(item, &alias_resolver, &mut targets, &mut seen)
+                Self::collect_item_type_targets(
+                    item,
+                    &alias_resolver,
+                    &mut targets,
+                    &mut seen,
+                    cfg_context,
+                )
             });
 
             Ok::<(), String>(())
@@ -550,6 +561,7 @@ impl SourceScanner {
         alias_resolver: &AliasResolver,
         out: &mut Vec<String>,
         seen: &mut HashSet<String>,
+        cfg_context: &CfgContext,
     ) {
         match item {
             Item::Struct(item_struct) => {
@@ -594,6 +606,7 @@ impl SourceScanner {
                         })
                         .filter(|method| matches!(method.vis, syn::Visibility::Public(_)))
                         .filter(|method| !method.attrs.iter().any(|a| a.path().is_ident("skip")))
+                        .filter(|method| cfg_context.is_active(&method.attrs))
                         .for_each(|method| {
                             method
                                 .sig
@@ -632,6 +645,7 @@ impl SourceScanner {
                             syn::TraitItem::Fn(method) => Some(method),
                             _ => None,
                         })
+                        .filter(|method| cfg_context.is_active(&method.attrs))
                         .for_each(|method| {
                             method
                                 .sig
@@ -662,7 +676,7 @@ impl SourceScanner {
             Item::Fn(item_fn) => {
                 let is_exported = has_attribute(&item_fn.attrs, "ffi_export")
                     || has_attribute(&item_fn.attrs, "export");
-                if is_exported {
+                if is_exported && cfg_context.is_active(&item_fn.attrs) {
                     item_fn
                         .sig
                         .inputs
@@ -1375,8 +1389,12 @@ impl SourceScanner {
 
     fn process_function(&mut self, item_fn: &syn::ItemFn) -> Result<(), String> {
         let sig = &item_fn.sig;
-        let params = self.resolve_typed_params(&sig.inputs, None)?;
-        let output = self.resolve_output(&sig.output, None)?;
+        let params = self
+            .resolve_typed_params(&sig.inputs, None)
+            .map_err(|e| format!("in function {}: {e}", sig.ident))?;
+        let output = self
+            .resolve_output(&sig.output, None)
+            .map_err(|e| format!("in function {}: {e}", sig.ident))?;
 
         let function = params
             .into_iter()
@@ -1397,7 +1415,9 @@ impl SourceScanner {
         let mut methods = Vec::new();
         for item in &item_trait.items {
             if let syn::TraitItem::Fn(method) = item {
-                methods.push(self.build_trait_method(method)?);
+                if self.cfg_context.is_active(&method.attrs) {
+                    methods.push(self.build_trait_method(&name, method)?);
+                }
             }
         }
 
@@ -1411,16 +1431,24 @@ impl SourceScanner {
         Ok(())
     }
 
-    fn build_trait_method(&self, method: &TraitItemFn) -> Result<TraitMethod, String> {
+    fn build_trait_method(
+        &self,
+        trait_name: &str,
+        method: &TraitItemFn,
+    ) -> Result<TraitMethod, String> {
         let sig = &method.sig;
-        let params = self.resolve_typed_params(&sig.inputs, None)?;
+        let params = self
+            .resolve_typed_params(&sig.inputs, None)
+            .map_err(|e| format!("in trait {trait_name}::{}: {e}", sig.ident))?;
         let output = if let Some(inner_ty) =
             boxed_future::boxed_future_inner_output_ty(&sig.output)
         {
             let rt: syn::ReturnType = syn::parse_quote! { -> #inner_ty };
-            self.resolve_output(&rt, None)?
+            self.resolve_output(&rt, None)
+                .map_err(|e| format!("in trait {trait_name}::{}: {e}", sig.ident))?
         } else {
-            self.resolve_output(&sig.output, None)?
+            self.resolve_output(&sig.output, None)
+                .map_err(|e| format!("in trait {trait_name}::{}: {e}", sig.ident))?
         };
         let is_async =
             sig.asyncness.is_some() || boxed_future::trait_method_returns_boxed_future(method);
@@ -1455,6 +1483,7 @@ impl SourceScanner {
             })
             .filter(|method| matches!(method.vis, syn::Visibility::Public(_)))
             .filter(|method| !has_attribute(&method.attrs, "skip"))
+            .filter(|method| self.cfg_context.is_active(&method.attrs))
         {
             if has_attribute(&method.attrs, "ffi_stream") {
                 if let Some(stream) = self.build_stream(method) {
@@ -1464,11 +1493,15 @@ impl SourceScanner {
             }
 
             if self.is_constructor(method, &class_name) {
-                constructors.push(self.build_constructor(method, &class_name)?);
+                constructors.push(self.build_constructor(method, &class_name).map_err(|e| {
+                    format!("in {class_name}::{}: {e}", method.sig.ident)
+                })?);
                 continue;
             }
 
-            methods.push(self.build_method(method, &class_name)?);
+            methods.push(self.build_method(method, &class_name).map_err(|e| {
+                format!("in {class_name}::{}: {e}", method.sig.ident)
+            })?);
         }
 
         self.type_registry.fill(
@@ -1506,13 +1539,18 @@ impl SourceScanner {
             })
             .filter(|method| matches!(method.vis, syn::Visibility::Public(_)))
             .filter(|method| !has_attribute(&method.attrs, "skip"))
+            .filter(|method| self.cfg_context.is_active(&method.attrs))
         {
             if self.is_constructor(method, &type_name) {
-                constructors.push(self.build_constructor(method, &type_name)?);
+                constructors.push(self.build_constructor(method, &type_name).map_err(|e| {
+                    format!("in {type_name}::{}: {e}", method.sig.ident)
+                })?);
                 continue;
             }
 
-            methods.push(self.build_method(method, &type_name)?);
+            methods.push(self.build_method(method, &type_name).map_err(|e| {
+                format!("in {type_name}::{}: {e}", method.sig.ident)
+            })?);
         }
 
         if is_record {
@@ -2662,6 +2700,8 @@ fn rust_type_to_ffi_type(
             }
             None
         }
+        // `()` in `Result<(), E>` is a zero-field tuple, not a path type.
+        Type::Tuple(tuple) if tuple.elems.is_empty() => Some(MType::Void),
         _ => None,
     }
 }
@@ -3607,6 +3647,29 @@ mod tests {
         let enumeration = module.find_enum("GatedEnum").expect("GatedEnum");
         assert_eq!(enumeration.variants.len(), 1);
         assert_eq!(enumeration.variants[0].name, "A");
+    }
+
+    #[test]
+    fn cfg_context_excludes_inactive_exported_class_methods() {
+        let source = r#"
+            pub struct Widget;
+
+            #[boltffi::export]
+            impl Widget {
+                pub fn always(&self) {}
+                #[cfg(feature = "fs")]
+                pub fn gated(&self) {}
+            }
+        "#;
+        let cfg = CfgContext {
+            features: HashSet::new(),
+            target_arch: Some("wasm32".to_string()),
+            scan_all: false,
+        };
+        let module = scan_temp_crate_with_config(source, Some(32), cfg);
+        let class = module.find_class("Widget").expect("Widget");
+        assert_eq!(class.methods.len(), 1);
+        assert_eq!(class.methods[0].name, "always");
     }
 
     #[test]
