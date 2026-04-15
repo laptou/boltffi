@@ -87,7 +87,7 @@ impl FutureWakeTarget {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn initialize_wasm_handle<T: Send + 'static>(&self, future: &Arc<RustFuture<T>>) {
+    fn initialize_wasm_handle<T: 'static>(&self, future: &Arc<RustFuture<T>>) {
         self.wasm_handle
             .store(Arc::as_ptr(future) as usize as u32, Ordering::Release);
     }
@@ -107,7 +107,10 @@ pub enum TerminalState {
 
 #[allow(dead_code)]
 enum FutureExecutionState<T> {
+    #[cfg(not(target_arch = "wasm32"))]
     Running(Pin<Box<dyn Future<Output = T> + Send + 'static>>),
+    #[cfg(target_arch = "wasm32")]
+    Running(Pin<Box<dyn Future<Output = T> + 'static>>),
     Complete(T),
     Panicked(String),
     Consumed,
@@ -144,26 +147,57 @@ impl<T> FutureExecutionState<T> {
     }
 }
 
-pub struct RustFuture<T: Send + 'static> {
+pub struct RustFuture<T> {
     future_execution_state: Mutex<FutureExecutionState<T>>,
     wake_target: Arc<FutureWakeTarget>,
 }
 
-impl<T: Send + 'static> RustFuture<T> {
+/// wasm is single-threaded: futures and outputs need not be `Send`. native keeps `Send` for cross-thread polling.
+mod rust_future_output {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub trait RustFutureOutput: Send + 'static {}
+    #[cfg(not(target_arch = "wasm32"))]
+    impl<T: Send + 'static> RustFutureOutput for T {}
+
+    #[cfg(target_arch = "wasm32")]
+    pub trait RustFutureOutput: 'static {}
+    #[cfg(target_arch = "wasm32")]
+    impl<T: 'static> RustFutureOutput for T {}
+}
+
+use rust_future_output::RustFutureOutput;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: RustFutureOutput> RustFuture<T> {
     pub fn new<F>(future: F) -> Arc<Self>
     where
         F: Future<Output = T> + Send + 'static,
+    {
+        let wake_target = Arc::new(FutureWakeTarget::new());
+        Arc::new(Self {
+            future_execution_state: Mutex::new(FutureExecutionState::Running(Box::pin(future))),
+            wake_target: Arc::clone(&wake_target),
+        })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<T: RustFutureOutput> RustFuture<T> {
+    pub fn new<F>(future: F) -> Arc<Self>
+    where
+        F: Future<Output = T> + 'static,
     {
         let wake_target = Arc::new(FutureWakeTarget::new());
         let rust_future = Arc::new(Self {
             future_execution_state: Mutex::new(FutureExecutionState::Running(Box::pin(future))),
             wake_target: Arc::clone(&wake_target),
         });
-        #[cfg(target_arch = "wasm32")]
         wake_target.initialize_wasm_handle(&rust_future);
         rust_future
     }
+}
 
+impl<T: RustFutureOutput> RustFuture<T> {
     fn poll_future_once(&self, waker: &Waker) -> bool {
         let mut execution_state_guard = self.future_execution_state.lock().unwrap();
 
@@ -342,12 +376,12 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
 
 pub type RustFutureHandle = *const core::ffi::c_void;
 
-struct RustFutureHandleAccess<T: Send + 'static> {
+struct RustFutureHandleAccess<T: RustFutureOutput> {
     future_handle: RustFutureHandle,
     future_type: std::marker::PhantomData<T>,
 }
 
-impl<T: Send + 'static> RustFutureHandleAccess<T> {
+impl<T: RustFutureOutput> RustFutureHandleAccess<T> {
     #[inline]
     fn new(future_handle: RustFutureHandle) -> Self {
         Self {
@@ -385,6 +419,7 @@ impl<T: Send + 'static> RustFutureHandleAccess<T> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn rust_future_new<F, T>(future: F) -> RustFutureHandle
 where
     F: Future<Output = T> + Send + 'static,
@@ -393,7 +428,16 @@ where
     Arc::into_raw(RustFuture::new(future)) as RustFutureHandle
 }
 
-pub unsafe fn rust_future_poll<T: Send + 'static>(
+#[cfg(target_arch = "wasm32")]
+pub fn rust_future_new<F, T>(future: F) -> RustFutureHandle
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    Arc::into_raw(RustFuture::new(future)) as RustFutureHandle
+}
+
+pub unsafe fn rust_future_poll<T: RustFutureOutput>(
     handle: RustFutureHandle,
     continuation_callback: RustFutureContinuationCallback,
     callback_data: u64,
@@ -402,26 +446,26 @@ pub unsafe fn rust_future_poll<T: Send + 'static>(
         .with_future_arc(|rust_future| rust_future.poll(continuation_callback, callback_data));
 }
 
-pub unsafe fn rust_future_complete<T: Send + 'static>(handle: RustFutureHandle) -> Option<T> {
+pub unsafe fn rust_future_complete<T: RustFutureOutput>(handle: RustFutureHandle) -> Option<T> {
     RustFutureHandleAccess::<T>::new(handle).with_future(RustFuture::complete)
 }
 
-pub unsafe fn rust_future_cancel<T: Send + 'static>(handle: RustFutureHandle) {
+pub unsafe fn rust_future_cancel<T: RustFutureOutput>(handle: RustFutureHandle) {
     RustFutureHandleAccess::<T>::new(handle).with_future(RustFuture::cancel);
 }
 
-pub unsafe fn rust_future_free<T: Send + 'static>(handle: RustFutureHandle) {
+pub unsafe fn rust_future_free<T: RustFutureOutput>(handle: RustFutureHandle) {
     RustFutureHandleAccess::<T>::new(handle).consume_future(RustFuture::free);
 }
 
 #[cfg(target_arch = "wasm32")]
-pub unsafe fn rust_future_poll_sync<T: Send + 'static>(handle: RustFutureHandle) -> i32 {
+pub unsafe fn rust_future_poll_sync<T: RustFutureOutput>(handle: RustFutureHandle) -> i32 {
     RustFutureHandleAccess::<T>::new(handle)
         .with_future_arc(|rust_future| rust_future.poll_sync() as i32)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub unsafe fn rust_future_panic_message<T: Send + 'static>(
+pub unsafe fn rust_future_panic_message<T: RustFutureOutput>(
     handle: RustFutureHandle,
 ) -> Option<String> {
     RustFutureHandleAccess::<T>::new(handle).with_future(RustFuture::panic_message)
