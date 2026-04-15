@@ -1,6 +1,6 @@
 use boltffi_ffi_rules::transport::{
     DirectBufferReturnMethod, EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform,
-    ValueReturnMethod,
+    ValueReturnMethod, ValueReturnStrategy,
 };
 use syn::Type;
 
@@ -47,5 +47,24 @@ impl LoweredCallbackReturn {
             ),
             ValueReturnMethod::WriteToOutBufferParts
         )
+            || matches!(
+                self.resolved_return.value_return_method(
+                    ReturnInvocationContext::CallbackVtable,
+                    ReturnPlatform::Wasm,
+                ),
+                ValueReturnMethod::WriteToOutBufferParts
+            )
+    }
+
+    /// wasm async completion: use `wire::decode` only for buffer-encoded returns; handles/scalars use [`Passable`].
+    pub(super) fn uses_async_completion_wire_decode(&self) -> bool {
+        matches!(
+            self.resolved_return.value_return_strategy(),
+            ValueReturnStrategy::Buffer(_)
+        )
+    }
+
+    pub(super) fn fallible_ok_type(&self) -> Option<Type> {
+        self.resolved_return.fallible_ok_type()
     }
 }

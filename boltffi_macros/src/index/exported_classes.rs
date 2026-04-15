@@ -1,7 +1,7 @@
 //! types with `#[export] impl` (ffi classes) — indexed for handle-style lowering.
 
 use std::collections::HashMap;
-use syn::{Item, ItemImpl, Type};
+use syn::{GenericArgument, Item, ItemImpl, PathArguments, Type, TypeParamBound};
 
 use crate::index::SourceModule;
 
@@ -17,6 +17,15 @@ impl ExportedClassRegistry {
             return false;
         };
         self.lookup_qualified(&segments)
+    }
+
+    /// `Box<dyn Trait>` / `Arc<dyn Trait>` where `TraitHandle` is an exported class (e.g. `DataStream` → `DataStreamHandle`).
+    pub fn is_boxed_trait_wrapped_by_exported_handle(&self, ty: &Type) -> bool {
+        let Some(trait_name) = first_trait_ident_from_boxed_dyn(ty) else {
+            return false;
+        };
+        let handle_name = format!("{trait_name}Handle");
+        self.lookup_qualified(&[handle_name])
     }
 
     fn peel_reference(ty: &Type) -> &Type {
@@ -57,6 +66,47 @@ fn type_path_segments(ty: &Type) -> Option<Vec<String>> {
         Type::Paren(paren) => type_path_segments(paren.elem.as_ref()),
         _ => None,
     }
+}
+
+fn peel_type_groups(ty: &Type) -> &Type {
+    match ty {
+        Type::Group(g) => peel_type_groups(g.elem.as_ref()),
+        Type::Paren(p) => peel_type_groups(p.elem.as_ref()),
+        _ => ty,
+    }
+}
+
+/// first trait path segment name from `Box<dyn Trait>` / `Arc<dyn Trait>` (single bound).
+fn first_trait_ident_from_boxed_dyn(ty: &Type) -> Option<String> {
+    let ty = peel_type_groups(ty);
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    if type_path.qself.is_some() {
+        return None;
+    }
+    let last = type_path.path.segments.last()?;
+    if last.ident != "Box" && last.ident != "Arc" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let inner = args.args.iter().find_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })?;
+    let Type::TraitObject(trait_obj) = inner else {
+        return None;
+    };
+    trait_obj.bounds.iter().find_map(|b| match b {
+        TypeParamBound::Trait(trait_bound) => trait_bound
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string()),
+        _ => None,
+    })
 }
 
 pub(super) fn build_exported_class_registry(

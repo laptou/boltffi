@@ -208,7 +208,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
             .as_ref()
             .map(|ty| quote! { -> #ty })
             .unwrap_or_default();
-        let poll_body = self.async_poll_body(return_type.as_ref());
+        let poll_body = self.async_poll_body(return_type.as_ref())?;
 
         let impl_body = quote! {
             let callback_registry = ::boltffi::__private::AsyncCallbackRegistry::current();
@@ -294,7 +294,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         } else {
             Some(inner)
         };
-        let poll_body = self.async_poll_body(poll_arg);
+        let poll_body = self.async_poll_body(poll_arg)?;
         let receiver_cb = format_ident!("__boltffi_cb");
 
         let impl_body = quote! {
@@ -328,12 +328,47 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         })
     }
 
-    fn async_poll_body(&self, return_type: Option<&syn::Type>) -> TokenStream {
+    fn async_poll_body(&self, return_type: Option<&syn::Type>) -> syn::Result<TokenStream> {
         match return_type {
             Some(return_type) => {
                 if let Some(result_types) = CallbackReturnType::new(return_type).result_types() {
                     let err_type = result_types.err;
-                    quote! {
+                    let lowered = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
+                    if lowered.uses_async_completion_wire_decode() {
+                        return Ok(quote! {
+                            std::future::poll_fn(move |cx| {
+                                callback_registry.set_waker(request_id, cx.waker().clone());
+                                match callback_registry.take_completion(request_id) {
+                                    Some(result) => {
+                                        if !result.code.is_success() {
+                                            let error_msg = if result.data.is_empty() {
+                                                "async callback failed".to_string()
+                                            } else {
+                                                ::boltffi::__private::wire::decode::<String>(&result.data)
+                                                    .unwrap_or_else(|_| "async callback failed".to_string())
+                                            };
+                                            return std::task::Poll::Ready(Err(
+                                                <#err_type as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
+                                                    ::boltffi::UnexpectedFfiCallbackError::new(error_msg)
+                                                )
+                                            ));
+                                        }
+                                        let value: #return_type = ::boltffi::__private::wire::decode(&result.data)
+                                            .expect("wire decode async callback return");
+                                        std::task::Poll::Ready(value)
+                                    }
+                                    None => std::task::Poll::Pending,
+                                }
+                            }).await
+                        });
+                    }
+                    let Some(ok_ty) = lowered.fallible_ok_type() else {
+                        return Err(syn::Error::new_spanned(
+                            return_type,
+                            "boltffi: wasm async Result callback: expected Encoded error strategy with a known Ok type",
+                        ));
+                    };
+                    return Ok(quote! {
                         std::future::poll_fn(move |cx| {
                             callback_registry.set_waker(request_id, cx.waker().clone());
                             match callback_registry.take_completion(request_id) {
@@ -351,16 +386,33 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                                             )
                                         ));
                                     }
-                                    let value: #return_type = ::boltffi::__private::wire::decode(&result.data)
-                                        .expect("wire decode async callback return");
-                                    std::task::Poll::Ready(value)
+                                    let expected = ::core::mem::size_of::<<#ok_ty as ::boltffi::__private::Passable>::Out>();
+                                    if result.data.len() != expected {
+                                        return std::task::Poll::Ready(Err(
+                                            <#err_type as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
+                                                ::boltffi::UnexpectedFfiCallbackError::new("async callback completion size mismatch".into())
+                                            )
+                                        ));
+                                    }
+                                    let ffi_out: <#ok_ty as ::boltffi::__private::Passable>::Out = unsafe {
+                                        ::core::ptr::read_unaligned(
+                                            result.data.as_ptr() as *const <#ok_ty as ::boltffi::__private::Passable>::Out
+                                        )
+                                    };
+                                    let ok_val: #ok_ty = unsafe {
+                                        <#ok_ty as ::boltffi::__private::Passable>::unpack(ffi_out)
+                                    };
+                                    std::task::Poll::Ready(Ok(ok_val))
                                 }
                                 None => std::task::Poll::Pending,
                             }
                         }).await
-                    }
-                } else {
-                    quote! {
+                    });
+                }
+
+                let lowered = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
+                if lowered.uses_async_completion_wire_decode() {
+                    return Ok(quote! {
                         std::future::poll_fn(move |cx| {
                             callback_registry.set_waker(request_id, cx.waker().clone());
                             match callback_registry.take_completion(request_id) {
@@ -381,11 +433,10 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                                 None => std::task::Poll::Pending,
                             }
                         }).await
-                    }
+                    });
                 }
-            }
-            None => {
-                quote! {
+
+                Ok(quote! {
                     std::future::poll_fn(move |cx| {
                         callback_registry.set_waker(request_id, cx.waker().clone());
                         match callback_registry.take_completion(request_id) {
@@ -399,13 +450,45 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                                     };
                                     panic!("async callback failed: {}", error_msg);
                                 }
-                                std::task::Poll::Ready(())
+                                let expected = ::core::mem::size_of::<<#return_type as ::boltffi::__private::Passable>::Out>();
+                                if result.data.len() != expected {
+                                    panic!("async callback completion size mismatch");
+                                }
+                                let ffi_out: <#return_type as ::boltffi::__private::Passable>::Out = unsafe {
+                                    ::core::ptr::read_unaligned(
+                                        result.data.as_ptr() as *const <#return_type as ::boltffi::__private::Passable>::Out
+                                    )
+                                };
+                                let value: #return_type = unsafe {
+                                    <#return_type as ::boltffi::__private::Passable>::unpack(ffi_out)
+                                };
+                                std::task::Poll::Ready(value)
                             }
                             None => std::task::Poll::Pending,
                         }
                     }).await
-                }
+                })
             }
+            None => Ok(quote! {
+                std::future::poll_fn(move |cx| {
+                    callback_registry.set_waker(request_id, cx.waker().clone());
+                    match callback_registry.take_completion(request_id) {
+                        Some(result) => {
+                            if !result.code.is_success() {
+                                let error_msg = if result.data.is_empty() {
+                                    "async callback failed".to_string()
+                                } else {
+                                    ::boltffi::__private::wire::decode::<String>(&result.data)
+                                        .unwrap_or_else(|_| "async callback failed".to_string())
+                                };
+                                panic!("async callback failed: {}", error_msg);
+                            }
+                            std::task::Poll::Ready(())
+                        }
+                        None => std::task::Poll::Pending,
+                    }
+                }).await
+            }),
         }
     }
 

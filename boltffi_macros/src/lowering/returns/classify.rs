@@ -81,11 +81,25 @@ pub fn classify_value_return_strategy(
                 .is_exported_class_type(inner_type)
             {
                 Ok(ValueReturnStrategy::NullableObjectHandle)
+            } else if return_lowering
+                .exported_classes()
+                .is_boxed_trait_wrapped_by_exported_handle(inner_type)
+            {
+                Ok(ValueReturnStrategy::NullableObjectHandle)
             } else {
                 Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
             }
         }
         RustTypeShape::NamedNominal | RustTypeShape::GenericNominal | RustTypeShape::Other => {
+            // `Box<dyn Trait>` with `TraitHandle` exported must classify as object handle before
+            // callback resolution — async callback traits reject `supports_local_handle` with an error.
+            if return_lowering
+                .exported_classes()
+                .is_boxed_trait_wrapped_by_exported_handle(rust_type)
+            {
+                return Ok(ValueReturnStrategy::ObjectHandle);
+            }
+
             if try_resolve_callback_handle_return(rust_type, return_lowering.callback_traits())?
                 .is_some()
             {
