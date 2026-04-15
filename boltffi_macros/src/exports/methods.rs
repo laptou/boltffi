@@ -95,8 +95,10 @@ impl ClassExportConfig {
             return quote! {};
         }
 
+        // host/native: require Send + Sync. wasm32: skip (single-threaded); cfg applies in the consumer crate.
         let span = type_name.span();
         quote_spanned! {span=>
+            #[cfg(not(target_arch = "wasm32"))]
             #[allow(dead_code)]
             const _: () = {
                 #[diagnostic::on_unimplemented(
