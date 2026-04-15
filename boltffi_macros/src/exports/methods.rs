@@ -163,6 +163,22 @@ impl<'a> ExportableMethod<'a> {
         extract_ffi_stream_item(&self.method.attrs)
     }
 
+    /// tokenized `#[cfg(...)]` attrs on this method, if any — must be applied to generated ffi shims too
+    /// so cfg-disabled methods are not referenced from unconditional wrappers.
+    fn cfg_attr_tokens(&self) -> Option<proc_macro2::TokenStream> {
+        let cfg_attrs: Vec<_> = self
+            .method
+            .attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("cfg"))
+            .collect();
+        if cfg_attrs.is_empty() {
+            None
+        } else {
+            Some(quote! { #(#cfg_attrs)* })
+        }
+    }
+
     fn callable(&self) -> MethodCallable<'a> {
         MethodCallable::new(self.method)
     }
@@ -466,6 +482,35 @@ impl<'a> StaticMethodExport<'a> {
     }
 }
 
+/// when a method is cfg-gated, wrap its generated `extern "C"` items so they compile iff the method exists.
+/// we use a child module (not `const { ... }`) because nested `extern "C"` fns are not valid in const blocks.
+fn wrap_cfg_gated_method_exports(
+    cfg_tokens: Option<proc_macro2::TokenStream>,
+    type_name_str: &str,
+    method_ident: &syn::Ident,
+    tokens: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let Some(cfg) = cfg_tokens else {
+        return tokens;
+    };
+    // snake_case module id so `non_snake_case` does not warn on generated submodules
+    let mod_name = syn::Ident::new(
+        &format!(
+            "__boltffi_{}_{}",
+            type_name_str.to_lowercase(),
+            method_ident
+        ),
+        method_ident.span(),
+    );
+    quote! {
+        #cfg
+        mod #mod_name {
+            use super::*;
+            #tokens
+        }
+    }
+}
+
 pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let export_config = ClassExportConfig::from_attr(&attr);
     let input = syn::parse_macro_input!(item as syn::ItemImpl);
@@ -510,16 +555,25 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         .filter_map(ExportableMethod::from_item)
         .filter(|method| method.is_exported())
         .filter_map(|exportable_method| {
-            let callable = exportable_method.callable();
+            let cfg_tokens = exportable_method.cfg_attr_tokens();
+            let method_ident = &exportable_method.method.sig.ident;
             if let Some(item_type) = exportable_method.stream_item_type() {
-                return Some(generate_stream_exports(
+                let callable = exportable_method.callable();
+                let tokens = generate_stream_exports(
                     &type_name,
                     &type_name_str,
                     callable,
                     &item_type,
+                );
+                return Some(wrap_cfg_gated_method_exports(
+                    cfg_tokens,
+                    &type_name_str,
+                    method_ident,
+                    tokens,
                 ));
             }
-            match (callable.form(), callable.execution_kind()) {
+            let callable = exportable_method.callable();
+            let generated = match (callable.form(), callable.execution_kind()) {
                 (CallableForm::InstanceMethod, ExecutionKind::Sync)
                 | (CallableForm::StaticMethod, ExecutionKind::Sync) => generate_sync_method_export(
                     callable,
@@ -547,7 +601,15 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     )
                 }
                 (CallableForm::Function, _) => None,
-            }
+            };
+            generated.map(|tokens| {
+                wrap_cfg_gated_method_exports(
+                    cfg_tokens,
+                    &type_name_str,
+                    method_ident,
+                    tokens,
+                )
+            })
         })
         .collect();
 
@@ -1709,6 +1771,8 @@ fn generate_stream_exports(
 
 #[cfg(test)]
 mod tests {
+    use super::ExportableMethod;
+    use super::wrap_cfg_gated_method_exports;
     use super::*;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
@@ -2155,5 +2219,41 @@ mod tests {
         assert!(generated.contains("err_out_ptr"));
         assert!(generated.contains("wire_encode (& err)"));
         assert!(!generated.contains("set_last_error"));
+    }
+
+    #[test]
+    fn cfg_gated_sync_method_wrap_includes_cfg_and_module() {
+        let impl_block = parse_impl(
+            r#"
+            impl Gadget {
+                #[cfg(feature = "fs")]
+                pub fn gated(&self) -> i32 { 0 }
+            }
+            "#,
+        );
+        let exportable = impl_block
+            .items
+            .iter()
+            .find_map(ExportableMethod::from_item)
+            .expect("method");
+        assert!(exportable.cfg_attr_tokens().is_some());
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+        let inner = generate_sync_method_export(
+            MethodCallable::new(exportable.method),
+            &type_name,
+            "Gadget",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("sync export");
+        let wrapped = wrap_cfg_gated_method_exports(
+            exportable.cfg_attr_tokens(),
+            "Gadget",
+            &exportable.method.sig.ident,
+            inner,
+        );
+        let s = wrapped.to_string();
+        assert!(s.contains("feature = \"fs\""));
+        assert!(s.contains("__boltffi_gadget_gated"));
     }
 }
