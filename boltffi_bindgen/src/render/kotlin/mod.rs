@@ -11,6 +11,8 @@ pub use names::NamingConvention;
 pub use plan::*;
 pub use templates::KotlinEmitter;
 
+use boltffi_ffi_rules::naming::{LibraryName, Name};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FactoryStyle {
     #[default]
@@ -30,6 +32,6 @@ pub struct KotlinOptions {
     pub factory_style: FactoryStyle,
     pub api_style: KotlinApiStyle,
     pub module_object_name: Option<String>,
-    pub library_name: Option<String>,
+    pub library_name: Option<Name<LibraryName>>,
     pub desktop_loader: bool,
 }

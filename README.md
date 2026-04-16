@@ -138,7 +138,7 @@ The generated bindings use each language's idioms. Swift gets async/await. Kotli
 | C        | Partial      |
 | Python   | In progress  |
 | C++      | Planned      |
-| C#       | Planned      |
+| C#       | In progress  |
 | Ruby     | Planned      |
 | Dart     | Planned      |
 | Scala    | Planned      |

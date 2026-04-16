@@ -1,14 +1,14 @@
 use boltffi_ffi_rules::naming;
 use indexmap::IndexMap;
+use quote::ToTokens;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use syn::{
-    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, TraitItemFn,
-    Type,
+    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait,
+    TraitItemFn, Type,
 };
-use quote::ToTokens;
 use walkdir::WalkDir;
 
 fn format_syn_type(ty: &syn::Type) -> String {
@@ -23,8 +23,8 @@ use crate::model::{
 };
 
 mod boxed_future;
-mod compiler_type_resolution;
 mod cfg_context;
+mod compiler_type_resolution;
 
 pub use cfg_context::CfgContext;
 
@@ -470,7 +470,11 @@ impl SourceScanner {
         module_name: impl Into<String>,
         target_pointer_width_bits: Option<u8>,
     ) -> Self {
-        Self::new_with_config(module_name, target_pointer_width_bits, CfgContext::default())
+        Self::new_with_config(
+            module_name,
+            target_pointer_width_bits,
+            CfgContext::default(),
+        )
     }
 
     pub fn new_with_config(
@@ -506,11 +510,8 @@ impl SourceScanner {
         self.global_aliases = Self::collect_global_aliases(&files)?;
         self.integer_constants =
             collect_integer_constants_from_files(dir, &files, self.target_pointer_width_bits)?;
-        let compiler_targets = Self::collect_compiler_type_targets(
-            &files,
-            &self.global_aliases,
-            &self.cfg_context,
-        )?;
+        let compiler_targets =
+            Self::collect_compiler_type_targets(&files, &self.global_aliases, &self.cfg_context)?;
         self.compiler_canonical_types =
             compiler_type_resolution::resolve(crate_path, &self.module_name, compiler_targets)?;
         files
@@ -1440,8 +1441,7 @@ impl SourceScanner {
         let params = self
             .resolve_typed_params(&sig.inputs, None)
             .map_err(|e| format!("in trait {trait_name}::{}: {e}", sig.ident))?;
-        let output = if let Some(inner_ty) =
-            boxed_future::boxed_future_inner_output_ty(&sig.output)
+        let output = if let Some(inner_ty) = boxed_future::boxed_future_inner_output_ty(&sig.output)
         {
             let rt: syn::ReturnType = syn::parse_quote! { -> #inner_ty };
             self.resolve_output(&rt, None)
@@ -1453,16 +1453,14 @@ impl SourceScanner {
         let is_async =
             sig.asyncness.is_some() || boxed_future::trait_method_returns_boxed_future(method);
 
-        Ok(
-            params
-                .into_iter()
-                .fold(TraitMethod::new(sig.ident.to_string()), |tm, (name, ty)| {
-                    tm.with_param(TraitMethodParam::new(&name, ty))
-                })
-                .maybe_doc(extract_doc_string(&method.attrs))
-                .maybe_return(output.map(ReturnType::from_output))
-                .maybe_async(is_async),
-        )
+        Ok(params
+            .into_iter()
+            .fold(TraitMethod::new(sig.ident.to_string()), |tm, (name, ty)| {
+                tm.with_param(TraitMethodParam::new(&name, ty))
+            })
+            .maybe_doc(extract_doc_string(&method.attrs))
+            .maybe_return(output.map(ReturnType::from_output))
+            .maybe_async(is_async))
     }
 
     fn process_class(&mut self, item_impl: &ItemImpl) -> Result<(), String> {
@@ -1493,15 +1491,17 @@ impl SourceScanner {
             }
 
             if self.is_constructor(method, &class_name) {
-                constructors.push(self.build_constructor(method, &class_name).map_err(|e| {
-                    format!("in {class_name}::{}: {e}", method.sig.ident)
-                })?);
+                constructors.push(
+                    self.build_constructor(method, &class_name)
+                        .map_err(|e| format!("in {class_name}::{}: {e}", method.sig.ident))?,
+                );
                 continue;
             }
 
-            methods.push(self.build_method(method, &class_name).map_err(|e| {
-                format!("in {class_name}::{}: {e}", method.sig.ident)
-            })?);
+            methods.push(
+                self.build_method(method, &class_name)
+                    .map_err(|e| format!("in {class_name}::{}: {e}", method.sig.ident))?,
+            );
         }
 
         self.type_registry.fill(
@@ -1542,15 +1542,17 @@ impl SourceScanner {
             .filter(|method| self.cfg_context.is_active(&method.attrs))
         {
             if self.is_constructor(method, &type_name) {
-                constructors.push(self.build_constructor(method, &type_name).map_err(|e| {
-                    format!("in {type_name}::{}: {e}", method.sig.ident)
-                })?);
+                constructors.push(
+                    self.build_constructor(method, &type_name)
+                        .map_err(|e| format!("in {type_name}::{}: {e}", method.sig.ident))?,
+                );
                 continue;
             }
 
-            methods.push(self.build_method(method, &type_name).map_err(|e| {
-                format!("in {type_name}::{}: {e}", method.sig.ident)
-            })?);
+            methods.push(
+                self.build_method(method, &type_name)
+                    .map_err(|e| format!("in {type_name}::{}: {e}", method.sig.ident))?,
+            );
         }
 
         if is_record {
@@ -1563,23 +1565,25 @@ impl SourceScanner {
         Ok(())
     }
 
-    fn build_method(&self, method: &syn::ImplItemFn, self_type_name: &str) -> Result<Method, String> {
+    fn build_method(
+        &self,
+        method: &syn::ImplItemFn,
+        self_type_name: &str,
+    ) -> Result<Method, String> {
         let sig = &method.sig;
         let receiver = Self::extract_receiver(sig);
         let params = self.resolve_typed_params(&sig.inputs, Some(self_type_name))?;
         let output = self.resolve_output(&sig.output, Some(self_type_name))?;
 
-        Ok(
-            params
-                .into_iter()
-                .fold(
-                    Method::new(sig.ident.to_string(), receiver),
-                    |m, (name, ty)| m.with_param(Parameter::new(&name, ty)),
-                )
-                .maybe_doc(extract_doc_string(&method.attrs))
-                .maybe_return(output.map(ReturnType::from_output))
-                .maybe_async(sig.asyncness.is_some()),
-        )
+        Ok(params
+            .into_iter()
+            .fold(
+                Method::new(sig.ident.to_string(), receiver),
+                |m, (name, ty)| m.with_param(Parameter::new(&name, ty)),
+            )
+            .maybe_doc(extract_doc_string(&method.attrs))
+            .maybe_return(output.map(ReturnType::from_output))
+            .maybe_async(sig.asyncness.is_some()))
     }
 
     fn build_stream(&self, method: &syn::ImplItemFn) -> Option<StreamMethod> {
@@ -1635,19 +1639,17 @@ impl SourceScanner {
         };
         let params = self.resolve_typed_params(&sig.inputs, Some(self_type_name))?;
 
-        Ok(
-            params
-                .into_iter()
-                .fold(
-                    Constructor::new()
-                        .with_name(sig.ident.to_string())
-                        .with_fallible(is_fallible)
-                        .with_optional(is_optional),
-                    |c, (name, ty)| c.with_param(ConstructorParam::new(&name, ty)),
-                )
-                .maybe_doc(extract_doc_string(&method.attrs))
-                .maybe_async(sig.asyncness.is_some()),
-        )
+        Ok(params
+            .into_iter()
+            .fold(
+                Constructor::new()
+                    .with_name(sig.ident.to_string())
+                    .with_fallible(is_fallible)
+                    .with_optional(is_optional),
+                |c, (name, ty)| c.with_param(ConstructorParam::new(&name, ty)),
+            )
+            .maybe_doc(extract_doc_string(&method.attrs))
+            .maybe_async(sig.asyncness.is_some()))
     }
 
     pub fn into_module(self) -> Module {
@@ -2866,25 +2868,20 @@ pub fn scan_crate_with_pointer_width(
     module_name: &str,
     target_pointer_width_bits: Option<u8>,
 ) -> Result<Module, String> {
-    scan_crate_with_config(
-        crate_path,
-        module_name,
-        target_pointer_width_bits,
-        CfgContext::default(),
-    )
+    scan_crate_with_config(crate_path, module_name, target_pointer_width_bits, None)
 }
 
 pub fn scan_crate_with_config(
     crate_path: &Path,
     module_name: &str,
     target_pointer_width_bits: Option<u8>,
-    cfg_context: CfgContext,
+    cfg_context: Option<CfgContext>,
 ) -> Result<Module, String> {
     let src_path = crate_path.join("src");
     let mut scanner = SourceScanner::new_with_config(
         module_name,
         target_pointer_width_bits.or_else(parse_target_pointer_width),
-        cfg_context,
+        cfg_context.unwrap_or_default(),
     );
     scanner.scan_directory(crate_path, &src_path)?;
     let module = scanner.into_module();
@@ -3608,7 +3605,11 @@ mod tests {
         module
     }
 
-    fn scan_temp_crate_with_config(source: &str, pointer_width: Option<u8>, cfg: CfgContext) -> Module {
+    fn scan_temp_crate_with_config(
+        source: &str,
+        pointer_width: Option<u8>,
+        cfg: CfgContext,
+    ) -> Module {
         let unique_suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3622,7 +3623,7 @@ mod tests {
         fs::create_dir_all(&src_dir).expect("create src dir");
         fs::write(src_dir.join("lib.rs"), source).expect("write lib.rs");
 
-        let module = scan_crate_with_config(&temp_root, "testlib", pointer_width, cfg)
+        let module = scan_crate_with_config(&temp_root, "testlib", pointer_width, Some(cfg))
             .expect("scan failed");
         fs::remove_dir_all(&temp_root).expect("cleanup");
         module

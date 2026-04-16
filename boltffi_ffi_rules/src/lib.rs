@@ -1,3 +1,7 @@
+//! Shared naming, transport, and classification rules that both the proc macros
+//! (`boltffi_macros`) and the code generator (`boltffi_bindgen`) depend on to
+//! agree across the FFI boundary.
+
 pub mod callable;
 pub mod primitive;
 
@@ -57,6 +61,8 @@ pub mod naming {
     pub struct ForeignType;
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     pub struct ClassPrefix;
+    #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+    pub struct LibraryName;
 
     const C_KEYWORDS: &[&str] = &[
         "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
@@ -274,6 +280,14 @@ pub mod naming {
 
     pub fn ffi_module_name(crate_name: &str) -> String {
         format!("{}FFI", module_name(crate_name))
+    }
+
+    /// Derives the native shared-library name from a crate name.
+    ///
+    /// Cargo converts hyphens to underscores in the library filename
+    /// (e.g. `my-crate` → `libmy_crate.so`), so this applies the same rule.
+    pub fn library_name(crate_name: &str) -> Name<LibraryName> {
+        Name::new(crate_name.replace('-', "_"))
     }
 
     pub fn vec_len_suffix() -> &'static str {
@@ -796,6 +810,16 @@ pub mod callback {
                 callback_create_handle_global(),
                 "boltffi_create_callback_handle"
             );
+        }
+
+        #[rstest::rstest]
+        #[case::simple("demo", "demo")]
+        #[case::hyphenated("my-crate", "my_crate")]
+        #[case::multiple_hyphens("my-cool-crate", "my_cool_crate")]
+        #[case::already_underscored("my_crate", "my_crate")]
+        #[case::mixed("my-cool_crate", "my_cool_crate")]
+        fn library_name_replaces_hyphens(#[case] input: &str, #[case] expected: &str) {
+            assert_eq!(crate::naming::library_name(input).as_str(), expected);
         }
 
         #[test]

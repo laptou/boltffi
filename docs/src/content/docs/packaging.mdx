@@ -15,7 +15,7 @@ The packaging process has three stages:
 2. **Generate** - Create Swift/Kotlin bindings and C headers from your exported API
 3. **Package** - Bundle everything into platform-specific formats
 
-For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For WASM, this produces an npm package with TypeScript bindings.
+For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For WASM, this produces an npm package with TypeScript bindings. For Python, this produces a generated source package plus one or more wheels for the current host.
 
 ## Getting Started
 
@@ -48,6 +48,7 @@ boltffi pack apple
 boltffi pack android
 boltffi pack java
 boltffi pack wasm
+boltffi pack python --experimental
 ```
 
 Add `--release` for optimized builds:
@@ -57,6 +58,7 @@ boltffi pack apple --release
 boltffi pack android --release
 boltffi pack java --release
 boltffi pack wasm --release
+boltffi pack python --release --experimental
 ```
 
 Or run the full pipeline (check, build, generate, pack) for all platforms at once:
@@ -106,15 +108,26 @@ dist/
 │   │   ├── jni_glue.c
 │   │   └── mylib.h
 │   └── libmylib_jni.dylib (or .so)
-└── wasm/
-    └── pkg/
-        ├── mylib_bg.wasm
-        ├── mylib.js
-        ├── mylib.d.ts
-        ├── bundler.js
-        ├── web.js
-        ├── node.js
-        └── package.json
+├── wasm/
+│   └── pkg/
+│       ├── mylib_bg.wasm
+│       ├── mylib.js
+│       ├── mylib.d.ts
+│       ├── bundler.js
+│       ├── web.js
+│       ├── node.js
+│       └── package.json
+└── python/
+    ├── mylib/
+    │   ├── __init__.py
+    │   ├── __init__.pyi
+    │   ├── _native.c
+    │   ├── py.typed
+    │   └── libmylib.dylib (or .so / .dll)
+    ├── pyproject.toml
+    ├── setup.py
+    └── wheelhouse/
+        └── mylib-0.1.0-...whl
 ```
 
 ## Step-by-Step Workflow
@@ -149,6 +162,13 @@ boltffi pack java --release --no-build
 boltffi build wasm --release
 boltffi generate typescript
 boltffi pack wasm --release --no-build
+```
+
+**Python:**
+```bash
+boltffi build --release
+boltffi generate python --experimental
+boltffi pack python --release --experimental --no-build
 ```
 
 Use `--no-build` with `pack` when you've already built, to skip recompilation.
@@ -593,6 +613,72 @@ cd dist/wasm/pkg
 npm publish
 ```
 
+## Python Packaging
+
+Package the generated Python sources plus the current-host Rust shared library:
+
+```bash
+boltffi pack python --experimental
+```
+
+This flow:
+
+1. regenerates the Python source package unless `--regenerate false`
+2. builds or reuses the host `cdylib`
+3. stages the shared library into the generated package
+4. builds a wheel with `python -m pip wheel`
+
+### Configuration
+
+Enable the target in `boltffi.toml`:
+
+```toml
+experimental = ["python"]
+
+[targets.python]
+enabled = true
+module_name = "demo_runtime"
+
+[targets.python.wheel]
+output = "dist/python/wheelhouse"
+interpreters = ["python3.11", "python3.12", "python3.13"]
+```
+
+`module_name` controls the generated import path. `output` controls where wheels land. `interpreters` defines the Python version matrix for the current host. You can override the configured interpreter list per command with repeated `--python` flags.
+
+### Output Structure
+
+```
+dist/python/
+├── demo_runtime/
+│   ├── __init__.py
+│   ├── __init__.pyi
+│   ├── _native.c
+│   ├── py.typed
+│   └── libdemo_ffi.dylib
+├── pyproject.toml
+├── setup.py
+└── wheelhouse/
+    ├── demo_package-0.1.0-cp311-...whl
+    └── demo_package-0.1.0-cp312-...whl
+```
+
+The shared library filename changes per host:
+
+- macOS: `.dylib`
+- Linux: `.so`
+- Windows: `.dll`
+
+### Interpreter Selection
+
+To package for specific installed interpreters on the current host:
+
+```bash
+boltffi pack python --experimental --python python3.12 --python python3.13
+```
+
+If you omit `--python` and do not configure `[targets.python.wheel].interpreters`, BoltFFI falls back to the first available default interpreter on the host.
+
 ## Build Profiles
 
 Debug builds are faster but produce larger, slower binaries:
@@ -631,6 +717,7 @@ boltffi release apple
 boltffi release android
 boltffi release java
 boltffi release wasm
+boltffi release all --experimental
 ```
 
 Or build everything at once:

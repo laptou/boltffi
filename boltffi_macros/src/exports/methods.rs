@@ -945,24 +945,43 @@ fn generate_sync_method_export(
         }
 
         if matches!(strategy, EncodedReturnStrategy::DirectVec) {
-            let call_and_bind = if has_conversions {
-                quote! {
-                    #(#conversions)*
-                    let #result_ident: #inner_ty = #call_expr;
-                }
-            } else {
-                quote! {
-                    let #result_ident: #inner_ty = #call_expr;
-                }
-            };
+            let native_on_error = return_abi.native_invalid_arg_early_return_statement();
+            let wasm_on_error = return_abi.wasm_invalid_arg_early_return_statement();
+            let other_inputs_native = method.sig.inputs.iter().skip(1).cloned();
+            let FfiParams {
+                conversions: native_conversions,
+                call_args: native_call_args,
+                ..
+            } = transform_method_params(
+                other_inputs_native,
+                return_lowering,
+                callback_registry,
+                &native_on_error,
+            );
+            let other_inputs_wasm = method.sig.inputs.iter().skip(1).cloned();
+            let FfiParams {
+                conversions: wasm_conversions,
+                call_args: wasm_call_args,
+                ..
+            } = transform_method_params(
+                other_inputs_wasm,
+                return_lowering,
+                callback_registry,
+                &wasm_on_error,
+            );
+
+            let native_call = quote! { (*handle).#method_name(#(#native_call_args),*) };
+            let wasm_call = quote! { (*handle).#method_name(#(#wasm_call_args),*) };
 
             let native_body = quote! {
-                #call_and_bind
+                #(#native_conversions)*
+                let #result_ident: #inner_ty = #native_call;
                 <_ as ::boltffi::__private::VecTransport>::pack_vec(#result_ident)
             };
 
             let wasm_body = quote! {
-                #call_and_bind
+                #(#wasm_conversions)*
+                let #result_ident: #inner_ty = #wasm_call;
                 let __buf = ::boltffi::__private::FfiBuf::from_vec(#result_ident);
                 ::boltffi::__private::write_return_slot(__buf.as_ptr() as u32, __buf.len() as u32, __buf.cap() as u32, __buf.align() as u32);
                 core::mem::forget(__buf);
@@ -1288,24 +1307,43 @@ fn generate_static_method_export(
         }
 
         if matches!(strategy, EncodedReturnStrategy::DirectVec) {
-            let call_and_bind = if has_conversions {
-                quote! {
-                    #(#conversions)*
-                    let #result_ident: #inner_ty = #call_expr;
-                }
-            } else {
-                quote! {
-                    let #result_ident: #inner_ty = #call_expr;
-                }
-            };
+            let native_on_error = return_abi.native_invalid_arg_early_return_statement();
+            let wasm_on_error = return_abi.wasm_invalid_arg_early_return_statement();
+            let all_inputs_native = method.sig.inputs.iter().cloned();
+            let FfiParams {
+                conversions: native_conversions,
+                call_args: native_call_args,
+                ..
+            } = transform_method_params(
+                all_inputs_native,
+                return_lowering,
+                callback_registry,
+                &native_on_error,
+            );
+            let all_inputs_wasm = method.sig.inputs.iter().cloned();
+            let FfiParams {
+                conversions: wasm_conversions,
+                call_args: wasm_call_args,
+                ..
+            } = transform_method_params(
+                all_inputs_wasm,
+                return_lowering,
+                callback_registry,
+                &wasm_on_error,
+            );
+
+            let native_call = quote! { #type_name::#method_name(#(#native_call_args),*) };
+            let wasm_call = quote! { #type_name::#method_name(#(#wasm_call_args),*) };
 
             let native_body = quote! {
-                #call_and_bind
+                #(#native_conversions)*
+                let #result_ident: #inner_ty = #native_call;
                 <_ as ::boltffi::__private::VecTransport>::pack_vec(#result_ident)
             };
 
             let wasm_body = quote! {
-                #call_and_bind
+                #(#wasm_conversions)*
+                let #result_ident: #inner_ty = #wasm_call;
                 let __buf = ::boltffi::__private::FfiBuf::from_vec(#result_ident);
                 ::boltffi::__private::write_return_slot(__buf.as_ptr() as u32, __buf.len() as u32, __buf.cap() as u32, __buf.align() as u32);
                 core::mem::forget(__buf);

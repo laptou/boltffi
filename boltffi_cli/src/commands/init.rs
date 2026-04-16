@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use crate::cli::Result;
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
-    CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig, JavaConfig,
-    PackageConfig, SpmConfig, TargetsConfig, WasmConfig, XcframeworkConfig,
+    CSharpConfig, CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig,
+    JavaConfig, PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig,
+    XcframeworkConfig,
 };
-use crate::error::Result;
 
 pub struct InitOptions {
     pub name: Option<String>,
@@ -129,6 +130,8 @@ fn create_default_config(package_name: &str) -> Config {
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),
             dart: DartConfig::default(),
+            python: PythonConfig::default(),
+            csharp: CSharpConfig::default(),
         },
     }
 }
@@ -177,6 +180,8 @@ mod tests {
         assert!(config_path.exists());
         let content = fs::read_to_string(&config_path).expect("read config");
         assert!(content.contains("name = \"demo_lib\""));
+        assert!(content.contains("[targets.python]"));
+        assert!(content.contains("[targets.python.wheel]"));
 
         fs::remove_dir_all(temp_root).expect("cleanup temp root");
     }

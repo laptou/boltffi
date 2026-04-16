@@ -1,0 +1,6 @@
+final class ___{{ name }} extends $$ffi.Struct {
+{%- for field in layout.fields %}
+  {{ field.native_type.field_annot() }}
+  external {{ field.native_type.dart_sub_type() }} {{ field.name }};
+{% endfor -%}
+}

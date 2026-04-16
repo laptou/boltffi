@@ -120,6 +120,16 @@ open class BoltFFIVsUniffiBench {
     }
 
     @Benchmark
+    open fun boltffi_inc_u64_value(blackhole: Blackhole) {
+        blackhole.consume(incU64Value(0uL))
+    }
+
+    @Benchmark
+    open fun uniffi_inc_u64_value(blackhole: Blackhole) {
+        blackhole.consume(uniffi.bench_uniffi.incU64(0uL))
+    }
+
+    @Benchmark
     open fun boltffi_echo_string_small(blackhole: Blackhole) {
         blackhole.consume(echoString("hello"))
     }

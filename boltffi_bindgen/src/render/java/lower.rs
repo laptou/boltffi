@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
+use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::{
     EncodedReturnStrategy, EnumTagStrategy, ReturnInvocationContext, ReturnPlatform,
     ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
@@ -211,8 +212,7 @@ impl<'a> JavaLowerer<'a> {
             .options
             .library_name
             .clone()
-            .unwrap_or_else(|| self.module_name.clone())
-            .replace('-', "_");
+            .unwrap_or_else(|| naming::library_name(&self.module_name));
 
         let prefix = boltffi_ffi_rules::naming::ffi_prefix().to_string();
 

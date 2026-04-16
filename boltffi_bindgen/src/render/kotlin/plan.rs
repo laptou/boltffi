@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::naming::{LibraryName, Name};
+
 use crate::ir::codec::VecLayout;
 use crate::ir::ids::CallbackId;
 
@@ -388,7 +390,7 @@ pub struct KotlinCallbackReturn {
 
 #[derive(Clone)]
 pub struct KotlinNative {
-    pub lib_name: String,
+    pub lib_name: Name<LibraryName>,
     pub desktop_loader: bool,
     pub prefix: String,
     pub functions: Vec<KotlinNativeFunction>,

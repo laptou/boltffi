@@ -51,7 +51,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_vec_return_uses_void_wasm_failure() {
+    fn direct_vec_return_uses_platform_aware_early_return() {
         let resolved_return = ResolvedReturn::new(
             parse_quote!(Vec<i32>),
             ReturnContract::infallible(ValueReturnStrategy::Buffer(
@@ -64,11 +64,30 @@ mod tests {
                 .value_return_method(ReturnInvocationContext::SyncExport, ReturnPlatform::Wasm,),
             ValueReturnMethod::WriteToReturnSlot
         ));
+
+        let combined = resolved_return
+            .invalid_arg_early_return_statement()
+            .to_string();
+        assert!(
+            combined.contains("return ;"),
+            "combined: wasm branch should use void return"
+        );
+        assert!(
+            combined.contains("return :: boltffi :: __private :: FfiBuf :: default ()"),
+            "combined: native branch should return FfiBuf::default()"
+        );
+
         assert_eq!(
             resolved_return
-                .invalid_arg_early_return_statement()
+                .wasm_invalid_arg_early_return_statement()
                 .to_string(),
-            "return ;"
+            "return ;",
+        );
+        assert_eq!(
+            resolved_return
+                .native_invalid_arg_early_return_statement()
+                .to_string(),
+            "return :: boltffi :: __private :: FfiBuf :: default () ;",
         );
     }
 

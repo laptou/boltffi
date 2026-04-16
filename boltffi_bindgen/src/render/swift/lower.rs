@@ -40,7 +40,7 @@ use crate::ir::plan::{
     AbiType, CallbackStyle, CompositeLayout, Mutability, ScalarOrigin, SpanContent, Transport,
 };
 use crate::ir::types::{PrimitiveType, TypeExpr};
-use crate::render::{TypeConversion, TypeMappings};
+use crate::render::{LowerError, TypeConversion, TypeMappings};
 
 struct AbiIndex {
     calls: HashMap<CallId, usize>,
@@ -135,7 +135,7 @@ impl<'a> SwiftLowerer<'a> {
         self
     }
 
-    pub fn lower(self) -> Result<SwiftModule, String> {
+    pub fn lower(self) -> Result<SwiftModule, LowerError> {
         let custom_types = self.lower_custom_types();
         let records = self.lower_records()?;
         let enums = self.lower_enums()?;
@@ -288,7 +288,7 @@ impl<'a> SwiftLowerer<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl<'a> SwiftLowerer<'a> {
-    fn lower_records(&self) -> Result<Vec<SwiftRecord>, String> {
+    fn lower_records(&self) -> Result<Vec<SwiftRecord>, LowerError> {
         self.contract
             .catalog
             .all_records()
@@ -296,7 +296,7 @@ impl<'a> SwiftLowerer<'a> {
             .collect()
     }
 
-    fn lower_record(&self, def: &RecordDef) -> Result<SwiftRecord, String> {
+    fn lower_record(&self, def: &RecordDef) -> Result<SwiftRecord, LowerError> {
         let abi_record = self.abi_index.record(self.abi, &def.id);
         let decode_fields = self.record_decode_fields(abi_record);
         let encode_fields = self.record_encode_fields(abi_record);
@@ -304,18 +304,18 @@ impl<'a> SwiftLowerer<'a> {
         for field in &def.fields {
             let swift_name = camel_case(field.name.as_str());
             let decode = decode_fields.get(&field.name).cloned().ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing decode sequence for field `{}` in record `{}`",
+                LowerError::Invalid(format!(
+                    "missing decode sequence for field `{}` in record `{}`",
                     field.name.as_str(),
                     def.id.as_str()
-                )
+                ))
             })?;
             let encode = encode_fields.get(&field.name).cloned().ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing encode sequence for field `{}` in record `{}`",
+                LowerError::Invalid(format!(
+                    "missing encode sequence for field `{}` in record `{}`",
                     field.name.as_str(),
                     def.id.as_str()
-                )
+                ))
             })?;
             let c_offset = if abi_record.is_blittable {
                 decode_fields
@@ -340,10 +340,10 @@ impl<'a> SwiftLowerer<'a> {
         let mut constructors = Vec::new();
         for (call_id, ctor) in def.constructor_calls() {
             let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing abi call for constructor on record `{}`",
+                LowerError::Invalid(format!(
+                    "missing abi call for constructor on record `{}`",
                     def.id.as_str()
-                )
+                ))
             })?;
             constructors.push(self.lower_value_type_constructor(ctor, call));
         }
@@ -351,18 +351,18 @@ impl<'a> SwiftLowerer<'a> {
         let mut methods = Vec::new();
         for (call_id, method) in def.method_calls() {
             if method.is_async() {
-                return Err(format!(
-                    "boltffi bindgen (swift): async methods on value types are not supported yet (method `{}` on record `{}`)",
+                return Err(LowerError::Unsupported(format!(
+                    "async methods on value types are not implemented (method `{}` on record `{}`)",
                     method.id.as_str(),
                     def.id.as_str()
-                ));
+                )));
             }
             let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing abi call for method `{}` on record `{}`",
+                LowerError::Invalid(format!(
+                    "missing abi call for method `{}` on record `{}`",
                     method.id.as_str(),
                     def.id.as_str()
-                )
+                ))
             })?;
             methods.push(self.lower_value_type_method(
                 method,
@@ -587,7 +587,7 @@ impl<'a> SwiftLowerer<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl<'a> SwiftLowerer<'a> {
-    fn lower_enums(&self) -> Result<Vec<SwiftEnum>, String> {
+    fn lower_enums(&self) -> Result<Vec<SwiftEnum>, LowerError> {
         self.contract
             .catalog
             .all_enums()
@@ -595,7 +595,7 @@ impl<'a> SwiftLowerer<'a> {
             .collect()
     }
 
-    fn lower_enum(&self, def: &EnumDef) -> Result<SwiftEnum, String> {
+    fn lower_enum(&self, def: &EnumDef) -> Result<SwiftEnum, LowerError> {
         let abi_enum = self.abi_index.enumeration(self.abi, &def.id);
         let variant_docs = def.variant_docs();
         let variants = abi_enum
@@ -621,10 +621,10 @@ impl<'a> SwiftLowerer<'a> {
         let mut constructors = Vec::new();
         for (call_id, ctor) in def.constructor_calls() {
             let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing abi call for constructor on enum `{}`",
+                LowerError::Invalid(format!(
+                    "missing abi call for constructor on enum `{}`",
                     def.id.as_str()
-                )
+                ))
             })?;
             constructors.push(self.lower_value_type_constructor(ctor, call));
         }
@@ -632,18 +632,18 @@ impl<'a> SwiftLowerer<'a> {
         let mut methods = Vec::new();
         for (call_id, method) in def.method_calls() {
             if method.is_async() {
-                return Err(format!(
-                    "boltffi bindgen (swift): async methods on value types are not supported yet (method `{}` on enum `{}`)",
+                return Err(LowerError::Unsupported(format!(
+                    "async methods on value types are not implemented (method `{}` on enum `{}`)",
                     method.id.as_str(),
                     def.id.as_str()
-                ));
+                )));
             }
             let call = self.resolve_abi_call(&call_id).ok_or_else(|| {
-                format!(
-                    "boltffi bindgen (swift): missing abi call for method `{}` on enum `{}`",
+                LowerError::Invalid(format!(
+                    "missing abi call for method `{}` on enum `{}`",
                     method.id.as_str(),
                     def.id.as_str()
-                )
+                ))
             })?;
             methods.push(self.lower_value_type_method(
                 method,

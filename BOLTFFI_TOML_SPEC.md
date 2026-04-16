@@ -198,7 +198,7 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
 
 ## Java
 
-### `[targets.java]` (optional, experimental)
+### `[targets.java]` (optional)
 
 - `package` (string, optional): Java package for generated sources.
   - Default: `com.example.{package.name}` (with `-` normalized to `_`)

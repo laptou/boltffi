@@ -17,12 +17,17 @@
 //! All backends implement the [`Renderer`] trait.
 
 pub mod c;
+pub mod csharp;
 pub mod dart;
+pub mod error;
 pub mod java;
 pub mod jni;
 pub mod kotlin;
+pub mod python;
 pub mod swift;
 pub mod typescript;
+
+pub use error::LowerError;
 
 use std::collections::HashMap;
 

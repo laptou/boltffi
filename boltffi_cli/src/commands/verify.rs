@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use boltffi_verify::{Language, OutputFormat, Reporter, Verifier};
 
-use crate::error::{CliError, Result};
+use crate::cli::{CliError, Result};
 
 pub struct VerifyOptions {
     pub path: PathBuf,

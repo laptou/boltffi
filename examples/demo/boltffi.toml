@@ -48,3 +48,11 @@ host_targets = ["current"]
 [targets.dart]
 enabled = true
 output = "../platforms/dart/dist"
+
+[targets.python]
+enabled = true
+output = "../platforms/python/dist"
+
+[targets.csharp]
+enabled = true
+output = "../platforms/csharp/dist"
