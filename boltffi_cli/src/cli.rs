@@ -1,13 +1,7 @@
 use crate::config::ConfigError;
+use crate::pack::PackError;
+use crate::toolchain::AndroidToolchainError;
 use std::path::PathBuf;
-
-fn build_failed_details_suffix(details: &str) -> String {
-    if details.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n{details}")
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
@@ -16,15 +10,6 @@ pub enum CliError {
 
     #[error("config file not found: {0}")]
     ConfigNotFound(PathBuf),
-
-    #[error("no built libraries found for {platform}")]
-    NoLibrariesFound { platform: String },
-
-    #[error("missing built libraries for {platform}: {targets:?}")]
-    MissingBuiltLibraries {
-        platform: String,
-        targets: Vec<String>,
-    },
 
     #[error("command failed: {command}")]
     CommandFailed {
@@ -57,26 +42,8 @@ pub enum CliError {
         source: std::io::Error,
     },
 
-    #[error("xcframework creation failed")]
-    XcframeworkFailed { source: std::io::Error },
-
-    #[error("lipo failed for simulator fat library")]
-    LipoFailed { source: std::io::Error },
-
-    #[error("zip creation failed")]
-    ZipFailed { source: std::io::Error },
-
     #[error("file not found: {0}")]
     FileNotFound(PathBuf),
-
-    #[error("android ndk not found (set ANDROID_NDK_HOME or ANDROID_HOME/ANDROID_SDK_ROOT)")]
-    AndroidNdkNotFound,
-
-    #[error("invalid android ndk at {path}")]
-    AndroidNdkInvalid { path: PathBuf },
-
-    #[error("android ndk toolchain not found at {path}")]
-    AndroidToolchainNotFound { path: PathBuf },
 
     #[error("unsupported language: {0}")]
     UnsupportedLanguage(String),
@@ -84,14 +51,11 @@ pub enum CliError {
     #[error("verification error: {0}")]
     VerifyError(String),
 
-    #[error(
-        "build failed for targets: {targets:?}{details_suffix}",
-        details_suffix = build_failed_details_suffix(details)
-    )]
-    BuildFailed {
-        targets: Vec<String>,
-        details: String,
-    },
+    #[error(transparent)]
+    Pack(#[from] PackError),
+
+    #[error(transparent)]
+    AndroidToolchain(#[from] AndroidToolchainError),
 }
 
 impl From<ConfigError> for CliError {

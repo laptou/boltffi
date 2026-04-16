@@ -1,0 +1,11 @@
+from __future__ import annotations
+
+MODULE_NAME: str
+PACKAGE_NAME: str
+PACKAGE_VERSION: str | None
+{% if !module.functions.is_empty() %}
+
+{% for function in module.functions %}
+def {{ function.python_name }}({% for parameter in function.parameters %}{{ parameter.name }}: {{ parameter.type_ref.python_annotation() }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ function.return_type.python_annotation() }}: ...
+{% endfor %}
+{% endif %}

@@ -174,7 +174,7 @@ mod tests {
         JavaModule {
             package_name: "com.test".to_string(),
             class_name: "Test".to_string(),
-            lib_name: "test".to_string(),
+            lib_name: boltffi_ffi_rules::naming::library_name("test"),
             desktop_loader: true,
             java_version: JavaVersion::JAVA_17,
             async_mode: JavaAsyncMode::CompletableFuture,

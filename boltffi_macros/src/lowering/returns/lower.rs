@@ -31,7 +31,14 @@ impl ResolvedReturn {
             }
             ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => {
                 quote! {
-                    return;
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        return ::boltffi::__private::FfiBuf::default();
+                    }
                 }
             }
             ValueReturnStrategy::Buffer(_) => match (
@@ -73,6 +80,49 @@ impl ResolvedReturn {
             ValueReturnStrategy::ObjectHandle | ValueReturnStrategy::CallbackHandle => quote! {
                 return ::core::default::Default::default();
             },
+        }
+    }
+
+    pub fn wasm_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self.value_return_strategy() {
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => quote! {
+                return;
+            },
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar) => {
+                let _ = WasmOptionScalarEncoding::from_option_rust_type(self.rust_type())
+                    .expect("OptionScalar return must have a primitive Option inner type");
+                quote! {
+                    return f64::NAN;
+                }
+            }
+            ValueReturnStrategy::Buffer(_) => match self.direct_buffer_return_method(
+                ReturnInvocationContext::SyncExport,
+                ReturnPlatform::Wasm,
+            ) {
+                Some(DirectBufferReturnMethod::Packed) => quote! {
+                    return ::boltffi::__private::FfiBuf::default().into_packed();
+                },
+                method => panic!(
+                    "unexpected wasm direct buffer return method for invalid-arg return: {:?}",
+                    method
+                ),
+            },
+            _ => self.invalid_arg_early_return_statement(),
+        }
+    }
+
+    pub fn native_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self.value_return_strategy() {
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar) => quote! {
+                return ::boltffi::__private::FfiBuf::default();
+            },
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar) => quote! {
+                return ::boltffi::__private::FfiBuf::default();
+            },
+            _ => self.invalid_arg_early_return_statement(),
         }
     }
 

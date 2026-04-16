@@ -2,8 +2,20 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::error::{CliError, Result};
+use crate::cli::{CliError, Result};
 use crate::target::{Architecture, RustTarget};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AndroidToolchainError {
+    #[error("android ndk not found (set ANDROID_NDK_HOME or ANDROID_HOME/ANDROID_SDK_ROOT)")]
+    NdkNotFound,
+
+    #[error("invalid android ndk at {path}")]
+    NdkInvalid { path: PathBuf },
+
+    #[error("android ndk toolchain not found at {path}")]
+    ToolchainNotFound { path: PathBuf },
+}
 
 #[derive(Debug, Clone)]
 pub struct AndroidNdk {
@@ -76,7 +88,7 @@ impl AndroidToolchain {
 
 impl AndroidNdk {
     pub fn discover(ndk_version_hint: Option<&str>) -> Result<Self> {
-        let root = resolve_ndk_root(ndk_version_hint).ok_or(CliError::AndroidNdkNotFound)?;
+        let root = resolve_ndk_root(ndk_version_hint).ok_or(AndroidToolchainError::NdkNotFound)?;
         let bin_dir = resolve_prebuilt_bin_dir(&root)?;
 
         Ok(Self { root, bin_dir })
@@ -240,9 +252,10 @@ impl NdkVersion {
 fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
     let prebuilt_dir = ndk_root.join("toolchains").join("llvm").join("prebuilt");
     if !prebuilt_dir.exists() {
-        return Err(CliError::AndroidNdkInvalid {
+        return Err(AndroidToolchainError::NdkInvalid {
             path: ndk_root.to_path_buf(),
-        });
+        }
+        .into());
     }
 
     let preferred = preferred_prebuilt_tags();
@@ -259,8 +272,10 @@ fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
                 })
                 .find(|path| path.join("bin").exists())
         })
-        .ok_or_else(|| CliError::AndroidToolchainNotFound {
-            path: ndk_root.to_path_buf(),
+        .ok_or_else(|| {
+            crate::cli::CliError::from(AndroidToolchainError::ToolchainNotFound {
+                path: ndk_root.to_path_buf(),
+            })
         })?;
 
     Ok(matching.join("bin"))

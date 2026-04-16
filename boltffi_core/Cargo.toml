@@ -1,6 +1,6 @@
 [package]
 name = "boltffi_core"
-version = "0.23.0"
+version = "0.23.1"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
 license = "MIT"
@@ -20,7 +20,7 @@ chrono = ["dep:chrono"]
 url = ["dep:url"]
 
 [dependencies]
-boltffi_macros = { version = "0.23.0", path = "../boltffi_macros" }
+boltffi_macros = { version = "0.23.1", path = "../boltffi_macros" }
 mimalloc = { version = "0.1", default-features = false, optional = true }
 uuid = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }

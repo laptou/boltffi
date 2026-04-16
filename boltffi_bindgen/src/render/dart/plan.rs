@@ -156,6 +156,52 @@ pub struct DartNative {
 }
 
 #[derive(Debug, Clone)]
+pub struct DartRecordField {
+    pub name: String,
+    pub offset: usize,
+    pub dart_type: String,
+    pub wire_decode_expr: String,
+    pub wire_encode_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DartBlittableLayout {
+    pub struct_size: usize,
+    pub fields: Vec<DartBlittableField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DartBlittableField {
+    pub name: String,
+    pub primitive: PrimitiveType,
+    pub native_type: DartNativeType,
+    pub offset_const_name: String,
+    pub offset: usize,
+}
+
+impl DartBlittableField {
+    pub fn decode_expr(&self, bytes_name: &str) -> String {
+        super::emit_read_blittable_value(&self.offset_const_name, self.primitive, bytes_name)
+    }
+
+    pub fn encode_expr(&self, bytes_name: &str) -> String {
+        super::emit_write_blittable_value(
+            &self.offset_const_name,
+            self.primitive,
+            &self.name,
+            bytes_name,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DartRecord {
+    pub name: String,
+    pub fields: Vec<DartRecordField>,
+    pub blittable_layout: Option<DartBlittableLayout>,
+}
+#[derive(Debug, Clone)]
 pub struct DartLibrary {
     pub native: DartNative,
+    pub records: Vec<DartRecord>,
 }

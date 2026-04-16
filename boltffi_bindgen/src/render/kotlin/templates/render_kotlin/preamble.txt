@@ -70,6 +70,10 @@ class FfiException(val code: Int, message: String) : Exception(message)
 private fun takeLastErrorMessage(): String =
     Native.{{ prefix }}_last_error_message().toString(Charsets.UTF_8)
 
+private inline fun <T> useWireBytes(bytes: ByteArray, block: (java.nio.ByteBuffer) -> T): T {
+    return block(java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN))
+}
+
 {%- if has_async_runtime %}
 object BoltFFIScope : CoroutineScope {
     override val coroutineContext = Dispatchers.Default + SupervisorJob()
@@ -83,12 +87,6 @@ class BoltFFIException(val errorBuffer: ByteBuffer) : Exception("Structured erro
         errorBuffer.order(ByteOrder.nativeOrder())
     }
 }
-
-private inline fun <T> useWireBytes(bytes: ByteArray, block: (java.nio.ByteBuffer) -> T): T {
-    return block(java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN))
-}
-
-
 
 private const val BOLTFFI_FUTURE_POLL_READY: Byte = 0
 private const val BOLTFFI_FUTURE_POLL_WAKE: Byte = 1

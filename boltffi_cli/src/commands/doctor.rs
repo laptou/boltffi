@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::check::EnvironmentCheck;
+use crate::cli::Result;
 use crate::commands::check::apple_targets_require_lipo;
 use crate::config::Config;
-use crate::error::Result;
 use crate::target::RustTarget;
 
 pub enum ConfigSummary {

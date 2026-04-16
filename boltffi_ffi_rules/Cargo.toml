@@ -1,6 +1,6 @@
 [package]
 name = "boltffi_ffi_rules"
-version = "0.23.0"
+version = "0.23.1"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
 license = "MIT"
@@ -14,6 +14,9 @@ serde = ["dep:serde"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+rstest = "0.25"
 
 [lints]
 workspace = true

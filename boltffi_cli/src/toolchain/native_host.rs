@@ -1,9 +1,19 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::error::{CliError, Result};
+use crate::cargo::config::{
+    cargo_config_file_candidates, configured_build_target as cargo_configured_build_target,
+    extract_cargo_config_args, resolve_cargo_config_path,
+};
+use crate::cli::{CliError, Result};
 use crate::target::JavaHostTarget;
+
+#[cfg(test)]
+use crate::cargo::config::{
+    cargo_config_file_candidates_with_inputs, cargo_config_search_roots,
+    parse_build_target_from_config_file, parse_build_target_from_inline_config,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConfiguredValue {
@@ -66,7 +76,7 @@ impl CargoTargetCfg {
 }
 
 #[derive(Debug, Clone)]
-pub struct DesktopToolchain {
+pub struct NativeHostToolchain {
     rust_target_triple: String,
     cargo_linker_env: Option<(String, String)>,
     jni_compiler_program: PathBuf,
@@ -74,7 +84,7 @@ pub struct DesktopToolchain {
     jni_rustflag_linker_args: Vec<String>,
 }
 
-impl DesktopToolchain {
+impl NativeHostToolchain {
     pub fn discover(
         toolchain_selector: Option<&str>,
         cargo_args: &[String],
@@ -328,7 +338,10 @@ fn configured_linux_build_target(
     cargo_args: &[String],
     target: JavaHostTarget,
 ) -> Result<Option<String>> {
-    let Some(target_triple) = cargo_configured_build_target(cargo_args) else {
+    let current_directory = std::env::current_dir().ok();
+    let Some(target_triple) =
+        cargo_configured_build_target(cargo_args, current_directory.as_deref())
+    else {
         return Ok(None);
     };
 
@@ -343,7 +356,8 @@ fn current_host_linux_build_target(
     cargo_args: &[String],
     target: JavaHostTarget,
 ) -> Option<String> {
-    let target_triple = cargo_configured_build_target(cargo_args)?;
+    let current_directory = std::env::current_dir().ok();
+    let target_triple = cargo_configured_build_target(cargo_args, current_directory.as_deref())?;
     if !target_triple.contains("linux") || target_triple.contains("android") {
         return None;
     }
@@ -384,7 +398,10 @@ fn validate_linux_rust_target_triple(
 }
 
 fn configured_windows_build_target(cargo_args: &[String]) -> Result<Option<String>> {
-    let Some(target_triple) = cargo_configured_build_target(cargo_args) else {
+    let current_directory = std::env::current_dir().ok();
+    let Some(target_triple) =
+        cargo_configured_build_target(cargo_args, current_directory.as_deref())
+    else {
         return Ok(None);
     };
 
@@ -396,7 +413,8 @@ fn configured_windows_build_target(cargo_args: &[String]) -> Result<Option<Strin
 }
 
 fn current_host_windows_build_target(cargo_args: &[String]) -> Option<String> {
-    let target_triple = cargo_configured_build_target(cargo_args)?;
+    let current_directory = std::env::current_dir().ok();
+    let target_triple = cargo_configured_build_target(cargo_args, current_directory.as_deref())?;
     if !target_triple.contains("windows") {
         return None;
     }
@@ -1045,6 +1063,7 @@ fn cargo_inline_configured_linker_values(
     rust_target_triple: &str,
 ) -> Vec<ConfiguredValue> {
     let mut configured_values = Vec::new();
+    let current_directory = std::env::current_dir().ok();
 
     for config_arg in extract_cargo_config_args(cargo_args).into_iter().rev() {
         if let Some(linker) =
@@ -1057,7 +1076,7 @@ fn cargo_inline_configured_linker_values(
             continue;
         }
 
-        let config_path = resolve_cargo_config_path(&config_arg);
+        let config_path = resolve_cargo_config_path(&config_arg, current_directory.as_deref());
         if let Some(linker) = parse_target_linker_from_config_file(&config_path, rust_target_triple)
         {
             configured_values.push(ConfiguredValue {
@@ -1075,6 +1094,7 @@ fn cargo_inline_configured_rustflags(
     rust_target_triple: &str,
 ) -> Vec<String> {
     let mut rustflags = Vec::new();
+    let current_directory = std::env::current_dir().ok();
 
     for config_arg in extract_cargo_config_args(cargo_args).into_iter().rev() {
         if let Some(values) =
@@ -1084,7 +1104,7 @@ fn cargo_inline_configured_rustflags(
             continue;
         }
 
-        let config_path = resolve_cargo_config_path(&config_arg);
+        let config_path = resolve_cargo_config_path(&config_arg, current_directory.as_deref());
         if let Some(values) =
             parse_target_rustflags_from_config_file(&config_path, rust_target_triple)
         {
@@ -1099,16 +1119,18 @@ fn cargo_config_file_linker_values(
     cargo_args: &[String],
     rust_target_triple: &str,
 ) -> Vec<ConfiguredValue> {
+    let current_directory = std::env::current_dir().ok();
     cargo_config_file_linker_values_with_candidates(
-        cargo_config_file_candidates(cargo_args),
+        cargo_config_file_candidates(cargo_args, current_directory.as_deref()),
         rust_target_triple,
     )
 }
 
 fn cargo_config_file_rustflags(cargo_args: &[String], rust_target_triple: &str) -> Vec<String> {
     let mut rustflags = Vec::new();
+    let current_directory = std::env::current_dir().ok();
 
-    for config_path in cargo_config_file_candidates(cargo_args) {
+    for config_path in cargo_config_file_candidates(cargo_args, current_directory.as_deref()) {
         if let Some(values) =
             parse_target_rustflags_from_config_file(&config_path, rust_target_triple)
         {
@@ -1304,55 +1326,6 @@ fn cargo_config_file_linker_values_with_candidates(
     configured_values
 }
 
-fn cargo_configured_build_target(cargo_args: &[String]) -> Option<String> {
-    for config_arg in extract_cargo_config_args(cargo_args).into_iter().rev() {
-        if let Some(target) = parse_build_target_from_inline_config(&config_arg) {
-            return Some(target);
-        }
-
-        let config_path = resolve_cargo_config_path(&config_arg);
-        if let Some(target) = parse_build_target_from_config_file(&config_path) {
-            return Some(target);
-        }
-    }
-
-    if let Ok(target) = std::env::var("CARGO_BUILD_TARGET")
-        && !target.trim().is_empty()
-    {
-        return Some(target);
-    }
-
-    for config_path in cargo_config_file_candidates(cargo_args) {
-        if let Some(target) = parse_build_target_from_config_file(&config_path) {
-            return Some(target);
-        }
-    }
-
-    None
-}
-
-fn extract_cargo_config_args(cargo_args: &[String]) -> Vec<String> {
-    let mut config_args = Vec::new();
-    let mut index = 0;
-
-    while index < cargo_args.len() {
-        let argument = &cargo_args[index];
-
-        if let Some(value) = argument.strip_prefix("--config=") {
-            config_args.push(value.to_string());
-        } else if argument == "--config"
-            && let Some(value) = cargo_args.get(index + 1)
-        {
-            config_args.push(value.clone());
-            index += 1;
-        }
-
-        index += 1;
-    }
-
-    config_args
-}
-
 fn parse_target_linker_from_inline_config(
     config_arg: &str,
     rust_target_triple: &str,
@@ -1372,25 +1345,6 @@ fn parse_target_linker_from_inline_config(
     })
 }
 
-fn parse_build_target_from_inline_config(config_arg: &str) -> Option<String> {
-    config_arg
-        .strip_prefix("build.target=")
-        .map(trim_wrapping_quotes)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn resolve_cargo_config_path(config_arg: &str) -> PathBuf {
-    let path = PathBuf::from(config_arg);
-    if path.is_absolute() {
-        return path;
-    }
-
-    std::env::current_dir()
-        .map(|current_dir| current_dir.join(&path))
-        .unwrap_or(path)
-}
-
 fn parse_target_linker_from_config_file(
     config_path: &Path,
     rust_target_triple: &str,
@@ -1399,17 +1353,6 @@ fn parse_target_linker_from_config_file(
     let value: toml::Value = toml::from_str(&content).ok()?;
     let linker = target_linker_from_config_value(&value, rust_target_triple)?;
     resolve_config_relative_linker(config_path, linker)
-}
-
-fn parse_build_target_from_config_file(config_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(config_path).ok()?;
-    let value: toml::Value = toml::from_str(&content).ok()?;
-    value
-        .get("build")?
-        .get("target")?
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 fn cargo_config_base_dir(config_path: &Path) -> Option<PathBuf> {
@@ -1567,155 +1510,6 @@ fn split_cargo_cfg_arguments(input: &str) -> Option<Vec<&str>> {
     Some(arguments)
 }
 
-fn cargo_config_file_candidates(cargo_args: &[String]) -> Vec<PathBuf> {
-    let current_dir = std::env::current_dir().ok();
-    cargo_config_file_candidates_with_inputs(
-        cargo_config_search_roots(cargo_args, current_dir.clone()),
-        current_dir.clone(),
-        std::env::var_os("CARGO_HOME").map(PathBuf::from),
-        cargo_home_fallback_home_dir(),
-    )
-}
-
-fn cargo_config_file_candidates_with_inputs(
-    search_roots: Vec<PathBuf>,
-    current_dir: Option<PathBuf>,
-    cargo_home: Option<PathBuf>,
-    home_dir: Option<PathBuf>,
-) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    for search_root in search_roots {
-        let mut current_root = search_root;
-        loop {
-            for config_name in [".cargo/config.toml", ".cargo/config"] {
-                let config_path = current_root.join(config_name);
-                if config_path.exists() && !candidates.contains(&config_path) {
-                    candidates.push(config_path);
-                }
-            }
-
-            if !current_root.pop() {
-                break;
-            }
-        }
-    }
-
-    let resolved_cargo_home = cargo_home.map(|cargo_home| {
-        if cargo_home.is_absolute() {
-            cargo_home
-        } else if let Some(current_dir) = current_dir.as_ref() {
-            current_dir.join(cargo_home)
-        } else {
-            cargo_home
-        }
-    });
-
-    let global_config_roots = resolved_cargo_home
-        .into_iter()
-        .chain(home_dir.into_iter().map(|home_dir| home_dir.join(".cargo")));
-
-    for config_root in global_config_roots {
-        for config_name in ["config.toml", "config"] {
-            let config_path = config_root.join(config_name);
-            if config_path.exists() && !candidates.contains(&config_path) {
-                candidates.push(config_path);
-            }
-        }
-    }
-
-    candidates
-}
-
-fn cargo_config_search_roots(cargo_args: &[String], current_dir: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-
-    if let Some(manifest_dir) = selected_manifest_directory(cargo_args, current_dir.as_ref())
-        && !roots.contains(&manifest_dir)
-    {
-        roots.push(manifest_dir);
-    }
-
-    if let Some(current_dir) = current_dir
-        && !roots.contains(&current_dir)
-    {
-        roots.push(current_dir);
-    }
-
-    roots
-}
-
-fn selected_manifest_directory(
-    cargo_args: &[String],
-    current_dir: Option<&PathBuf>,
-) -> Option<PathBuf> {
-    let mut index = 0;
-
-    while index < cargo_args.len() {
-        let argument = &cargo_args[index];
-        let manifest_path = if let Some(path) = argument.strip_prefix("--manifest-path=") {
-            Some(path)
-        } else if argument == "--manifest-path" {
-            cargo_args.get(index + 1).map(|value| value.as_str())
-        } else {
-            None
-        };
-
-        if let Some(manifest_path) = manifest_path {
-            let path = PathBuf::from(manifest_path);
-            let resolved = if path.is_absolute() {
-                path
-            } else if let Some(current_dir) = current_dir {
-                current_dir.join(path)
-            } else {
-                path
-            };
-
-            return resolved
-                .parent()
-                .map(normalize_search_path)
-                .filter(|path| !path.as_os_str().is_empty());
-        }
-
-        if argument == "--manifest-path" {
-            index += 1;
-        }
-        index += 1;
-    }
-
-    None
-}
-
-fn normalize_search_path(path: &Path) -> PathBuf {
-    path.components()
-        .fold(PathBuf::new(), |mut normalized_path, component| {
-            match component {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    if normalized_path.file_name().is_some() {
-                        normalized_path.pop();
-                    } else if !normalized_path.has_root() {
-                        normalized_path.push(component.as_os_str());
-                    }
-                }
-                _ => normalized_path.push(component.as_os_str()),
-            }
-            normalized_path
-        })
-}
-
-fn cargo_home_fallback_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
-        .or_else(|| {
-            let drive = std::env::var_os("HOMEDRIVE")?;
-            let path = std::env::var_os("HOMEPATH")?;
-            let mut home_dir = PathBuf::from(drive);
-            home_dir.push(path);
-            Some(home_dir)
-        })
-}
-
 fn trim_wrapping_quotes(value: &str) -> &str {
     value
         .strip_prefix('"')
@@ -1731,7 +1525,7 @@ fn trim_wrapping_quotes(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoTargetCfg, ConfiguredValue, DesktopToolchain, cargo_cfg_expression_matches,
+        CargoTargetCfg, ConfiguredValue, NativeHostToolchain, cargo_cfg_expression_matches,
         cargo_config_base_dir, cargo_config_file_candidates_with_inputs,
         cargo_config_file_linker_values_with_candidates, cargo_config_search_roots,
         cargo_configured_build_target, cargo_inline_configured_linker_values, cargo_linker_env_key,
@@ -1752,7 +1546,7 @@ mod tests {
         validate_windows_rust_target_triple, windows_host_linker_args,
         write_linux_cross_linker_wrapper,
     };
-    use crate::error::CliError;
+    use crate::cli::CliError;
     use crate::target::JavaHostTarget;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2300,9 +2094,10 @@ unix
 
     #[test]
     fn resolves_cargo_configured_build_target_from_config_args() {
-        let target = cargo_configured_build_target(&[
-            "--config=build.target='x86_64-pc-windows-gnu'".to_string(),
-        ])
+        let target = cargo_configured_build_target(
+            &["--config=build.target='x86_64-pc-windows-gnu'".to_string()],
+            Some(Path::new("/tmp/workspace")),
+        )
         .expect("configured build target");
 
         assert_eq!(target, "x86_64-pc-windows-gnu");
@@ -2603,7 +2398,7 @@ unix
                 "--manifest-path".to_string(),
                 "../workspace/member/Cargo.toml".to_string(),
             ],
-            Some(current_dir.clone()),
+            Some(current_dir.as_path()),
         );
 
         assert_eq!(roots[0], PathBuf::from("/tmp/workspace/member"));
@@ -2934,7 +2729,7 @@ unix
         assert_eq!(linker_program, compiler_path.clone());
         assert!(linker_args.is_empty());
 
-        let toolchain = DesktopToolchain {
+        let toolchain = NativeHostToolchain {
             rust_target_triple: "x86_64-pc-windows-msvc".to_string(),
             cargo_linker_env: None,
             jni_compiler_program: compiler_path,

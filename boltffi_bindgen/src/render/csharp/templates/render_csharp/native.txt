@@ -1,0 +1,11 @@
+    internal static class NativeMethods
+    {
+        private const string LibName = "{{ module.lib_name }}";
+
+        [DllImport(LibName, EntryPoint = "{{ module.prefix }}_free_string")]
+        internal static extern void FreeString(IntPtr ptr);
+
+        [DllImport(LibName, EntryPoint = "{{ module.prefix }}_last_error_message")]
+        internal static extern int LastErrorMessage(out IntPtr message);
+    }
+}

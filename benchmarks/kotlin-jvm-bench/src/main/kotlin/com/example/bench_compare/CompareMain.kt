@@ -52,6 +52,16 @@ fun main() = runBlocking {
                 check(uniffi.bench_uniffi.incU64(value) == 1uL)
             },
         ),
+        pairedBenchmark(
+            "inc_u64_value",
+            boltffi = {
+                check(incU64Value(0uL) == 1uL)
+            },
+            uniffi = {
+                val value = 0uL
+                check(uniffi.bench_uniffi.incU64(value) == 1uL)
+            },
+        ),
         pairedBenchmark("echo_string_small", boltffi = { echoString("hello") }, uniffi = { uniffi.bench_uniffi.echoString("hello") }),
         pairedBenchmark(
             "echo_string_1k",

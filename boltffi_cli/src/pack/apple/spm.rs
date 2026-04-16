@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use crate::cli::{CliError, Result};
 use crate::config::{Config, SpmDistribution, SpmLayout};
-use crate::error::{CliError, Result};
 
 pub struct SpmPackageGenerator<'a> {
     config: &'a Config,

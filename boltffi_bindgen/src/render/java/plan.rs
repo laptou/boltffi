@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::naming::{LibraryName, Name};
+
 use super::JavaVersion;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,7 @@ pub struct JavaAsyncCall {
 pub struct JavaModule {
     pub package_name: String,
     pub class_name: String,
-    pub lib_name: String,
+    pub lib_name: Name<LibraryName>,
     pub desktop_loader: bool,
     pub java_version: JavaVersion,
     pub async_mode: JavaAsyncMode,

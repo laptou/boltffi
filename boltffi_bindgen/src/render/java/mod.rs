@@ -10,9 +10,11 @@ pub use lower::JavaLowerer;
 pub use names::NamingConvention;
 pub use plan::*;
 
+use boltffi_ffi_rules::naming::{LibraryName, Name};
+
 #[derive(Debug, Clone)]
 pub struct JavaOptions {
-    pub library_name: Option<String>,
+    pub library_name: Option<Name<LibraryName>>,
     pub min_java_version: JavaVersion,
     pub desktop_loader: bool,
 }

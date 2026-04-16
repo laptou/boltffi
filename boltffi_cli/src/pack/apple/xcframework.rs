@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::cli::{CliError, Result};
 use crate::config::Config;
-use crate::error::{CliError, Result};
+use crate::pack::PackError;
 use crate::target::{BuiltLibrary, Platform};
 
 pub struct XcframeworkBuilder<'a> {
@@ -125,7 +126,7 @@ impl<'a> XcframeworkBuilder<'a> {
 
         let status = lipo_cmd
             .status()
-            .map_err(|source| CliError::LipoFailed { source })?;
+            .map_err(|source| PackError::LipoFailed { source })?;
 
         if !status.success() {
             return Err(CliError::CommandFailed {
@@ -191,7 +192,7 @@ impl<'a> XcframeworkBuilder<'a> {
 
         let status = xcodebuild_cmd
             .status()
-            .map_err(|source| CliError::XcframeworkFailed { source })?;
+            .map_err(|source| PackError::XcframeworkFailed { source })?;
 
         if !status.success() {
             return Err(CliError::CommandFailed {
@@ -301,13 +302,13 @@ fn create_zip(source_dir: &Path, zip_path: &Path) -> Result<()> {
             if entry.file_type().is_dir() {
                 zip_writer
                     .add_directory(path_string, options)
-                    .map_err(|_| CliError::ZipFailed {
+                    .map_err(|_| PackError::ZipFailed {
                         source: std::io::Error::other("zip dir failed"),
                     })?;
             } else {
                 zip_writer
                     .start_file(path_string, options)
-                    .map_err(|_| CliError::ZipFailed {
+                    .map_err(|_| PackError::ZipFailed {
                         source: std::io::Error::other("zip start failed"),
                     })?;
 
@@ -318,13 +319,13 @@ fn create_zip(source_dir: &Path, zip_path: &Path) -> Result<()> {
                     })?;
 
                 std::io::Write::write_all(&mut zip_writer, &content)
-                    .map_err(|source| CliError::ZipFailed { source })?;
+                    .map_err(|source| PackError::ZipFailed { source })?;
             }
 
             Ok::<_, CliError>(())
         })?;
 
-    zip_writer.finish().map_err(|_| CliError::ZipFailed {
+    zip_writer.finish().map_err(|_| PackError::ZipFailed {
         source: std::io::Error::other("zip finish failed"),
     })?;
 

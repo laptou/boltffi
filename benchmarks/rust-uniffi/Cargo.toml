@@ -11,7 +11,7 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-uniffi = { version = "0.25", features = ["cli"] }
+uniffi = { version = "0.31", features = ["cli"] }
 
 [build-dependencies]
-uniffi = { version = "0.25", features = ["build"] }
+uniffi = { version = "0.31", features = ["build"] }
