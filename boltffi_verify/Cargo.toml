@@ -1,6 +1,6 @@
 [package]
 name = "boltffi_verify"
-version = "0.23.0"
+version = "0.23.1"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
 license = "MIT"

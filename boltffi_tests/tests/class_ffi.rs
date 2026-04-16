@@ -766,6 +766,34 @@ mod fixture_wire_encoded_getters {
 
         unsafe { boltffi_class_test_fixture_free(handle) };
     }
+
+    #[test]
+    fn values_near_point_filters_by_threshold() {
+        let handle = boltffi_class_test_fixture_new_default();
+        unsafe { boltffi_class_test_fixture_add_value(handle, 1) };
+        unsafe { boltffi_class_test_fixture_add_value(handle, 5) };
+        unsafe { boltffi_class_test_fixture_add_value(handle, 10) };
+        unsafe { boltffi_class_test_fixture_add_value(handle, -3) };
+
+        let point = FixturePoint { x: 3.0, y: 2.0 };
+        let buf = unsafe { boltffi_class_test_fixture_values_near_point(handle, point) };
+        let result: Vec<i32> = decode_i32_vec(buf);
+        assert_eq!(result, vec![1, 5, -3]);
+
+        unsafe { boltffi_class_test_fixture_free(handle) };
+    }
+
+    #[test]
+    fn values_near_point_empty_values() {
+        let handle = boltffi_class_test_fixture_new_default();
+
+        let point = FixturePoint { x: 10.0, y: 10.0 };
+        let buf = unsafe { boltffi_class_test_fixture_values_near_point(handle, point) };
+        let result: Vec<i32> = decode_i32_vec(buf);
+        assert!(result.is_empty());
+
+        unsafe { boltffi_class_test_fixture_free(handle) };
+    }
 }
 
 mod fixture_wire_encoded_setters {

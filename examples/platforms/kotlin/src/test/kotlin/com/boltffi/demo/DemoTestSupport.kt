@@ -31,22 +31,28 @@ internal fun assertMessageContains(throwable: Throwable, expectedFragment: Strin
 }
 
 internal fun assertIsolatedCaseSucceeds(caseName: String) {
+    assertJvmMainSucceeds("com.boltffi.demo.DemoIsolatedCasesKt", caseName)
+}
+
+internal fun assertJvmMainSucceeds(mainClass: String, vararg args: String) {
     val javaExecutable = File(System.getProperty("java.home"), "bin/java").absolutePath
     val classPath = System.getProperty("java.class.path")
     val libraryPath = System.getProperty("java.library.path")
-    val process = ProcessBuilder(
+    val command = mutableListOf(
         javaExecutable,
         "-Djava.library.path=$libraryPath",
         "-cp",
         classPath,
-        "com.boltffi.demo.DemoIsolatedCasesKt",
-        caseName,
-    ).redirectErrorStream(true).start()
+        mainClass,
+    )
+    command.addAll(args)
+    val process = ProcessBuilder(command).redirectErrorStream(true).start()
     if (!process.waitFor(15, TimeUnit.SECONDS)) {
         process.destroyForcibly()
-        fail("isolated case <$caseName> timed out")
+        fail("main class <$mainClass> timed out")
     }
     val output = process.inputStream.bufferedReader().use { it.readText() }
     val exitCode = process.exitValue()
-    assertEquals(0, exitCode, "isolated case <$caseName> failed with exit code <$exitCode>\n$output")
+    val description = if (args.isEmpty()) mainClass else "$mainClass ${args.joinToString(" ")}"
+    assertEquals(0, exitCode, "main class <$description> failed with exit code <$exitCode>\n$output")
 }

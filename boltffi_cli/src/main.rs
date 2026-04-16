@@ -1,17 +1,18 @@
-mod android;
 mod build;
+mod cargo;
 mod check;
+mod cli;
 mod commands;
 mod config;
-mod desktop;
-mod error;
-mod pack;
+pub mod pack;
 mod reporter;
 mod target;
+mod toolchain;
 
 use clap::{Parser, Subcommand};
 use std::{fmt, path::PathBuf};
 
+use cli::{CliError, Result};
 use commands::build::{BuildCommandOptions, BuildPlatform};
 use commands::check::CheckOptions;
 use commands::doctor::{ConfigSummary, DoctorOptions};
@@ -19,18 +20,17 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackWasmOptions, check_java_packaging_prereqs,
+    PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
 use config::{Config, Target};
-use error::{CliError, Result};
 
 #[derive(Parser)]
 #[command(name = "boltffi")]
 #[command(about = "BoltFFI - Rust FFI toolchain (Apple + Android + WASM)")]
 #[command(
-    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*]\n"
+    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*], [targets.java.*], [targets.dart.*], and [targets.python.*]\n"
 )]
 #[command(version)]
 struct Cli {
@@ -104,8 +104,8 @@ enum Commands {
     },
 
     #[command(
-        about = "Generate bindings (Swift/Kotlin/header)",
-        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n"
+        about = "Generate bindings",
+        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n  boltffi generate python --experimental\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -136,7 +136,7 @@ enum Commands {
 
     #[command(
         about = "Package platform artifacts (xcframework/SPM/jniLibs/npm)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n"
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -172,6 +172,10 @@ enum GenerateTargetArg {
     Typescript,
     #[value(help = "Generate Dart Bindings")]
     Dart,
+    #[value(help = "Generate experimental Python bindings")]
+    Python,
+    #[value(help = "Generate experimental C# bindings")]
+    Csharp,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -203,6 +207,14 @@ enum PackTargetArg {
 
         #[arg(long, help = "Include experimental targets/features")]
         experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path for Python packaging (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 
     #[command(
@@ -275,6 +287,32 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+    },
+
+    #[command(
+        about = "Build + package Python artifacts",
+        long_about = "Build + package Python artifacts.\n\nOutputs:\n  - Python source package: {targets.python.output}\n  - Wheel output:          defaults to {targets.python.output}/wheelhouse\n\nConfig:\n  - [targets.python].module_name overrides the generated package module\n  - [targets.python.wheel].output overrides the wheel directory\n  - [targets.python.wheel].interpreters or repeated --python values select the Python build matrix\n"
+    )]
+    Python {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 }
 
@@ -409,6 +447,8 @@ fn execute_command(
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
                         GenerateTargetArg::Dart => GenerateTarget::Dart,
+                        GenerateTargetArg::Python => GenerateTarget::Python,
+                        GenerateTargetArg::Csharp => GenerateTarget::CSharp,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
@@ -443,11 +483,13 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                 } => PackCommand::All(PackAllOptions {
                     release,
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                     cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Apple {
@@ -501,6 +543,20 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental: false,
+                    cargo_args: cargo_args.clone(),
+                }),
+                PackTargetArg::Python {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                    python_interpreters,
+                } => PackCommand::Python(PackPythonOptions {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                    python_interpreters,
                     cargo_args: cargo_args.clone(),
                 }),
             };
@@ -793,6 +849,16 @@ fn release_pack_commands(
                     cargo_args: cargo_args.to_vec(),
                 }));
             }
+            if config.should_process(Target::Python, false) {
+                commands.push(PackCommand::Python(PackPythonOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: false,
+                    experimental: false,
+                    python_interpreters: Vec::new(),
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
                     release: true,
@@ -819,15 +885,17 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, ConfigPaths, configured_android_targets_for_diagnostics,
-        configured_apple_targets_for_diagnostics, configured_wasm_target_triple_for_diagnostics,
-        load_config_if_present, release_pack_commands,
-        release_requires_java_environment_validation, resolve_doctor_config, resolve_init_options,
+        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg, PackTargetArg,
+        configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
+        configured_wasm_target_triple_for_diagnostics, load_config_if_present,
+        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
+        resolve_init_options,
     };
     use crate::commands::doctor::ConfigSummary;
     use crate::commands::pack::PackCommand;
     use crate::target::RustTarget;
-    use crate::{config::Config, error::CliError};
+    use crate::{cli::CliError, config::Config};
+    use clap::Parser;
     use std::path::PathBuf;
 
     fn parse_config(input: &str) -> Config {
@@ -974,8 +1042,6 @@ triple = "wasm32-wasip1"
     fn release_all_includes_java_packaging_without_no_build() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -1022,8 +1088,6 @@ enabled = true
     fn release_platform_filter_does_not_add_java_for_non_all_platforms() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -1045,7 +1109,7 @@ enabled = true
     }
 
     #[test]
-    fn release_all_skips_java_when_experimental_gate_is_not_enabled() {
+    fn release_all_includes_java_when_enabled() {
         let config = parse_config(
             r#"
 [package]
@@ -1059,13 +1123,95 @@ enabled = true
         let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
 
         assert!(
-            !commands
+            commands
                 .iter()
                 .any(|command| matches!(command, PackCommand::Java(_)))
         );
-        assert!(!release_requires_java_environment_validation(
+        assert!(release_requires_java_environment_validation(
             &config,
             Some(BuildPlatformArg::All)
+        ));
+    }
+
+    #[test]
+    fn release_all_includes_python_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["python"]
+
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Python(options)
+                if options.release
+                    && !options.regenerate
+                    && !options.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
+    fn cli_parses_generate_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Python),
+                experimental: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_interpreter_matrix() {
+        let cli = Cli::try_parse_from([
+            "boltffi",
+            "pack",
+            "python",
+            "--experimental",
+            "--python",
+            "python3.12",
+            "--python",
+            "python3.13",
+        ])
+        .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    python_interpreters,
+                    ..
+                }
+            } if python_interpreters == vec!["python3.12".to_string(), "python3.13".to_string()]
         ));
     }
 
@@ -1073,8 +1219,6 @@ enabled = true
     fn release_all_requires_java_environment_validation_when_enabled() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -1094,8 +1238,6 @@ enabled = true
     fn release_platform_filter_skips_java_environment_validation_for_non_all_platforms() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 

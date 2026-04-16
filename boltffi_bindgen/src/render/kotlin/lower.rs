@@ -1000,7 +1000,7 @@ impl<'a> KotlinLowerer<'a> {
     }
 
     fn lower_record_readers(&self) -> Vec<KotlinRecordReader> {
-        let record_ids = self.blittable_return_record_ids();
+        let record_ids = self.blittable_reader_record_ids();
         self.contract
             .catalog
             .all_records()
@@ -2519,7 +2519,7 @@ impl<'a> KotlinLowerer<'a> {
                 .options
                 .library_name
                 .clone()
-                .unwrap_or_else(|| self.contract.package.name.clone()),
+                .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
             desktop_loader: self.options.desktop_loader,
             prefix: naming::ffi_prefix().to_string(),
             functions,
@@ -4373,7 +4373,7 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn blittable_return_record_ids(&self) -> HashSet<String> {
+    fn blittable_reader_record_ids(&self) -> HashSet<String> {
         let sync_returns_from_decode = self.abi.calls.iter().filter_map(|call| {
             self.output_read_ops(&call.returns)
                 .and_then(|seq| self.blittable_record_id_from_read_seq(&seq))
@@ -4400,10 +4400,24 @@ impl<'a> KotlinLowerer<'a> {
                 CallMode::Sync => None,
             });
 
+        let stream_items =
+            self.abi
+                .streams
+                .iter()
+                .filter_map(|stream| match &stream.item_transport {
+                    Transport::Composite(layout)
+                        if self.is_record_blittable(layout.record_id.as_str()) =>
+                    {
+                        Some(layout.record_id.as_str().to_string())
+                    }
+                    _ => None,
+                });
+
         sync_returns_from_decode
             .chain(sync_returns_from_transport)
             .chain(async_returns_from_decode)
             .chain(async_returns_from_transport)
+            .chain(stream_items)
             .collect()
     }
 
@@ -4750,5 +4764,106 @@ impl JniParamMapping {
             JniParamRole::Handle { .. } | JniParamRole::Callback { .. } => "Long".to_string(),
             JniParamRole::Hidden => "Unit".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Lowerer as IrLowerer;
+    use crate::ir::contract::{FfiContract, PackageInfo};
+    use crate::ir::definitions::{ClassDef, FieldDef, RecordDef, StreamDef, StreamMode};
+    use crate::ir::ids::{ClassId, FieldName, RecordId, StreamId};
+    use crate::ir::types::{PrimitiveType, TypeExpr};
+
+    fn field(name: &str, primitive: PrimitiveType) -> FieldDef {
+        FieldDef {
+            name: FieldName::new(name),
+            type_expr: TypeExpr::Primitive(primitive),
+            doc: None,
+            default: None,
+        }
+    }
+
+    fn record_def(id: &str, fields: Vec<FieldDef>) -> RecordDef {
+        RecordDef {
+            id: RecordId::new(id),
+            is_repr_c: true,
+            is_error: false,
+            fields,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    #[test]
+    fn lowering_emits_record_reader_for_blittable_stream_items() {
+        let point_id = RecordId::new("Point");
+        let mut catalog = crate::ir::contract::TypeCatalog::default();
+        catalog.insert_record(record_def(
+            point_id.as_str(),
+            vec![
+                field("x", PrimitiveType::F64),
+                field("y", PrimitiveType::F64),
+            ],
+        ));
+        catalog.insert_class(ClassDef {
+            id: ClassId::new("EventBus"),
+            constructors: vec![],
+            methods: vec![],
+            streams: vec![StreamDef {
+                id: StreamId::new("subscribe_points"),
+                item_type: TypeExpr::Record(point_id),
+                mode: StreamMode::Async,
+                doc: None,
+                deprecated: None,
+            }],
+            doc: None,
+            deprecated: None,
+        });
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions::default(),
+        )
+        .lower();
+
+        assert!(
+            module
+                .record_readers
+                .iter()
+                .any(|reader| reader.reader_name == "PointReader"),
+            "expected PointReader to be emitted for stream items",
+        );
+
+        let stream = module
+            .classes
+            .iter()
+            .find(|class| class.class_name == "EventBus")
+            .and_then(|class| {
+                class
+                    .streams
+                    .iter()
+                    .find(|stream| stream.name == "subscribePoints")
+            })
+            .expect("stream should be lowered");
+        assert!(
+            stream.pop_batch_items_expr.contains("PointReader.readAll"),
+            "expected stream items to be decoded via PointReader, got: {}",
+            stream.pop_batch_items_expr,
+        );
     }
 }

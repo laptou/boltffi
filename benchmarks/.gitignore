@@ -18,3 +18,5 @@ kotlin-jvm-bench/src/main/kotlin/jni/
 Package.resolved
 /rust-uniffi/dist
 /kotlin-jvm-bench/build
+/java-jvm-bench/.gradle/
+/java-jvm-bench/build

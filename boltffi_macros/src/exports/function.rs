@@ -478,18 +478,38 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
         }
 
         if matches!(strategy, EncodedReturnStrategy::DirectVec) {
-            let call_and_bind = quote! {
-                #(#conversions)*
-                let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
-            };
+            let native_on_error = return_abi.native_invalid_arg_early_return_statement();
+            let wasm_on_error = return_abi.wasm_invalid_arg_early_return_statement();
+            let FfiParams {
+                conversions: native_conversions,
+                call_args: native_call_args,
+                ..
+            } = transform_params(
+                fn_inputs,
+                &return_lowering,
+                &callback_registry,
+                &native_on_error,
+            );
+            let FfiParams {
+                conversions: wasm_conversions,
+                call_args: wasm_call_args,
+                ..
+            } = transform_params(
+                fn_inputs,
+                &return_lowering,
+                &callback_registry,
+                &wasm_on_error,
+            );
 
             let native_body = quote! {
-                #call_and_bind
+                #(#native_conversions)*
+                let #result_ident: #inner_ty = #fn_name(#(#native_call_args),*);
                 <_ as ::boltffi::__private::VecTransport>::pack_vec(#result_ident)
             };
 
             let wasm_body = quote! {
-                #call_and_bind
+                #(#wasm_conversions)*
+                let #result_ident: #inner_ty = #fn_name(#(#wasm_call_args),*);
                 let __buf = ::boltffi::__private::FfiBuf::from_vec(#result_ident);
                 ::boltffi::__private::write_return_slot(__buf.as_ptr() as u32, __buf.len() as u32, __buf.cap() as u32, __buf.align() as u32);
                 core::mem::forget(__buf);

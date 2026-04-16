@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "1.9.22"
-    kotlin("plugin.allopen") version "1.9.22"
+    kotlin("jvm") version "2.3.20"
+    kotlin("plugin.allopen") version "2.3.20"
     id("me.champeau.jmh") version "0.7.2"
     application
 }
@@ -17,15 +17,21 @@ repositories {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("net.java.dev.jna:jna:5.13.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("net.java.dev.jna:jna:5.17.0")
 }
 
 application {
     mainClass.set("com.example.bench_compare.CompareMainKt")
 }
 
+val buildBoltffi by tasks.registering(Exec::class) {
+    workingDir = projectDir
+    commandLine("../rust-boltffi/build-kotlin.sh")
+}
+
 val buildJni by tasks.registering(Exec::class) {
+    dependsOn(buildBoltffi)
     workingDir = projectDir
     commandLine("./build-jni.sh")
 }
@@ -47,7 +53,7 @@ tasks.matching { it.name.startsWith("jmh") }.configureEach {
 
 tasks.named("jmh") {
     doFirst {
-        file("$buildDir/tmp/jmh/jmh.lock").delete()
+        file("${layout.buildDirectory.get()}/tmp/jmh/jmh.lock").delete()
     }
 }
 
@@ -87,5 +93,5 @@ kotlin {
             kotlin.srcDir("${projectDir}/../rust-uniffi/dist/kotlin")
         }
     }
-    jvmToolchain(17)
+    jvmToolchain(25)
 }

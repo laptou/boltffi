@@ -462,6 +462,12 @@ pub fn inc_u64(value: &mut [u64]) {
     }
 }
 
+/// Increments a u64 value by one and returns the result.
+#[export]
+pub fn inc_u64_value(value: u64) -> u64 {
+    value + 1
+}
+
 /// Thread-safe 64-bit counter using Mutex (comparable to UniFFI).
 #[derive(Default)]
 pub struct Counter {

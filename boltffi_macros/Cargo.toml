@@ -1,6 +1,6 @@
 [package]
 name = "boltffi_macros"
-version = "0.23.0"
+version = "0.23.1"
 edition = "2024"
 authors = ["Ali A. Hilal <me@alihilal.com>"]
 license = "MIT"
@@ -16,7 +16,7 @@ proc-macro = true
 syn = { version = "2", features = ["full", "parsing", "printing", "visit"] }
 quote = "1"
 proc-macro2 = "1"
-boltffi_ffi_rules = { version = "0.23.0", path = "../boltffi_ffi_rules" }
+boltffi_ffi_rules = { version = "0.23.1", path = "../boltffi_ffi_rules" }
 
 [lints]
 workspace = true

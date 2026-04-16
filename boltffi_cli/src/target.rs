@@ -109,6 +109,93 @@ impl AndroidArchitecture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NativeHostPlatform {
+    DarwinArm64,
+    DarwinX86_64,
+    LinuxX86_64,
+    LinuxAarch64,
+    WindowsX86_64,
+}
+
+impl NativeHostPlatform {
+    pub const ALL: &'static [Self] = &[
+        Self::DarwinArm64,
+        Self::DarwinX86_64,
+        Self::LinuxX86_64,
+        Self::LinuxAarch64,
+        Self::WindowsX86_64,
+    ];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::DarwinArm64 => "darwin-arm64",
+            Self::DarwinX86_64 => "darwin-x86_64",
+            Self::LinuxX86_64 => "linux-x86_64",
+            Self::LinuxAarch64 => "linux-aarch64",
+            Self::WindowsX86_64 => "windows-x86_64",
+        }
+    }
+
+    pub fn current() -> Option<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => Some(Self::DarwinArm64),
+            ("macos", "x86_64") => Some(Self::DarwinX86_64),
+            ("linux", "x86_64") => Some(Self::LinuxX86_64),
+            ("linux", "aarch64") => Some(Self::LinuxAarch64),
+            ("windows", "x86_64") => Some(Self::WindowsX86_64),
+            _ => None,
+        }
+    }
+
+    pub fn shared_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}.dll"),
+        }
+    }
+
+    pub fn static_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 | Self::LinuxX86_64 | Self::LinuxAarch64 => {
+                format!("lib{artifact_name}.a")
+            }
+            Self::WindowsX86_64 => {
+                if cfg!(all(target_os = "windows", target_env = "gnu")) {
+                    format!("lib{artifact_name}.a")
+                } else {
+                    format!("{artifact_name}.lib")
+                }
+            }
+        }
+    }
+
+    pub fn jni_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}_jni.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}_jni.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}_jni.dll"),
+        }
+    }
+
+    pub fn jni_platform(self) -> &'static str {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => "darwin",
+            Self::LinuxX86_64 | Self::LinuxAarch64 => "linux",
+            Self::WindowsX86_64 => "win32",
+        }
+    }
+
+    pub fn rpath_flag(self) -> Option<&'static str> {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => Some("-Wl,-rpath,@loader_path"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("-Wl,-rpath,$ORIGIN"),
+            Self::WindowsX86_64 => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JavaHostTarget {
     #[serde(rename = "current")]
     Current,
@@ -127,26 +214,15 @@ pub enum JavaHostTarget {
 impl JavaHostTarget {
     pub const DEFAULTS: &'static [Self] = &[Self::Current];
 
-    pub const fn canonical_name(self) -> &'static str {
+    pub fn canonical_name(self) -> &'static str {
         match self {
             Self::Current => "current",
-            Self::DarwinArm64 => "darwin-arm64",
-            Self::DarwinX86_64 => "darwin-x86_64",
-            Self::LinuxX86_64 => "linux-x86_64",
-            Self::LinuxAarch64 => "linux-aarch64",
-            Self::WindowsX86_64 => "windows-x86_64",
+            resolved_target => resolved_target.native_host_platform().canonical_name(),
         }
     }
 
     pub fn current() -> Option<Self> {
-        match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("macos", "aarch64") => Some(Self::DarwinArm64),
-            ("macos", "x86_64") => Some(Self::DarwinX86_64),
-            ("linux", "x86_64") => Some(Self::LinuxX86_64),
-            ("linux", "aarch64") => Some(Self::LinuxAarch64),
-            ("windows", "x86_64") => Some(Self::WindowsX86_64),
-            _ => None,
-        }
+        NativeHostPlatform::current().map(Into::into)
     }
 
     pub fn resolve_requested(targets: &[Self]) -> Result<Vec<Self>, String> {
@@ -168,59 +244,53 @@ impl JavaHostTarget {
     }
 
     pub fn shared_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}.dylib"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}.so"),
-            Self::WindowsX86_64 => format!("{artifact_name}.dll"),
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .shared_library_filename(artifact_name)
     }
 
     pub fn static_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 | Self::LinuxX86_64 | Self::LinuxAarch64 => {
-                format!("lib{artifact_name}.a")
-            }
-            Self::WindowsX86_64 => {
-                if cfg!(all(target_os = "windows", target_env = "gnu")) {
-                    format!("lib{artifact_name}.a")
-                } else {
-                    format!("{artifact_name}.lib")
-                }
-            }
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .static_library_filename(artifact_name)
     }
 
     pub fn jni_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}_jni.dylib"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}_jni.so"),
-            Self::WindowsX86_64 => format!("{artifact_name}_jni.dll"),
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .jni_library_filename(artifact_name)
     }
 
     pub fn jni_platform(self) -> &'static str {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => "darwin",
-            Self::LinuxX86_64 | Self::LinuxAarch64 => "linux",
-            Self::WindowsX86_64 => "win32",
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform().jni_platform()
     }
 
     pub fn rpath_flag(self) -> Option<&'static str> {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => Some("-Wl,-rpath,@loader_path"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("-Wl,-rpath,$ORIGIN"),
-            Self::WindowsX86_64 => None,
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform().rpath_flag()
     }
 
     fn unsupported_host_message() -> String {
         "JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64 hosts".to_string()
+    }
+
+    fn native_host_platform(self) -> NativeHostPlatform {
+        match self {
+            Self::Current => unreachable!("resolved host target required"),
+            Self::DarwinArm64 => NativeHostPlatform::DarwinArm64,
+            Self::DarwinX86_64 => NativeHostPlatform::DarwinX86_64,
+            Self::LinuxX86_64 => NativeHostPlatform::LinuxX86_64,
+            Self::LinuxAarch64 => NativeHostPlatform::LinuxAarch64,
+            Self::WindowsX86_64 => NativeHostPlatform::WindowsX86_64,
+        }
+    }
+}
+
+impl From<NativeHostPlatform> for JavaHostTarget {
+    fn from(value: NativeHostPlatform) -> Self {
+        match value {
+            NativeHostPlatform::DarwinArm64 => Self::DarwinArm64,
+            NativeHostPlatform::DarwinX86_64 => Self::DarwinX86_64,
+            NativeHostPlatform::LinuxX86_64 => Self::LinuxX86_64,
+            NativeHostPlatform::LinuxAarch64 => Self::LinuxAarch64,
+            NativeHostPlatform::WindowsX86_64 => Self::WindowsX86_64,
+        }
     }
 }
 

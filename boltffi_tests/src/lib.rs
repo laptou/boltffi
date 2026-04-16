@@ -878,6 +878,15 @@ impl ClassTestFixture {
     pub fn echo_bytes(&self, data: Vec<u8>) -> Vec<u8> {
         data
     }
+
+    pub fn values_near_point(&self, target: FixturePoint) -> Vec<i32> {
+        let threshold = (target.x.abs() + target.y.abs()) as i32;
+        self.values
+            .iter()
+            .copied()
+            .filter(|&v| v.abs() <= threshold)
+            .collect()
+    }
 }
 
 #[data(impl)]

@@ -1,0 +1,258 @@
+#include <Python.h>
+#include <float.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+{% for function in module.functions %}
+typedef {{ function.return_type.c_type_name() }} (*{{ function.function_pointer_typedef_name() }})({% if function.takes_no_parameters() %}void{% else %}{% for parameter in function.parameters %}{{ parameter.c_type_name() }}{% if !loop.last %}, {% endif %}{% endfor %}{% endif %});
+static {{ function.function_pointer_typedef_name() }} {{ function.function_pointer_name() }} = NULL;
+{% endfor %}
+{% if !module.functions.is_empty() %}
+#ifdef _WIN32
+static HMODULE boltffi_python_library_handle = NULL;
+#else
+static void *boltffi_python_library_handle = NULL;
+#endif
+
+static void boltffi_python_unload_library(void) {
+{% for function in module.functions %}
+    {{ function.function_pointer_name() }} = NULL;
+{% endfor %}
+    if (boltffi_python_library_handle == NULL) {
+        return;
+    }
+#ifdef _WIN32
+    FreeLibrary(boltffi_python_library_handle);
+#else
+    dlclose(boltffi_python_library_handle);
+#endif
+    boltffi_python_library_handle = NULL;
+}
+
+static int boltffi_python_load_library(PyObject *library_path) {
+#ifdef _WIN32
+    wchar_t *wide_library_path = NULL;
+#else
+    const char *utf8_library_path = NULL;
+    const char *loader_error = NULL;
+#endif
+    if (!PyUnicode_Check(library_path)) {
+        PyErr_SetString(PyExc_TypeError, "expected str library path");
+        return 0;
+    }
+#ifdef _WIN32
+    wide_library_path = PyUnicode_AsWideCharString(library_path, NULL);
+    if (wide_library_path == NULL) {
+        return 0;
+    }
+    boltffi_python_library_handle = LoadLibraryW(wide_library_path);
+    PyMem_Free(wide_library_path);
+    if (boltffi_python_library_handle == NULL) {
+        PyErr_Format(PyExc_ImportError, "failed to load native library from %S", library_path);
+        return 0;
+    }
+#else
+    utf8_library_path = PyUnicode_AsUTF8(library_path);
+    if (utf8_library_path == NULL) {
+        return 0;
+    }
+    dlerror();
+    boltffi_python_library_handle = dlopen(utf8_library_path, RTLD_NOW | RTLD_LOCAL);
+    if (boltffi_python_library_handle == NULL) {
+        loader_error = dlerror();
+        if (loader_error == NULL) {
+            PyErr_Format(PyExc_ImportError, "failed to load native library from %S", library_path);
+        } else {
+            PyErr_Format(PyExc_ImportError, "failed to load native library from %S: %s", library_path, loader_error);
+        }
+        return 0;
+    }
+#endif
+    return 1;
+}
+
+static int boltffi_python_bind_symbols(void) {
+{% for function in module.functions %}
+#ifdef _WIN32
+    {{ function.function_pointer_name() }} = ({{ function.function_pointer_typedef_name() }})GetProcAddress(boltffi_python_library_handle, "{{ function.ffi_symbol }}");
+#else
+    {{ function.function_pointer_name() }} = ({{ function.function_pointer_typedef_name() }})dlsym(boltffi_python_library_handle, "{{ function.ffi_symbol }}");
+#endif
+    if ({{ function.function_pointer_name() }} == NULL) {
+        boltffi_python_unload_library();
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol {{ function.ffi_symbol }}");
+        return 0;
+    }
+{% endfor %}
+    return 1;
+}
+
+static PyObject *boltffi_python_initialize_loader(PyObject *self, PyObject *library_path) {
+    (void)self;
+    if (boltffi_python_library_handle != NULL) {
+        Py_RETURN_NONE;
+    }
+    if (!boltffi_python_load_library(library_path)) {
+        return NULL;
+    }
+    if (!boltffi_python_bind_symbols()) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+{% endif %}
+{% if !used_scalar_types.is_empty() %}
+
+{% for primitive in used_scalar_types %}
+static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_name() }} *out) {
+{% if primitive.uses_bool_parser() %}
+    if (!PyBool_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "expected bool");
+        return 0;
+    }
+    *out = value == Py_True;
+    return 1;
+{% elif primitive.uses_signed_long_long_parser() %}
+    long long parsed = PyLong_AsLongLong(value);
+    if (parsed == -1 && PyErr_Occurred()) {
+        return 0;
+    }
+    if (parsed < {{ primitive.signed_min_macro() }} || parsed > {{ primitive.signed_max_macro() }}) {
+        PyErr_SetString(PyExc_OverflowError, "{{ primitive.rust_name() }} out of range");
+        return 0;
+    }
+    *out = ({{ primitive.c_type_name() }})parsed;
+    return 1;
+{% elif primitive.uses_unsigned_long_long_with_range_check() %}
+    unsigned long long parsed = PyLong_AsUnsignedLongLong(value);
+    if (PyErr_Occurred()) {
+        return 0;
+    }
+    if (parsed > {{ primitive.unsigned_max_macro() }}) {
+        PyErr_SetString(PyExc_OverflowError, "{{ primitive.rust_name() }} out of range");
+        return 0;
+    }
+    *out = ({{ primitive.c_type_name() }})parsed;
+    return 1;
+{% elif primitive.uses_u64_parser() %}
+    unsigned long long parsed = PyLong_AsUnsignedLongLong(value);
+    if (PyErr_Occurred()) {
+        return 0;
+    }
+    *out = (uint64_t)parsed;
+    return 1;
+{% elif primitive.uses_isize_parser() %}
+    Py_ssize_t parsed = PyLong_AsSsize_t(value);
+    if (parsed == -1 && PyErr_Occurred()) {
+        return 0;
+    }
+    *out = (intptr_t)parsed;
+    return 1;
+{% elif primitive.uses_usize_parser() %}
+    size_t parsed = PyLong_AsSize_t(value);
+    if (parsed == (size_t)-1 && PyErr_Occurred()) {
+        return 0;
+    }
+    *out = (uintptr_t)parsed;
+    return 1;
+{% elif primitive.uses_f32_parser() %}
+    double parsed = PyFloat_AsDouble(value);
+    if (parsed == -1.0 && PyErr_Occurred()) {
+        return 0;
+    }
+    if (parsed < -(double)FLT_MAX || parsed > (double)FLT_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "f32 out of range");
+        return 0;
+    }
+    *out = (float)parsed;
+    return 1;
+{% elif primitive.uses_f64_parser() %}
+    double parsed = PyFloat_AsDouble(value);
+    if (parsed == -1.0 && PyErr_Occurred()) {
+        return 0;
+    }
+    *out = parsed;
+    return 1;
+{% endif %}
+}
+
+{% endfor %}
+{% endif %}
+{% if !module.functions.is_empty() %}
+{% for function in module.functions %}
+static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+{% for parameter in function.parameters %}
+    {{ parameter.c_type_name() }} {{ parameter.name }};
+{% endfor %}
+{% if !function.returns_void() %}
+    {{ function.return_type.c_type_name() }} result;
+{% endif %}
+    (void)self;
+    if (nargs != {{ function.parameter_count() }}) {
+        PyErr_Format(PyExc_TypeError, "{{ function.python_name }}() takes {{ function.parameter_count() }} positional arguments but %zd were given", nargs);
+        return NULL;
+    }
+    if ({{ function.function_pointer_name() }} == NULL) {
+        PyErr_SetString(PyExc_ImportError, "native library is not initialized");
+        return NULL;
+    }
+{% for parameter in function.parameters %}
+    if (!{{ parameter.primitive().parser_name() }}(args[{{ loop.index0 }}], &{{ parameter.name }})) {
+        return NULL;
+    }
+{% endfor %}
+{% if function.returns_void() %}
+    {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    Py_RETURN_NONE;
+{% else %}
+    result = {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{% let return_primitive = function.return_primitive().unwrap() %}
+{% if return_primitive.boxes_as_bool() %}
+    return PyBool_FromLong(result ? 1 : 0);
+{% elif return_primitive.boxes_as_signed_long() %}
+    return PyLong_FromLong((long)result);
+{% elif return_primitive.boxes_as_unsigned_long() %}
+    return PyLong_FromUnsignedLong((unsigned long)result);
+{% elif return_primitive.boxes_as_signed_long_long() %}
+    return PyLong_FromLongLong((long long)result);
+{% elif return_primitive.boxes_as_unsigned_long_long() %}
+    return PyLong_FromUnsignedLongLong((unsigned long long)result);
+{% elif return_primitive.boxes_as_ssize() %}
+    return PyLong_FromSsize_t((Py_ssize_t)result);
+{% elif return_primitive.boxes_as_size() %}
+    return PyLong_FromSize_t((size_t)result);
+{% elif return_primitive.boxes_as_double() %}
+    return PyFloat_FromDouble((double)result);
+{% endif %}
+{% endif %}
+}
+
+{% endfor %}
+{% endif %}
+static PyMethodDef boltffi_python_methods[] = {
+{% if !module.functions.is_empty() %}
+    {"_initialize_loader", (PyCFunction)boltffi_python_initialize_loader, METH_O, NULL},
+{% endif %}
+{% for function in module.functions %}
+    {"{{ function.python_name }}", (PyCFunction){{ function.wrapper_name() }}, METH_FASTCALL, NULL},
+{% endfor %}
+    {NULL, NULL, 0, NULL}
+};
+
+static struct PyModuleDef boltffi_python_module = {
+    PyModuleDef_HEAD_INIT,
+    "{{ module.module_name }}._native",
+    NULL,
+    -1,
+    boltffi_python_methods,
+};
+
+PyMODINIT_FUNC PyInit__native(void) {
+    return PyModule_Create(&boltffi_python_module);
+}

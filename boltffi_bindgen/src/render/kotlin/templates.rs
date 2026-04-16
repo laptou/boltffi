@@ -468,7 +468,7 @@ impl KotlinEmitter {
         });
 
         let native = NativeTemplate {
-            lib_name: &module.native.lib_name,
+            lib_name: module.native.lib_name.as_str(),
             desktop_loader: module.native.desktop_loader,
             prefix: &module.native.prefix,
             functions: &module.native.functions,

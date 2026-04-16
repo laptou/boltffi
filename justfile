@@ -137,6 +137,19 @@ bench-kotlin:
     echo ""
     echo "Report: $(pwd)/build/results/jmh/report.txt"
 
+# Java benchmark (JVM via JMH) - builds uniffi-bindgen-java FFM bindings, runs JMH
+bench-java:
+    #!/usr/bin/env bash
+    set -e
+    echo "=== Building UniFFI Java FFM bindings ==="
+    cd benchmarks/rust-uniffi && ./build-java.sh
+
+    echo "=== Running JMH benchmarks ==="
+    cd ../java-jvm-bench && ./gradlew jmh --rerun
+
+    echo ""
+    echo "Report: $(pwd)/build/results/jmh/results.json"
+
 # Build xcframework only (for iOS development in Xcode)
 bench-build-ios:
     cd benchmarks/rust-boltffi && ./build.sh --platform apple --release --skip-bench
@@ -186,6 +199,7 @@ clean-benchmarks:
     rm -rf benchmarks/rust-wasm-bindgen/dist
     rm -rf benchmarks/swift-macos-bench/.build
     rm -rf benchmarks/kotlin-jvm-bench/build
+    rm -rf benchmarks/java-jvm-bench/build
     rm -rf benchmarks/wasm-bench/boltffi
     rm -rf benchmarks/wasm-bench/wasmbindgen
     rm -rf benchmarks/wasm-bench/node_modules
