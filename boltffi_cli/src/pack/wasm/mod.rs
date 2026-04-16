@@ -9,9 +9,7 @@ use crate::build::{
 use crate::cli::{CliError, Result};
 use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use crate::commands::pack::PackWasmOptions;
-use crate::config::{
-    Config, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing, WasmProfile,
-};
+use crate::config::{Config, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMissing, WasmProfile};
 use crate::pack::PackError;
 use crate::reporter::Reporter;
 
@@ -267,7 +265,6 @@ fn transpile_typescript_bundle(
     };
     command
         .arg(source_file)
-        .arg("--ignoreConfig")
         .arg("--target")
         .arg("ES2020")
         .arg("--lib")
