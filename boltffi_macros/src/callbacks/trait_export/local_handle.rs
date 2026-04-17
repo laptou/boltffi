@@ -390,11 +390,9 @@ impl<'a> LocalHandleMethodExpander<'a> {
                     }
 
                     if !callback_bytes.is_empty() {
-                        unsafe extern "C" {
-                            fn malloc(size: usize) -> *mut ::core::ffi::c_void;
-                        }
-
-                        let copied_bytes = unsafe { malloc(callback_bytes.len()) as *mut u8 };
+                        let copied_bytes = unsafe {
+                            ::boltffi::__private::boltffi_alloc_return_buffer(callback_bytes.len())
+                        };
                         if copied_bytes.is_null() {
                             if !out_status.is_null() {
                                 unsafe {

@@ -184,10 +184,9 @@ pub(crate) fn fallible_direct_ok_export_body(
                             *err_out_len = 0;
                         }
                     } else {
-                        unsafe extern "C" {
-                            fn malloc(size: usize) -> *mut ::core::ffi::c_void;
-                        }
-                        let copied = unsafe { malloc(bytes.len()) as *mut u8 };
+                        let copied = unsafe {
+                            ::boltffi::__private::boltffi_alloc_return_buffer(bytes.len())
+                        };
                         if copied.is_null() {
                             return ::boltffi::__private::FfiStatus::INTERNAL_ERROR;
                         }
@@ -216,10 +215,9 @@ pub(crate) fn wire_encode_err_to_err_out_buffers(err_ref: &Ident) -> proc_macro2
                     *err_out_len = 0;
                 }
             } else {
-                unsafe extern "C" {
-                    fn malloc(size: usize) -> *mut ::core::ffi::c_void;
-                }
-                let copied = unsafe { malloc(bytes.len()) as *mut u8 };
+                let copied = unsafe {
+                    ::boltffi::__private::boltffi_alloc_return_buffer(bytes.len())
+                };
                 if copied.is_null() {
                     return ::core::default::Default::default();
                 }
