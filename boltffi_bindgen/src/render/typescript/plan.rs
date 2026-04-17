@@ -785,6 +785,22 @@ mod tests {
     }
 }
 
+/// `Result<Handle, E>` with wire-encoded err: sync uses `out_ok` + err-out pair; async `complete` takes err-out pair.
+#[derive(Debug, Clone)]
+pub enum TsReturnCarrier {
+    None,
+    SyncDirectOk {
+        ok_handle_class_name: String,
+        err_throw_expr: String,
+        handle_nullable: bool,
+    },
+    AsyncFallibleHandle {
+        ok_handle_class_name: String,
+        err_throw_expr: String,
+        handle_nullable: bool,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct TsOutputRoute {
     is_void: bool,
@@ -798,6 +814,7 @@ pub struct TsOutputRoute {
     return_slot_size: Option<usize>,
     ts_cast: String,
     decode_expr: String,
+    pub return_carrier: TsReturnCarrier,
 }
 
 impl TsOutputRoute {
@@ -814,6 +831,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast: String::new(),
             decode_expr: String::new(),
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -830,6 +848,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast,
             decode_expr: String::new(),
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -846,6 +865,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast: String::new(),
             decode_expr,
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -862,6 +882,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast: String::new(),
             decode_expr,
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -878,6 +899,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast: String::new(),
             decode_expr,
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -894,6 +916,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast,
             decode_expr: String::new(),
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -910,6 +933,7 @@ impl TsOutputRoute {
             return_slot_size: None,
             ts_cast: String::new(),
             decode_expr,
+            return_carrier: TsReturnCarrier::None,
         }
     }
 
@@ -926,6 +950,124 @@ impl TsOutputRoute {
             return_slot_size: Some(return_slot_size),
             ts_cast: String::new(),
             decode_expr,
+            return_carrier: TsReturnCarrier::None,
+        }
+    }
+
+    pub fn sync_direct_ok_carrier_ok(
+        ok_handle_class_name: String,
+        err_throw_expr: String,
+        ts_cast: String,
+        handle_nullable: bool,
+    ) -> Self {
+        Self {
+            is_void: false,
+            is_direct: false,
+            is_packed: false,
+            is_raw_packed: false,
+            is_f64_optional: false,
+            is_void_slot: false,
+            is_struct_return_slot: false,
+            is_async_scalar: false,
+            return_slot_size: None,
+            ts_cast,
+            decode_expr: String::new(),
+            return_carrier: TsReturnCarrier::SyncDirectOk {
+                ok_handle_class_name,
+                err_throw_expr,
+                handle_nullable,
+            },
+        }
+    }
+
+    pub fn async_fallible_handle_carrier(
+        ok_handle_class_name: String,
+        err_throw_expr: String,
+        handle_nullable: bool,
+    ) -> Self {
+        Self {
+            is_void: false,
+            is_direct: false,
+            is_packed: false,
+            is_raw_packed: false,
+            is_f64_optional: false,
+            is_void_slot: false,
+            is_struct_return_slot: false,
+            is_async_scalar: false,
+            return_slot_size: None,
+            ts_cast: String::new(),
+            decode_expr: String::new(),
+            return_carrier: TsReturnCarrier::AsyncFallibleHandle {
+                ok_handle_class_name,
+                err_throw_expr,
+                handle_nullable,
+            },
+        }
+    }
+
+    pub fn is_throws_direct_ok_carrier(&self) -> bool {
+        matches!(self.return_carrier, TsReturnCarrier::SyncDirectOk { .. })
+    }
+
+    pub fn is_async_fallible_handle_carrier(&self) -> bool {
+        matches!(self.return_carrier, TsReturnCarrier::AsyncFallibleHandle { .. })
+    }
+
+    pub fn direct_ok_ok_handle_class_name(&self) -> Option<&str> {
+        match &self.return_carrier {
+            TsReturnCarrier::SyncDirectOk {
+                ok_handle_class_name, ..
+            }
+            | TsReturnCarrier::AsyncFallibleHandle {
+                ok_handle_class_name, ..
+            } => Some(ok_handle_class_name.as_str()),
+            TsReturnCarrier::None => None,
+        }
+    }
+
+    pub fn direct_ok_err_throw_expr(&self) -> Option<&str> {
+        match &self.return_carrier {
+            TsReturnCarrier::SyncDirectOk { err_throw_expr, .. }
+            | TsReturnCarrier::AsyncFallibleHandle { err_throw_expr, .. } => {
+                Some(err_throw_expr.as_str())
+            }
+            TsReturnCarrier::None => None,
+        }
+    }
+
+    /// for askama templates when [`Self::is_throws_direct_ok_carrier`] or async carrier is true
+    pub fn carrier_ok_handle_class_name(&self) -> &str {
+        match &self.return_carrier {
+            TsReturnCarrier::SyncDirectOk {
+                ok_handle_class_name, ..
+            }
+            | TsReturnCarrier::AsyncFallibleHandle {
+                ok_handle_class_name, ..
+            } => ok_handle_class_name.as_str(),
+            TsReturnCarrier::None => "",
+        }
+    }
+
+    /// for askama templates when [`Self::is_throws_direct_ok_carrier`] or async carrier is true
+    pub fn carrier_err_throw_expr_for_template(&self) -> &str {
+        match &self.return_carrier {
+            TsReturnCarrier::SyncDirectOk { err_throw_expr, .. }
+            | TsReturnCarrier::AsyncFallibleHandle { err_throw_expr, .. } => {
+                err_throw_expr.as_str()
+            }
+            TsReturnCarrier::None => "",
+        }
+    }
+
+    pub fn carrier_handle_nullable(&self) -> bool {
+        match &self.return_carrier {
+            TsReturnCarrier::SyncDirectOk {
+                handle_nullable, ..
+            }
+            | TsReturnCarrier::AsyncFallibleHandle {
+                handle_nullable, ..
+            } => *handle_nullable,
+            TsReturnCarrier::None => false,
         }
     }
 

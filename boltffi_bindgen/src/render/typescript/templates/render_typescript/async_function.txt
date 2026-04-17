@@ -17,6 +17,33 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
   const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
   (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   return result;
+{% elif return_route.is_async_fallible_handle_carrier() %}
+  const __errPair = _module.allocErrOutPair();
+  try {
+    const rawHandle = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+    if (rawHandle !== 0) {
+      return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
+    }
+    const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+    try {
+      if (__errLen > 0) {
+        const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+        throw {{ return_route.carrier_err_throw_expr_for_template() }};
+      }
+{%- if return_route.carrier_handle_nullable() %}
+      return null;
+{%- else %}
+      throw new Error("ffi call failed");
+{%- endif %}
+    } finally {
+      if (__errLen > 0) {
+        _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+      }
+    }
+  } finally {
+    _module.freeErrOutPair(__errPair);
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  }
 {% elif return_route.is_packed() %}
   const outPtr = _module.allocBufDescriptor();
   let completeCompleted = false;
@@ -57,6 +84,33 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
     (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     return result;
+{% elif return_route.is_async_fallible_handle_carrier() %}
+    const __errPair = _module.allocErrOutPair();
+    try {
+      const rawHandle = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+      if (rawHandle !== 0) {
+        return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
+      }
+      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+      try {
+        if (__errLen > 0) {
+          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+          throw {{ return_route.carrier_err_throw_expr_for_template() }};
+        }
+{%- if return_route.carrier_handle_nullable() %}
+        return null;
+{%- else %}
+        throw new Error("ffi call failed");
+{%- endif %}
+      } finally {
+        if (__errLen > 0) {
+          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+        }
+      }
+    } finally {
+      _module.freeErrOutPair(__errPair);
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    }
 {% elif return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;

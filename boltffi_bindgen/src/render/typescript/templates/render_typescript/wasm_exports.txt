@@ -3,6 +3,8 @@ export interface WasmExports {
   boltffi_wasm_alloc(size: number): number;
   boltffi_wasm_free(ptr: number, size: number): void;
   boltffi_free_buf(ptr: number): void;
+  boltffi_alloc_return_buffer(len: number): number;
+  boltffi_free_return_buffer(ptr: number, len: number): void;
 {%- for import in wasm_imports %}
   {{ import.ffi_name }}({% for param in import.params %}{{ param.name }}: {{ param.wasm_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ import.return_wasm_type_str }};
 {%- endfor %}

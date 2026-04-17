@@ -27,6 +27,10 @@ use crate::render::typescript::emit;
 use crate::render::typescript::plan::*;
 use boltffi_ffi_rules::naming::ffi_prefix;
 
+fn result_err_is_string(returns: &ReturnDef) -> bool {
+    matches!(returns, ReturnDef::Result { err, .. } if matches!(err, TypeExpr::String))
+}
+
 struct AbiIndex {
     calls: HashMap<CallId, usize>,
     callbacks: HashMap<CallbackId, usize>,
@@ -656,7 +660,12 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (_, return_route) = self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+        let (_, return_route) = self.select_output_route(
+            &abi_call.returns,
+            &abi_call.error,
+            TsExecutionModel::Sync,
+            false,
+        );
         let return_route =
             self.refine_value_type_output_route(return_route, Some(&owner.type_expr()));
         let return_type = if constructor.is_optional() {
@@ -723,8 +732,12 @@ impl<'a> TypeScriptLowerer<'a> {
                     ReturnDef::Result { ok, .. } => Some(ok),
                     ReturnDef::Void => None,
                 };
-                let (_, return_route) =
-                    self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+                let (_, return_route) = self.select_output_route(
+                    &abi_call.returns,
+                    &abi_call.error,
+                    TsExecutionModel::Sync,
+                    result_err_is_string(&method_def.returns),
+                );
                 let return_route =
                     self.refine_value_type_output_route(return_route, return_type_expr);
                 TsValueTypeMethodMode::Sync(TsValueTypeSyncMethod { return_route })
@@ -736,8 +749,12 @@ impl<'a> TypeScriptLowerer<'a> {
                     ReturnDef::Result { ok, .. } => Some(ok),
                     ReturnDef::Void => None,
                 };
-                let (_, return_route) =
-                    self.select_output_route(&async_call.result, TsExecutionModel::AsyncMethod);
+                let (_, return_route) = self.select_output_route(
+                    &async_call.result,
+                    &async_call.error,
+                    TsExecutionModel::AsyncMethod,
+                    result_err_is_string(&method_def.returns),
+                );
                 let return_route =
                     self.refine_value_type_output_route(return_route, return_type_expr);
                 TsValueTypeMethodMode::Async(TsValueTypeAsyncMethod {
@@ -852,8 +869,12 @@ impl<'a> TypeScriptLowerer<'a> {
 
         let (return_type, return_handle, return_callback, mode) = match &abi_call.mode {
             CallMode::Sync => {
-                let (return_type, return_route) =
-                    self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+                let (return_type, return_route) = self.select_output_route(
+                    &abi_call.returns,
+                    &abi_call.error,
+                    TsExecutionModel::Sync,
+                    result_err_is_string(&method_def.returns),
+                );
                 let return_handle = match &abi_call.returns.transport {
                     Some(Transport::Handle { class_id, nullable }) => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
@@ -871,8 +892,12 @@ impl<'a> TypeScriptLowerer<'a> {
             }
             CallMode::Async(async_call) => {
                 let entry_ffi_name = abi_call.symbol.as_str().to_string();
-                let (return_type, return_route) =
-                    self.select_output_route(&async_call.result, TsExecutionModel::AsyncMethod);
+                let (return_type, return_route) = self.select_output_route(
+                    &async_call.result,
+                    &async_call.error,
+                    TsExecutionModel::AsyncMethod,
+                    result_err_is_string(&method_def.returns),
+                );
                 let return_handle = match &async_call.result.transport {
                     Some(Transport::Handle { class_id, nullable }) => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
@@ -1065,8 +1090,12 @@ impl<'a> TypeScriptLowerer<'a> {
                         _ => (None, TsCallbackImportReturn::Void),
                     },
                 };
-                let (_, proxy_return_route) =
-                    self.select_output_route(&abi_method.returns, TsExecutionModel::Sync);
+                let (_, proxy_return_route) = self.select_output_route(
+                    &abi_method.returns,
+                    &abi_method.error,
+                    TsExecutionModel::Sync,
+                    result_err_is_string(&method_def.returns),
+                );
 
                 Some(TsCallbackMethod {
                     ts_name,
@@ -1281,8 +1310,12 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (return_type, return_route) =
-            self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+        let (return_type, return_route) = self.select_output_route(
+            &abi_call.returns,
+            &abi_call.error,
+            TsExecutionModel::Sync,
+            result_err_is_string(&def.returns),
+        );
         let (throws, err_type) = self.lower_error(&abi_call.error);
         let return_callback = self.callback_return(&abi_call.returns);
 
@@ -1325,8 +1358,12 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (return_type, return_route) =
-            self.select_output_route(&async_call.result, TsExecutionModel::AsyncFunction);
+        let (return_type, return_route) = self.select_output_route(
+            &async_call.result,
+            &async_call.error,
+            TsExecutionModel::AsyncFunction,
+            result_err_is_string(&def.returns),
+        );
         let (throws, err_type) = self.lower_error(&async_call.error);
         let return_callback = self.callback_return(&async_call.result);
 
@@ -1513,7 +1550,9 @@ impl<'a> TypeScriptLowerer<'a> {
     fn select_output_route(
         &self,
         returns: &ReturnShape,
+        error: &ErrorTransport,
         execution_model: TsExecutionModel,
+        err_is_string: bool,
     ) -> (Option<String>, TsOutputRoute) {
         match returns.value_return_strategy() {
             ValueReturnStrategy::Void => (None, TsOutputRoute::void()),
@@ -1532,7 +1571,13 @@ impl<'a> TypeScriptLowerer<'a> {
                         returns.value_return_strategy(),
                         ValueReturnStrategy::NullableObjectHandle
                     );
-                self.handle_output_route(class_id.as_str(), nullable, execution_model)
+                self.handle_output_route(
+                    class_id.as_str(),
+                    nullable,
+                    execution_model,
+                    error,
+                    err_is_string,
+                )
             }
             ValueReturnStrategy::CallbackHandle => match execution_model {
                 TsExecutionModel::Sync => (
@@ -1716,13 +1761,44 @@ impl<'a> TypeScriptLowerer<'a> {
         class_id: &str,
         nullable: bool,
         execution_model: TsExecutionModel,
+        error: &ErrorTransport,
+        err_is_string: bool,
     ) -> (Option<String>, TsOutputRoute) {
         let class_name = naming::to_upper_camel_case(class_id);
         let ts_type = if nullable {
             format!("{class_name} | null")
         } else {
-            class_name
+            class_name.clone()
         };
+
+        if let ErrorTransport::DirectOkWithEncodedErr { decode_ops, .. } = error {
+            let err_inner = emit::emit_reader_read(decode_ops);
+            let err_throw_expr = if err_is_string {
+                format!("new FfiError({})", err_inner)
+            } else {
+                err_inner
+            };
+            return match execution_model {
+                TsExecutionModel::Sync => (
+                    Some(ts_type),
+                    TsOutputRoute::sync_direct_ok_carrier_ok(
+                        class_name,
+                        err_throw_expr,
+                        String::new(),
+                        nullable,
+                    ),
+                ),
+                TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
+                    Some(ts_type),
+                    TsOutputRoute::async_fallible_handle_carrier(
+                        class_name,
+                        err_throw_expr,
+                        nullable,
+                    ),
+                ),
+            };
+        }
+
         match execution_model {
             TsExecutionModel::Sync => (Some(ts_type), TsOutputRoute::direct(String::new())),
             TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
@@ -1889,7 +1965,12 @@ impl<'a> TypeScriptLowerer<'a> {
                 })
                 .collect();
 
-            let (_, return_route) = self.select_output_route(&call.returns, TsExecutionModel::Sync);
+            let (_, return_route) = self.select_output_route(
+                &call.returns,
+                &call.error,
+                TsExecutionModel::Sync,
+                false,
+            );
             let mut wasm_params = wasm_params;
             if return_route.is_struct_return_slot() {
                 wasm_params.insert(
@@ -1902,6 +1983,8 @@ impl<'a> TypeScriptLowerer<'a> {
             }
             let return_wasm_type = if return_route.is_void() {
                 None
+            } else if return_route.is_throws_direct_ok_carrier() {
+                Some("number".to_string())
             } else if return_route.is_direct() {
                 match &call.returns.transport {
                     Some(Transport::Scalar(origin)) if call.returns.decode_ops.is_none() => {
