@@ -1,3 +1,4 @@
+{# when bindgen gains a rust→ts wire return-buffer path (mirrors swift callback_trait), free the payload with _module.exports.boltffi_free_return_buffer(ptr, len) after decoding — same allocator as boltffi_alloc_return_buffer on the rust side. #}
 {%- match callback.closure_fn_type %}
 {%- when Some with (fn_type) %}
 export type {{ callback.interface_name }} = {{ fn_type }};
