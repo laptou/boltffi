@@ -121,6 +121,9 @@ export interface BoltFFIExports {
   boltffi_wasm_realloc: (ptr: number, oldSize: number, newSize: number) => number;
   boltffi_wasm_free_string_return: (ptr: number, len: number) => void;
   boltffi_wasm_return_slot_addr: () => number;
+  /** rust-allocated wire bytes for typed errors / callback returns; pair with [`boltffi_free_return_buffer`]. */
+  boltffi_alloc_return_buffer: (len: number) => number;
+  boltffi_free_return_buffer: (ptr: number, len: number) => void;
   [key: string]: WebAssembly.ExportValue;
 }
 
@@ -187,6 +190,21 @@ export class BoltFFIModule {
     const view = this.getU32();
     const idx = this._returnSlotAddr >>> 2;
     return { ptr: view[idx], len: view[idx + 1], cap: view[idx + 2], align: view[idx + 3] };
+  }
+
+  /** pair of u32 cells on the wasm heap: `[err_out_ptr, err_out_len]` for fallible ffi out-params. */
+  allocErrOutPair(): number {
+    return this.exports.boltffi_wasm_alloc(8);
+  }
+
+  readErrOutPair(pairPtr: number): { ptr: number; len: number } {
+    const u32 = this.getU32();
+    const idx = pairPtr >>> 2;
+    return { ptr: u32[idx], len: u32[idx + 1] };
+  }
+
+  freeErrOutPair(pairPtr: number): void {
+    this.exports.boltffi_wasm_free(pairPtr, 8);
   }
 
   private getView(): DataView {

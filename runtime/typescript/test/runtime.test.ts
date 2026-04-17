@@ -73,6 +73,18 @@ function createHarness(): RuntimeHarness {
       allocations.delete(ptr);
     },
     boltffi_wasm_return_slot_addr: () => returnSlotAddress,
+    boltffi_alloc_return_buffer: (len: number) => {
+      if (len === 0) return 0;
+      const pointer = nextPointer;
+      nextPointer += len;
+      allocations.set(pointer, len);
+      return pointer;
+    },
+    boltffi_free_return_buffer: (ptr: number, len: number) => {
+      if (ptr === 0 || len === 0) return;
+      freedAllocations.push([ptr, len]);
+      allocations.delete(ptr);
+    },
   };
 
   const instance = { exports } as unknown as WebAssembly.Instance;
@@ -341,5 +353,29 @@ describe("BoltFFIModule memory operations", () => {
     const reusedWriter = module.allocWriter(8);
     expect(reusedWriter.ptr).toBe(pointer);
     expect(reusedWriter.len).toBe(0);
+  });
+
+  it("err-out pair helpers round-trip ptr/len and free return buffer", () => {
+    const { module, freedAllocations } = createHarness();
+    const pairPtr = module.allocErrOutPair();
+    expect(pairPtr).toBeGreaterThan(0);
+
+    const errBufPtr = module.exports.boltffi_alloc_return_buffer(4);
+    expect(errBufPtr).toBeGreaterThan(0);
+    module.writeToMemory(errBufPtr, Uint8Array.from([1, 2, 3, 4]));
+
+    const u32 = new Uint32Array(module.exports.memory.buffer);
+    const idx = pairPtr >>> 2;
+    u32[idx] = errBufPtr;
+    u32[idx + 1] = 4;
+
+    expect(module.readErrOutPair(pairPtr)).toEqual({ ptr: errBufPtr, len: 4 });
+    expect(Array.from(module.readFromMemory(errBufPtr, 4))).toEqual([1, 2, 3, 4]);
+
+    module.exports.boltffi_free_return_buffer(errBufPtr, 4);
+    expect(freedAllocations).toContainEqual([errBufPtr, 4]);
+
+    module.freeErrOutPair(pairPtr);
+    expect(freedAllocations).toContainEqual([pairPtr, 8]);
   });
 });
