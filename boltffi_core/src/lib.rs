@@ -9,6 +9,7 @@ pub mod custom_ffi;
 pub mod handle;
 pub mod passable;
 pub mod ringbuffer;
+pub mod return_buffer;
 pub mod runtime;
 pub mod safety;
 pub mod status;

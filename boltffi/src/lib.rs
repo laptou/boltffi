@@ -8,6 +8,7 @@ pub use boltffi_core::{
 
 #[doc(hidden)]
 pub mod __private {
+    pub use boltffi_core::return_buffer::{boltffi_alloc_return_buffer, boltffi_free_return_buffer};
     pub use boltffi_core::{
         ArcDynCallbackPassable, ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType,
         CallbackHandle,
