@@ -9,7 +9,10 @@ public protocol DataHandler: AnyObject {
     func onData(data: Data)
 }
 
-private class DataHandlerWrapper {
+// callback protocol already requires thread-safe implementations (see doc above),
+// so retaining a reference across Task boundaries is allowed — silence swift 6
+// sending diagnostics on the vtable thunks that spawn `_Concurrency.Task`.
+private final class DataHandlerWrapper: @unchecked Sendable {
     let impl_: DataHandler
     init(_ impl_: DataHandler) { self.impl_ = impl_ }
 }

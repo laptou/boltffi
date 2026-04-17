@@ -9,7 +9,10 @@ public protocol Validator: AnyObject {
     func validate(input: String) -> Bool
 }
 
-private class ValidatorWrapper {
+// callback protocol already requires thread-safe implementations (see doc above),
+// so retaining a reference across Task boundaries is allowed — silence swift 6
+// sending diagnostics on the vtable thunks that spawn `_Concurrency.Task`.
+private final class ValidatorWrapper: @unchecked Sendable {
     let impl_: Validator
     init(_ impl_: Validator) { self.impl_ = impl_ }
 }

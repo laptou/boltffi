@@ -7,7 +7,10 @@ public protocol {{ callback.protocol_name }}: AnyObject {
 {%- endfor %}
 }
 
-private class {{ callback.wrapper_class }} {
+// callback protocol already requires thread-safe implementations (see doc above),
+// so retaining a reference across Task boundaries is allowed — silence swift 6
+// sending diagnostics on the vtable thunks that spawn `_Concurrency.Task`.
+private final class {{ callback.wrapper_class }}: @unchecked Sendable {
     let impl_: {{ callback.protocol_name }}
     init(_ impl_: {{ callback.protocol_name }}) { self.impl_ = impl_ }
 }

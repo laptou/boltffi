@@ -9,7 +9,10 @@ public protocol AsyncHandler: AnyObject {
     func onComplete(result: String) async
 }
 
-private class AsyncHandlerWrapper {
+// callback protocol already requires thread-safe implementations (see doc above),
+// so retaining a reference across Task boundaries is allowed — silence swift 6
+// sending diagnostics on the vtable thunks that spawn `_Concurrency.Task`.
+private final class AsyncHandlerWrapper: @unchecked Sendable {
     let impl_: AsyncHandler
     init(_ impl_: AsyncHandler) { self.impl_ = impl_ }
 }

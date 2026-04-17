@@ -224,10 +224,16 @@ impl SwiftAsyncResult {
                 throws: true,
                 decode,
                 err_is_string,
+                ok_type,
                 ..
             } => match decode.ops.first() {
                 Some(ReadOp::Result { ok, err, .. }) => {
-                    let ok_read = emit::emit_reader_read(ok);
+                    // `Result<(), E>` async: ok_type == Some("Void") — emit `()`, not a spurious read.
+                    let ok_read = if ok_type.as_deref() == Some("Void") {
+                        "()".to_string()
+                    } else {
+                        emit::emit_reader_read(ok)
+                    };
                     let err_read = emit::emit_reader_read(err);
                     let err_body = if *err_is_string {
                         format!("FfiError(message: {})", err_read)
