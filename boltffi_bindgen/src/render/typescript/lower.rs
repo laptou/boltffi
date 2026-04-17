@@ -239,21 +239,21 @@ impl<'a> TypeScriptLowerer<'a> {
             .filter_map(|def| self.lower_async_function(def, &index))
             .collect();
 
-        let classes = self
+        let classes: Vec<TsClass> = self
             .contract
             .catalog
             .all_classes()
             .map(|def| self.lower_class(def, &index))
             .collect();
 
-        let wasm_imports = self.collect_wasm_imports(&index);
-
-        let callbacks = self
+        let callbacks: Vec<TsCallback> = self
             .contract
             .catalog
             .all_callbacks()
             .map(|def| self.lower_callback(def, &index))
             .collect();
+
+        let wasm_imports = self.collect_wasm_exports(&index, &classes, &callbacks);
 
         let error_exceptions = self.collect_error_exceptions(&functions, &async_functions, &index);
 
@@ -1516,7 +1516,9 @@ impl<'a> TypeScriptLowerer<'a> {
                 TsParam {
                     name: emit::escape_ts_keyword(&name),
                     ts_type,
-                    input_route: TsInputRoute::Direct,
+                    input_route: TsInputRoute::Handle {
+                        nullable: *nullable,
+                    },
                 }
             }
             ParamRole::Input {
@@ -1948,70 +1950,396 @@ impl<'a> TypeScriptLowerer<'a> {
         (Some(ts_type), TsOutputRoute::packed(decode_expr))
     }
 
-    fn collect_wasm_imports(&self, _index: &AbiIndex) -> Vec<TsWasmImport> {
-        let mut imports = Vec::new();
+    fn collect_wasm_exports(
+        &self,
+        _index: &AbiIndex,
+        classes: &[TsClass],
+        callbacks: &[TsCallback],
+    ) -> Vec<TsWasmImport> {
+        let mut exports: Vec<TsWasmImport> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        let mut push_unique = |imp: TsWasmImport| {
+            if seen.insert(imp.ffi_name.clone()) {
+                exports.push(imp);
+            }
+        };
 
         for call in &self.abi.calls {
-            if matches!(call.mode, CallMode::Async(_)) {
-                continue;
-            }
-
-            let wasm_params: Vec<TsWasmParam> = call
-                .params
-                .iter()
-                .map(|p| TsWasmParam {
-                    name: emit::escape_ts_keyword(&camel_case(p.name.as_str())),
-                    wasm_type: abi_type_to_wasm(&p.abi_type),
-                })
-                .collect();
-
-            let (_, return_route) = self.select_output_route(
-                &call.returns,
-                &call.error,
-                TsExecutionModel::Sync,
-                false,
-            );
-            let mut wasm_params = wasm_params;
-            if return_route.is_struct_return_slot() {
-                wasm_params.insert(
-                    0,
-                    TsWasmParam {
-                        name: "outPtr".to_string(),
-                        wasm_type: "number".to_string(),
-                    },
-                );
-            }
-            let return_wasm_type = if return_route.is_void() {
-                None
-            } else if return_route.is_throws_direct_ok_carrier() {
-                Some("number".to_string())
-            } else if return_route.is_direct() {
-                match &call.returns.transport {
-                    Some(Transport::Scalar(origin)) if call.returns.decode_ops.is_none() => {
-                        Some(abi_type_to_wasm(&AbiType::from(origin.primitive())))
-                    }
-                    Some(Transport::Handle { .. }) => Some("number".to_string()),
-                    Some(Transport::Callback { .. }) => Some("number".to_string()),
-                    _ => None,
+            match &call.mode {
+                CallMode::Sync => {
+                    let wasm_params = self.wasm_params_for_abi_call(call);
+                    let (_, return_route) = self.select_output_route(
+                        &call.returns,
+                        &call.error,
+                        TsExecutionModel::Sync,
+                        false,
+                    );
+                    let return_wasm_type =
+                        self.sync_return_wasm_type_for_route(&call.returns, &return_route);
+                    push_unique(TsWasmImport {
+                        ffi_name: call.symbol.as_str().to_string(),
+                        params: wasm_params,
+                        return_wasm_type,
+                    });
                 }
-            } else if return_route.is_f64_optional() {
-                Some("number".to_string())
-            } else if return_route.is_struct_return_slot() || return_route.is_void_slot() {
-                None
-            } else if return_route.is_packed() || return_route.is_raw_packed() {
-                Some("bigint".to_string())
-            } else {
-                None
-            };
+                CallMode::Async(async_call) => {
+                    let sym = call.symbol.as_str().to_string();
+                    let execution_model = match &call.id {
+                        CallId::Function(_) => TsExecutionModel::AsyncFunction,
+                        _ => TsExecutionModel::AsyncMethod,
+                    };
 
-            imports.push(TsWasmImport {
-                ffi_name: call.symbol.as_str().to_string(),
-                params: wasm_params,
-                return_wasm_type,
+                    let entry_params = self.wasm_entry_params_only(call);
+                    push_unique(TsWasmImport {
+                        ffi_name: sym.clone(),
+                        params: entry_params,
+                        return_wasm_type: Some("number".to_string()),
+                    });
+
+                    push_unique(TsWasmImport {
+                        ffi_name: format!("{sym}_poll_sync"),
+                        params: vec![TsWasmParam {
+                            name: "h".to_string(),
+                            wasm_type: "number".to_string(),
+                        }],
+                        return_wasm_type: Some("number".to_string()),
+                    });
+                    push_unique(TsWasmImport {
+                        ffi_name: format!("{sym}_panic_message"),
+                        params: vec![TsWasmParam {
+                            name: "h".to_string(),
+                            wasm_type: "number".to_string(),
+                        }],
+                        return_wasm_type: Some("number".to_string()),
+                    });
+                    push_unique(TsWasmImport {
+                        ffi_name: format!("{sym}_free"),
+                        params: vec![TsWasmParam {
+                            name: "h".to_string(),
+                            wasm_type: "number".to_string(),
+                        }],
+                        return_wasm_type: None,
+                    });
+
+                    let (_, return_route) = self.select_output_route(
+                        &async_call.result,
+                        &async_call.error,
+                        execution_model,
+                        false,
+                    );
+
+                    let complete_name = format!("{sym}_complete");
+                    if return_route.is_void() {
+                        push_unique(TsWasmImport {
+                            ffi_name: complete_name,
+                            params: vec![TsWasmParam {
+                                name: "h".to_string(),
+                                wasm_type: "number".to_string(),
+                            }],
+                            return_wasm_type: None,
+                        });
+                    } else if return_route.is_async_scalar() {
+                        let rt = self.sync_return_wasm_type_for_route(
+                            &async_call.result,
+                            &return_route,
+                        );
+                        push_unique(TsWasmImport {
+                            ffi_name: complete_name,
+                            params: vec![TsWasmParam {
+                                name: "h".to_string(),
+                                wasm_type: "number".to_string(),
+                            }],
+                            return_wasm_type: rt.or(Some("number".to_string())),
+                        });
+                    } else if return_route.is_async_fallible_handle_carrier() {
+                        push_unique(TsWasmImport {
+                            ffi_name: complete_name,
+                            params: vec![
+                                TsWasmParam {
+                                    name: "h".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                                TsWasmParam {
+                                    name: "errOutPtr".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                                TsWasmParam {
+                                    name: "errOutLen".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                            ],
+                            return_wasm_type: Some("number".to_string()),
+                        });
+                    } else if return_route.is_packed() || return_route.is_raw_packed() {
+                        push_unique(TsWasmImport {
+                            ffi_name: complete_name,
+                            params: vec![
+                                TsWasmParam {
+                                    name: "outPtr".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                                TsWasmParam {
+                                    name: "h".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                                TsWasmParam {
+                                    name: "flags".to_string(),
+                                    wasm_type: "number".to_string(),
+                                },
+                            ],
+                            return_wasm_type: None,
+                        });
+                    } else {
+                        push_unique(TsWasmImport {
+                            ffi_name: complete_name,
+                            params: vec![TsWasmParam {
+                                name: "h".to_string(),
+                                wasm_type: "number".to_string(),
+                            }],
+                            return_wasm_type: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        for cls in classes {
+            push_unique(TsWasmImport {
+                ffi_name: cls.ffi_free.clone(),
+                params: vec![TsWasmParam {
+                    name: "handle".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: None,
             });
         }
 
-        imports
+        for cb in callbacks {
+            push_unique(TsWasmImport {
+                ffi_name: cb.create_handle_fn.clone(),
+                params: vec![TsWasmParam {
+                    name: "id".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: Some("number".to_string()),
+            });
+            push_unique(TsWasmImport {
+                ffi_name: cb.local_free_fn.clone(),
+                params: vec![TsWasmParam {
+                    name: "handle".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: None,
+            });
+
+            for method in &cb.methods {
+                push_unique(self.wasm_import_for_callback_proxy_method(method));
+            }
+
+            for async_m in &cb.async_methods {
+                push_unique(TsWasmImport {
+                    ffi_name: async_m.complete_export_name.clone(),
+                    params: vec![
+                        TsWasmParam {
+                            name: "requestId".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "status".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "ptr".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "len".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "capacity".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                    ],
+                    return_wasm_type: None,
+                });
+            }
+        }
+
+        exports
+    }
+
+    fn wasm_entry_params_only(&self, call: &AbiCall) -> Vec<TsWasmParam> {
+        call.params
+            .iter()
+            .map(|p| TsWasmParam {
+                name: emit::escape_ts_keyword(&camel_case(p.name.as_str())),
+                wasm_type: abi_type_to_wasm(&p.abi_type),
+            })
+            .collect()
+    }
+
+    fn wasm_params_for_abi_call(&self, call: &AbiCall) -> Vec<TsWasmParam> {
+        let mut wasm_params = self.wasm_entry_params_only(call);
+
+        let (_, return_route) = self.select_output_route(
+            &call.returns,
+            &call.error,
+            TsExecutionModel::Sync,
+            false,
+        );
+        if return_route.is_struct_return_slot() {
+            wasm_params.insert(
+                0,
+                TsWasmParam {
+                    name: "outPtr".to_string(),
+                    wasm_type: "number".to_string(),
+                },
+            );
+        }
+        wasm_params
+    }
+
+    fn sync_return_wasm_type_for_route(
+        &self,
+        returns: &ReturnShape,
+        return_route: &TsOutputRoute,
+    ) -> Option<String> {
+        if return_route.is_void() {
+            None
+        } else if return_route.is_async_scalar() {
+            match &returns.transport {
+                Some(Transport::Scalar(origin)) if returns.decode_ops.is_none() => {
+                    Some(abi_type_to_wasm(&AbiType::from(origin.primitive())))
+                }
+                Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+                    Some("number".to_string())
+                }
+                _ => Some("number".to_string()),
+            }
+        } else if return_route.is_throws_direct_ok_carrier() {
+            Some("number".to_string())
+        } else if return_route.is_direct() {
+            match &returns.transport {
+                Some(Transport::Scalar(origin)) if returns.decode_ops.is_none() => {
+                    Some(abi_type_to_wasm(&AbiType::from(origin.primitive())))
+                }
+                Some(Transport::Handle { .. }) | Some(Transport::Callback { .. }) => {
+                    Some("number".to_string())
+                }
+                _ => None,
+            }
+        } else if return_route.is_f64_optional() {
+            Some("number".to_string())
+        } else if return_route.is_struct_return_slot() || return_route.is_void_slot() {
+            None
+        } else if return_route.is_packed() || return_route.is_raw_packed() {
+            Some("bigint".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn wasm_import_for_callback_proxy_method(&self, method: &TsCallbackMethod) -> TsWasmImport {
+        let mut wasm_params: Vec<TsWasmParam> = Vec::new();
+        if method.proxy_return_route.is_struct_return_slot() {
+            wasm_params.push(TsWasmParam {
+                name: "outPtr".to_string(),
+                wasm_type: "number".to_string(),
+            });
+        }
+        wasm_params.push(TsWasmParam {
+            name: "self".to_string(),
+            wasm_type: "number".to_string(),
+        });
+        for p in &method.proxy_params {
+            wasm_params.extend(self.wasm_params_for_ts_param(p));
+        }
+
+        let return_wasm_type = if method.proxy_return_route.is_void() {
+            None
+        } else if method.proxy_return_route.is_direct() {
+            Some("number".to_string())
+        } else if method.proxy_return_route.is_packed() || method.proxy_return_route.is_raw_packed()
+        {
+            Some("bigint".to_string())
+        } else if method.proxy_return_route.is_struct_return_slot() {
+            None
+        } else {
+            Some("number".to_string())
+        };
+
+        TsWasmImport {
+            ffi_name: method.proxy_export_name.clone(),
+            params: wasm_params,
+            return_wasm_type,
+        }
+    }
+
+    fn wasm_params_for_ts_param(&self, param: &TsParam) -> Vec<TsWasmParam> {
+        match &param.input_route {
+            TsInputRoute::Direct => vec![TsWasmParam {
+                name: param.name.clone(),
+                wasm_type: if param.ts_type.contains("bigint") {
+                    "bigint".to_string()
+                } else {
+                    "number".to_string()
+                },
+            }],
+            TsInputRoute::Handle { .. } => vec![TsWasmParam {
+                name: param.name.clone(),
+                wasm_type: "number".to_string(),
+            }],
+            TsInputRoute::String => vec![
+                TsWasmParam {
+                    name: param.name.clone(),
+                    wasm_type: "number".to_string(),
+                },
+                TsWasmParam {
+                    name: format!("{}Len", param.name),
+                    wasm_type: "number".to_string(),
+                },
+            ],
+            TsInputRoute::Bytes | TsInputRoute::PrimitiveBuffer { .. } => vec![
+                TsWasmParam {
+                    name: param.name.clone(),
+                    wasm_type: "number".to_string(),
+                },
+                TsWasmParam {
+                    name: format!("{}Len", param.name),
+                    wasm_type: "number".to_string(),
+                },
+            ],
+            TsInputRoute::CompositeBuffer { .. } => vec![
+                TsWasmParam {
+                    name: format!("{}Ptr", param.name),
+                    wasm_type: "number".to_string(),
+                },
+                TsWasmParam {
+                    name: format!("{}Len", param.name),
+                    wasm_type: "number".to_string(),
+                },
+            ],
+            TsInputRoute::Callback { .. } => vec![TsWasmParam {
+                name: format!("{}_handle", param.name),
+                wasm_type: "number".to_string(),
+            }],
+            TsInputRoute::StructValue { .. } => vec![TsWasmParam {
+                name: format!("{}Ptr", param.name),
+                wasm_type: "number".to_string(),
+            }],
+            TsInputRoute::CodecEncoded { .. } | TsInputRoute::OtherEncoded { .. } => vec![
+                TsWasmParam {
+                    name: format!("{}Ptr", param.name),
+                    wasm_type: "number".to_string(),
+                },
+                TsWasmParam {
+                    name: format!("{}Len", param.name),
+                    wasm_type: "number".to_string(),
+                },
+            ],
+        }
     }
 }
 
@@ -2825,7 +3153,7 @@ mod tests {
             )
         );
         assert!(rendered.contains(
-            "const result = (_exports.boltffi_make_incrementing_callback as Function)(delta);"
+            "const result = _exports.boltffi_make_incrementing_callback(delta);"
         ));
         assert!(rendered.contains("return wrapValueCallback(result);"));
     }

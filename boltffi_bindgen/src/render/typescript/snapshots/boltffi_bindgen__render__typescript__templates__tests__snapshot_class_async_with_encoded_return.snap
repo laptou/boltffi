@@ -6,7 +6,7 @@ const _DatabaseFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        (_exports.boltffi_database_free as Function)(handle);
+        _exports.boltffi_database_free(handle);
       });
 
 export class Database {
@@ -36,8 +36,25 @@ export class Database {
     }
     this._disposed = true;
     _DatabaseFinalizer?.unregister(this);
-    (_exports.boltffi_database_free as Function)(this._handle);
+    _exports.boltffi_database_free(this._handle);
     this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("Database has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("Database received a null handle");
+    }
+    this._disposed = true;
+    _DatabaseFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -50,17 +67,17 @@ export class Database {
     this._assertNotDisposed();
     const sql_alloc = _module.allocString(sql);
     try {
-      const handle = (_exports.boltffi_database_query as Function)(this._handle, sql_alloc.ptr, sql_alloc.len);
+      const handle = _exports.boltffi_database_query(this._handle, sql_alloc.ptr, sql_alloc.len);
       const awaitedHandle = await _module.asyncManager.pollAsync(
         handle,
-        (futureHandle: number) => (_exports.boltffi_database_query_poll_sync as Function)(futureHandle),
-        (futureHandle: number) => (_exports.boltffi_database_query_panic_message as Function)(futureHandle),
-        (futureHandle: number) => (_exports.boltffi_database_query_free as Function)(futureHandle)
+        (futureHandle: number) => _exports.boltffi_database_query_poll_sync(futureHandle),
+        (futureHandle: number) => _exports.boltffi_database_query_panic_message(futureHandle),
+        (futureHandle: number) => _exports.boltffi_database_query_free(futureHandle)
       );
       const outPtr = _module.allocBufDescriptor();
       let completeCompleted = false;
       try {
-        (_exports.boltffi_database_query_complete as Function)(outPtr, awaitedHandle, 0);
+        _exports.boltffi_database_query_complete(outPtr, awaitedHandle, 0);
         completeCompleted = true;
         const reader = _module.readerFromBuf(outPtr);
         const result = QueryResultCodec.decode(reader);
@@ -71,7 +88,7 @@ export class Database {
         } else {
           _module.freeBufDescriptor(outPtr);
         }
-        (_exports.boltffi_database_query_free as Function)(awaitedHandle);
+        _exports.boltffi_database_query_free(awaitedHandle);
       }
     } finally {
       _module.freeAlloc(sql_alloc);

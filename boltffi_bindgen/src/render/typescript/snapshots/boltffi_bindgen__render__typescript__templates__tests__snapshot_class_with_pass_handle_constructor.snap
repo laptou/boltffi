@@ -2,28 +2,28 @@
 source: boltffi_bindgen/src/render/typescript/templates.rs
 expression: template.render().unwrap()
 ---
-const _MathUtilsFinalizer: FinalizationRegistry<number> | null =
+const _ReceiverFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        _exports.boltffi_math_utils_free(handle);
+        _exports.boltffi_receiver_free(handle);
       });
 
-export class MathUtils {
+export class Receiver {
   private _handle: number;
   private _disposed: boolean;
 
   private constructor(handle: number) {
     this._handle = handle;
     this._disposed = false;
-    _MathUtilsFinalizer?.register(this, handle, this);
+    _ReceiverFinalizer?.register(this, handle, this);
   }
 
-  static _fromHandle(handle: number): MathUtils {
+  static _fromHandle(handle: number): Receiver {
     if (handle === 0) {
-      throw new Error("MathUtils received a null handle");
+      throw new Error("Receiver received a null handle");
     }
-    return new MathUtils(handle);
+    return new Receiver(handle);
   }
 
   [Symbol.dispose](): void {
@@ -35,8 +35,8 @@ export class MathUtils {
       return;
     }
     this._disposed = true;
-    _MathUtilsFinalizer?.unregister(this);
-    _exports.boltffi_math_utils_free(this._handle);
+    _ReceiverFinalizer?.unregister(this);
+    _exports.boltffi_receiver_free(this._handle);
     this._handle = 0;
   }
 
@@ -45,13 +45,13 @@ export class MathUtils {
    */
   takeHandle(): number {
     if (this._disposed) {
-      throw new Error("MathUtils has been disposed");
+      throw new Error("Receiver has been disposed");
     }
     if (this._handle === 0) {
-      throw new Error("MathUtils received a null handle");
+      throw new Error("Receiver received a null handle");
     }
     this._disposed = true;
-    _MathUtilsFinalizer?.unregister(this);
+    _ReceiverFinalizer?.unregister(this);
     const h = this._handle;
     this._handle = 0;
     return h;
@@ -59,11 +59,13 @@ export class MathUtils {
 
   private _assertNotDisposed(): void {
     if (this._disposed) {
-      throw new Error("MathUtils has been disposed");
+      throw new Error("Receiver has been disposed");
     }
   }
 
-  static add(a: number, b: number): number {
-    return _exports.boltffi_math_utils_add(a, b);
+  static new(endpoint: Endpoint): Receiver {
+    const endpoint_handle = endpoint.takeHandle();
+    const handle = _exports.boltffi_receiver_new(endpoint_handle);
+    return Receiver._fromHandle(handle);
   }
 }

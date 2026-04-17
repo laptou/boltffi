@@ -562,6 +562,17 @@ impl TsParam {
                     self.name, interface_name, self.name
                 )
             }),
+            TsInputRoute::Handle { nullable } => Some(if *nullable {
+                format!(
+                    "const {}_handle = {} === null ? 0 : {}.takeHandle();",
+                    self.name, self.name, self.name
+                )
+            } else {
+                format!(
+                    "const {}_handle = {}.takeHandle();",
+                    self.name, self.name
+                )
+            }),
             TsInputRoute::StructValue { codec_name } => {
                 let writer_name = format!("{}_writer", self.name);
                 Some(format!(
@@ -590,6 +601,7 @@ impl TsParam {
     pub fn ffi_args(&self) -> Vec<String> {
         match &self.input_route {
             TsInputRoute::Direct => vec![self.name.clone()],
+            TsInputRoute::Handle { .. } => vec![format!("{}_handle", self.name)],
             TsInputRoute::String | TsInputRoute::Bytes => {
                 vec![
                     format!("{}_alloc.ptr", self.name),
@@ -625,7 +637,9 @@ impl TsParam {
 
     pub fn cleanup_code(&self) -> Option<String> {
         match &self.input_route {
-            TsInputRoute::Direct | TsInputRoute::Callback { .. } => None,
+            TsInputRoute::Direct | TsInputRoute::Callback { .. } | TsInputRoute::Handle { .. } => {
+                None
+            }
             TsInputRoute::String | TsInputRoute::Bytes => {
                 Some(format!("_module.freeAlloc({}_alloc);", self.name))
             }
@@ -642,7 +656,10 @@ impl TsParam {
     }
 
     pub fn needs_cleanup(&self) -> bool {
-        !matches!(self.input_route, TsInputRoute::Direct)
+        !matches!(
+            self.input_route,
+            TsInputRoute::Direct | TsInputRoute::Handle { .. }
+        )
     }
 }
 
@@ -674,6 +691,10 @@ pub enum TsInputRoute {
     },
     OtherEncoded {
         encode: WriteSeq,
+    },
+    /// by-value rust-owned handle; consumes the wrapper via [`takeHandle`] (same semantics as swift `takeHandle()`).
+    Handle {
+        nullable: bool,
     },
 }
 
@@ -751,6 +772,21 @@ mod tests {
             param.wrapper_code(),
             Some("const values_alloc = _module.allocI64Array(values);".to_string())
         );
+    }
+
+    #[test]
+    fn handle_param_consumes_via_take_handle_wrapper() {
+        let param = TsParam {
+            name: "endpoint".to_string(),
+            ts_type: "Endpoint".to_string(),
+            input_route: TsInputRoute::Handle { nullable: false },
+        };
+        assert_eq!(
+            param.wrapper_code(),
+            Some("const endpoint_handle = endpoint.takeHandle();".to_string())
+        );
+        assert_eq!(param.ffi_args(), vec!["endpoint_handle".to_string()]);
+        assert!(!param.needs_cleanup());
     }
 
     #[test]

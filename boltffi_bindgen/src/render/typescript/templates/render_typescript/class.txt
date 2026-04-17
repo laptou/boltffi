@@ -3,7 +3,7 @@ const _{{ cls.class_name }}Finalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        (_exports.{{ cls.ffi_free }} as Function)(handle);
+        _exports.{{ cls.ffi_free }}(handle);
       });
 
 export class {{ cls.class_name }} {
@@ -33,8 +33,25 @@ export class {{ cls.class_name }} {
     }
     this._disposed = true;
     _{{ cls.class_name }}Finalizer?.unregister(this);
-    (_exports.{{ cls.ffi_free }} as Function)(this._handle);
+    _exports.{{ cls.ffi_free }}(this._handle);
     this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("{{ cls.class_name }} has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("{{ cls.class_name }} received a null handle");
+    }
+    this._disposed = true;
+    _{{ cls.class_name }}Finalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -49,7 +66,7 @@ export class {{ cls.class_name }} {
     {{ constructor.wrapper_code() }}
 {%- endif %}
 {%- if constructor.cleanup_code().is_empty() %}
-    const handle = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
+    const handle = _exports.{{ constructor.ffi_name }}({{ constructor.ffi_call_args() }});
 {%- if constructor.returns_nullable_handle %}
     if (handle === 0) {
       return null;
@@ -58,7 +75,7 @@ export class {{ cls.class_name }} {
     return {{ cls.class_name }}._fromHandle(handle);
 {%- else %}
     try {
-      const handle = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
+      const handle = _exports.{{ constructor.ffi_name }}({{ constructor.ffi_call_args() }});
 {%- if constructor.returns_nullable_handle %}
       if (handle === 0) {
         return null;
@@ -84,12 +101,12 @@ export class {{ cls.class_name }} {
 {%- match method.mode %}
 {%- when TsClassMethodMode::Sync with (sync_method) %}
 {%- if sync_method.return_route.is_void() %}
-    (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+    _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- elif sync_method.return_route.is_throws_direct_ok_carrier() %}
     const __outOkSlot = _module.exports.boltffi_wasm_alloc(4);
     const __errPair = _module.allocErrOutPair();
     try {
-      const __status = (_exports.{{ method.ffi_name }} as Function)({% if method.ffi_call_args().is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ method.ffi_call_args() }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
+      const __status = _exports.{{ method.ffi_name }}({% if method.ffi_call_args().is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ method.ffi_call_args() }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
       if (__status === 0) {
         const _u32 = new Uint32Array(_module.exports.memory.buffer);
         const h = _u32[__outOkSlot >>> 2];
@@ -122,7 +139,7 @@ export class {{ cls.class_name }} {
     }
 {%- elif sync_method.return_route.is_direct() %}
 {%- if let Some(handle_return) = method.return_handle %}
-    const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+    const result = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- if handle_return.nullable %}
     if (result === 0) {
       return null;
@@ -130,7 +147,7 @@ export class {{ cls.class_name }} {
 {%- endif %}
     return {{ handle_return.class_name }}._fromHandle(result);
 {%- elif let Some(callback_return) = method.return_callback %}
-    const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+    const result = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- if callback_return.nullable %}
     if (result === 0) {
       return null;
@@ -138,41 +155,41 @@ export class {{ cls.class_name }} {
 {%- endif %}
     return {{ callback_return.wrap_fn }}(result);
 {%- else %}
-    return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
+    return _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}
 {%- elif sync_method.return_route.is_struct_return_slot() %}
     const __outPtr = _module.exports.boltffi_wasm_alloc({{ sync_method.return_route.return_slot_size().unwrap() }});
     try {
-      (_exports.{{ method.ffi_name }} as Function)({% if method.ffi_call_args().is_empty() %}__outPtr{% else %}__outPtr, {{ method.ffi_call_args() }}{% endif %});
+      _exports.{{ method.ffi_name }}({% if method.ffi_call_args().is_empty() %}__outPtr{% else %}__outPtr, {{ method.ffi_call_args() }}{% endif %});
       return {{ sync_method.return_route.decode_expr() }};
     } finally {
       _module.exports.boltffi_wasm_free(__outPtr, {{ sync_method.return_route.return_slot_size().unwrap() }});
     }
 {%- elif sync_method.return_route.is_packed() %}
-    const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
+    const packed = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}) as bigint;
     const reader = _module.takePackedBuffer(packed);
     return {{ sync_method.return_route.decode_expr() }};
 {%- else %}
-    const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
+    const packed = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}) as bigint;
     return {{ sync_method.return_route.decode_expr() }};
 {%- endif %}
 {%- when TsClassMethodMode::Async with (async_method) %}
-    const handle = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+    const handle = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
     const awaitedHandle = await _module.asyncManager.pollAsync(
       handle,
-      (futureHandle: number) => (_exports.{{ async_method.poll_sync_ffi_name }} as Function)(futureHandle),
-      (futureHandle: number) => (_exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
-      (futureHandle: number) => (_exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
+      (futureHandle: number) => _exports.{{ async_method.poll_sync_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_method.panic_message_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_method.free_ffi_name }}(futureHandle)
     );
 {%- if async_method.return_route.is_async_scalar() %}
-    const result = (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle){{ async_method.return_route.ts_cast() }};
-    (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){{ async_method.return_route.ts_cast() }};
+    _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
     return result;
 {%- elif async_method.return_route.is_async_fallible_handle_carrier() %}
 {%- if let Some(handle_return) = method.return_handle %}
     const __errPair = _module.allocErrOutPair();
     try {
-      const rawHandle = (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+      const rawHandle = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
       if (rawHandle !== 0) {
         return {{ handle_return.class_name }}._fromHandle(rawHandle);
       }
@@ -194,14 +211,14 @@ export class {{ cls.class_name }} {
       }
     } finally {
       _module.freeErrOutPair(__errPair);
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
     }
 {%- endif %}
 {%- elif async_method.return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
-      (_exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+      _exports.{{ async_method.complete_ffi_name }}(outPtr, awaitedHandle, 0);
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
       const result = {{ async_method.return_route.decode_expr() }};
@@ -221,15 +238,15 @@ export class {{ cls.class_name }} {
       } else {
         _module.freeBufDescriptor(outPtr);
       }
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
     }
 {%- elif async_method.return_route.is_void() %}
-    (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
 {%- elif async_method.return_route.is_direct() %}
-    (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
     throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");
 {%- else %}
-    (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
     throw new Error("Unsupported async return route: RawPacked {{ async_method.return_route.decode_expr() }}");
 {%- endif %}
 {%- endmatch %}
@@ -238,12 +255,12 @@ export class {{ cls.class_name }} {
 {%- when TsClassMethodMode::Sync with (sync_method) %}
     try {
 {%- if sync_method.return_route.is_void() %}
-      (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+      _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- elif sync_method.return_route.is_throws_direct_ok_carrier() %}
       const __outOkSlot = _module.exports.boltffi_wasm_alloc(4);
       const __errPair = _module.allocErrOutPair();
       try {
-        const __status = (_exports.{{ method.ffi_name }} as Function)({% if method.ffi_call_args().is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ method.ffi_call_args() }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
+        const __status = _exports.{{ method.ffi_name }}({% if method.ffi_call_args().is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ method.ffi_call_args() }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
         if (__status === 0) {
           const _u32 = new Uint32Array(_module.exports.memory.buffer);
           const h = _u32[__outOkSlot >>> 2];
@@ -276,7 +293,7 @@ export class {{ cls.class_name }} {
       }
 {%- elif sync_method.return_route.is_direct() %}
 {%- if let Some(handle_return) = method.return_handle %}
-      const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+      const result = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- if handle_return.nullable %}
       if (result === 0) {
         return null;
@@ -284,7 +301,7 @@ export class {{ cls.class_name }} {
 {%- endif %}
       return {{ handle_return.class_name }}._fromHandle(result);
 {%- elif let Some(callback_return) = method.return_callback %}
-      const result = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+      const result = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
 {%- if callback_return.nullable %}
       if (result === 0) {
         return null;
@@ -292,22 +309,22 @@ export class {{ cls.class_name }} {
 {%- endif %}
       return {{ callback_return.wrap_fn }}(result);
 {%- else %}
-      return (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
+      return _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}){{ sync_method.return_route.ts_cast() }};
 {%- endif %}
 {%- elif sync_method.return_route.is_struct_return_slot() %}
       const __outPtr = _module.exports.boltffi_wasm_alloc({{ sync_method.return_route.return_slot_size().unwrap() }});
       try {
-        (_exports.{{ method.ffi_name }} as Function)({% if method.ffi_call_args().is_empty() %}__outPtr{% else %}__outPtr, {{ method.ffi_call_args() }}{% endif %});
+        _exports.{{ method.ffi_name }}({% if method.ffi_call_args().is_empty() %}__outPtr{% else %}__outPtr, {{ method.ffi_call_args() }}{% endif %});
         return {{ sync_method.return_route.decode_expr() }};
       } finally {
         _module.exports.boltffi_wasm_free(__outPtr, {{ sync_method.return_route.return_slot_size().unwrap() }});
       }
 {%- elif sync_method.return_route.is_packed() %}
-      const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
+      const packed = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}) as bigint;
       const reader = _module.takePackedBuffer(packed);
       return {{ sync_method.return_route.decode_expr() }};
 {%- else %}
-      const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
+      const packed = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }}) as bigint;
       return {{ sync_method.return_route.decode_expr() }};
 {%- endif %}
     } finally {
@@ -315,22 +332,22 @@ export class {{ cls.class_name }} {
     }
 {%- when TsClassMethodMode::Async with (async_method) %}
     try {
-      const handle = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+      const handle = _exports.{{ method.ffi_name }}({{ method.ffi_call_args() }});
       const awaitedHandle = await _module.asyncManager.pollAsync(
         handle,
-        (futureHandle: number) => (_exports.{{ async_method.poll_sync_ffi_name }} as Function)(futureHandle),
-        (futureHandle: number) => (_exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
-        (futureHandle: number) => (_exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
+        (futureHandle: number) => _exports.{{ async_method.poll_sync_ffi_name }}(futureHandle),
+        (futureHandle: number) => _exports.{{ async_method.panic_message_ffi_name }}(futureHandle),
+        (futureHandle: number) => _exports.{{ async_method.free_ffi_name }}(futureHandle)
       );
 {%- if async_method.return_route.is_async_scalar() %}
-      const result = (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle){{ async_method.return_route.ts_cast() }};
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){{ async_method.return_route.ts_cast() }};
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
       return result;
 {%- elif async_method.return_route.is_async_fallible_handle_carrier() %}
 {%- if let Some(handle_return) = method.return_handle %}
       const __errPair = _module.allocErrOutPair();
       try {
-        const rawHandle = (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+        const rawHandle = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
         if (rawHandle !== 0) {
           return {{ handle_return.class_name }}._fromHandle(rawHandle);
         }
@@ -352,14 +369,14 @@ export class {{ cls.class_name }} {
         }
       } finally {
         _module.freeErrOutPair(__errPair);
-        (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+        _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
       }
 {%- endif %}
 {%- elif async_method.return_route.is_packed() %}
       const outPtr = _module.allocBufDescriptor();
       let completeCompleted = false;
       try {
-        (_exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+        _exports.{{ async_method.complete_ffi_name }}(outPtr, awaitedHandle, 0);
         completeCompleted = true;
         const reader = _module.readerFromBuf(outPtr);
         const result = {{ async_method.return_route.decode_expr() }};
@@ -379,15 +396,15 @@ export class {{ cls.class_name }} {
         } else {
           _module.freeBufDescriptor(outPtr);
         }
-        (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+        _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
       }
 {%- elif async_method.return_route.is_void() %}
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
 {%- elif async_method.return_route.is_direct() %}
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
       throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");
 {%- else %}
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
       throw new Error("Unsupported async return route: RawPacked {{ async_method.return_route.decode_expr() }}");
 {%- endif %}
     } finally {

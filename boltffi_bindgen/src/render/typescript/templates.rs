@@ -21,10 +21,14 @@ pub fn ts_doc_block(doc: &Option<String>, indent: &str) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "render_typescript/preamble.txt", escape = "none")]
-pub struct PreambleTemplate {
+#[template(path = "render_typescript/preamble_header.txt", escape = "none")]
+pub struct PreambleHeaderTemplate {
     pub abi_version: u32,
 }
+
+#[derive(Template)]
+#[template(path = "render_typescript/preamble_tail.txt", escape = "none")]
+pub struct PreambleTailTemplate;
 
 #[derive(Template)]
 #[template(path = "render_typescript/preamble_node.txt", escape = "none")]
@@ -179,12 +183,33 @@ impl TypeScriptEmitter {
         let mut output = String::new();
 
         output.push_str(
-            &PreambleTemplate {
+            &PreambleHeaderTemplate {
                 abi_version: module.abi_version,
             }
             .render()
             .unwrap(),
         );
+        output.push('\n');
+
+        let wasm_import_views: Vec<TsWasmImportView> = module
+            .wasm_imports
+            .iter()
+            .map(|import| TsWasmImportView {
+                ffi_name: &import.ffi_name,
+                params: &import.params,
+                return_wasm_type_str: import.return_wasm_type.as_deref().unwrap_or("void"),
+            })
+            .collect();
+
+        output.push_str(
+            &WasmExportsTemplate {
+                wasm_imports: &wasm_import_views,
+            }
+            .render()
+            .unwrap(),
+        );
+        output.push_str("\n\n");
+        output.push_str(&PreambleTailTemplate.render().unwrap());
         output.push('\n');
 
         for record in &module.records {
@@ -372,6 +397,22 @@ impl TypeScriptEmitter {
             output.push_str("\n\n");
         }
 
+        output
+    }
+
+    pub fn emit_node(module: &TsModule, module_name: &str) -> String {
+        let mut output = String::new();
+
+        output.push_str(
+            &NodePreambleTemplate {
+                abi_version: module.abi_version,
+                module_name: module_name.to_string(),
+            }
+            .render()
+            .unwrap(),
+        );
+        output.push('\n');
+
         let wasm_import_views: Vec<TsWasmImportView> = module
             .wasm_imports
             .iter()
@@ -389,23 +430,7 @@ impl TypeScriptEmitter {
             .render()
             .unwrap(),
         );
-        output.push('\n');
-
-        output
-    }
-
-    pub fn emit_node(module: &TsModule, module_name: &str) -> String {
-        let mut output = String::new();
-
-        output.push_str(
-            &NodePreambleTemplate {
-                abi_version: module.abi_version,
-                module_name: module_name.to_string(),
-            }
-            .render()
-            .unwrap(),
-        );
-        output.push('\n');
+        output.push_str("\n\n");
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
@@ -490,25 +515,6 @@ impl TypeScriptEmitter {
             output.push_str(&CallbackTemplate { callback }.render().unwrap());
             output.push_str("\n\n");
         }
-
-        let wasm_import_views: Vec<TsWasmImportView> = module
-            .wasm_imports
-            .iter()
-            .map(|import| TsWasmImportView {
-                ffi_name: &import.ffi_name,
-                params: &import.params,
-                return_wasm_type_str: import.return_wasm_type.as_deref().unwrap_or("void"),
-            })
-            .collect();
-
-        output.push_str(
-            &WasmExportsTemplate {
-                wasm_imports: &wasm_import_views,
-            }
-            .render()
-            .unwrap(),
-        );
-        output.push('\n');
 
         output.push_str(&NodeFooterTemplate.render().unwrap());
         output.push_str("\n\n");
@@ -693,7 +699,11 @@ mod tests {
 
     #[test]
     fn snapshot_preamble() {
-        let output = PreambleTemplate { abi_version: 1 }.render().unwrap();
+        let mut output = PreambleHeaderTemplate { abi_version: 1 }
+            .render()
+            .unwrap();
+        output.push_str("\n");
+        output.push_str(&PreambleTailTemplate.render().unwrap());
         insta::assert_snapshot!(output);
     }
 
@@ -1220,10 +1230,9 @@ mod tests {
         assert!(rendered.contains("let completeCompleted = false;"));
         assert!(rendered.contains("_module.freeBuf(outPtr);"));
         assert!(rendered.contains("_module.freeBufDescriptor(outPtr);"));
-        assert!(
-            rendered
-                .contains("(_exports.boltffi_counter_next_value_free as Function)(awaitedHandle);")
-        );
+        assert!(rendered.contains(
+            "_exports.boltffi_counter_next_value_free(awaitedHandle);"
+        ));
     }
 
     #[test]
@@ -1312,6 +1321,30 @@ mod tests {
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("boltffi_echo_payload(out: number, payload: number): void;"));
+    }
+
+    #[test]
+    fn snapshot_class_with_pass_handle_constructor() {
+        let class = TsClass {
+            class_name: "Receiver".to_string(),
+            ffi_free: "boltffi_receiver_free".to_string(),
+            constructors: vec![TsClassConstructor {
+                ts_name: "new".to_string(),
+                ffi_name: "boltffi_receiver_new".to_string(),
+                is_default: true,
+                params: vec![TsParam {
+                    name: "endpoint".to_string(),
+                    ts_type: "Endpoint".to_string(),
+                    input_route: TsInputRoute::Handle { nullable: false },
+                }],
+                returns_nullable_handle: false,
+                doc: None,
+            }],
+            methods: vec![],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
     }
 
     #[test]

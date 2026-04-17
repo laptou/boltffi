@@ -1,0 +1,8 @@
+let _module: BoltFFIModule;
+let _exports: WasmExports;
+const _callbackImports: Record<string, WebAssembly.ImportValue> = {};
+
+export default async function init(source: BufferSource | Response): Promise<void> {
+  _module = await instantiateBoltFFI(source, EXPECTED_ABI_VERSION, { env: _callbackImports });
+  _exports = _module.exports as unknown as WasmExports;
+}

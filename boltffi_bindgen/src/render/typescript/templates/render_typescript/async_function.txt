@@ -3,24 +3,24 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
 {% if !wrapper_code.is_empty() %}  {{ wrapper_code }}
 {% endif %}
 {% if cleanup_code.is_empty() %}
-  const handle = (_exports.{{ entry_ffi_name }} as Function)({{ call_args }});
+  const handle = _exports.{{ entry_ffi_name }}({{ call_args }});
   const awaitedHandle = await _module.asyncManager.pollAsync(
     handle,
-    (h: number) => (_exports.{{ poll_sync_ffi_name }} as Function)(h),
-    (h: number) => (_exports.{{ panic_message_ffi_name }} as Function)(h),
-    (h: number) => (_exports.{{ free_ffi_name }} as Function)(h)
+    (h: number) => _exports.{{ poll_sync_ffi_name }}(h),
+    (h: number) => _exports.{{ panic_message_ffi_name }}(h),
+    (h: number) => _exports.{{ free_ffi_name }}(h)
   );
 
 {% if return_route.is_void() %}
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  _exports.{{ free_ffi_name }}(awaitedHandle);
 {% elif return_route.is_async_scalar() %}
-  const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  const result = _exports.{{ complete_ffi_name }}(awaitedHandle){{ return_route.ts_cast() }};
+  _exports.{{ free_ffi_name }}(awaitedHandle);
   return result;
 {% elif return_route.is_async_fallible_handle_carrier() %}
   const __errPair = _module.allocErrOutPair();
   try {
-    const rawHandle = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+    const rawHandle = _exports.{{ complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
     if (rawHandle !== 0) {
       return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
     }
@@ -42,13 +42,13 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     }
   } finally {
     _module.freeErrOutPair(__errPair);
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ free_ffi_name }}(awaitedHandle);
   }
 {% elif return_route.is_packed() %}
   const outPtr = _module.allocBufDescriptor();
   let completeCompleted = false;
   try {
-    (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+    _exports.{{ complete_ffi_name }}(outPtr, awaitedHandle, 0);
     completeCompleted = true;
     const reader = _module.readerFromBuf(outPtr);
     const result = {{ return_route.decode_expr() }};
@@ -59,35 +59,35 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     } else {
       _module.freeBufDescriptor(outPtr);
     }
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ free_ffi_name }}(awaitedHandle);
   }
 {% elif return_route.is_direct() %}
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  _exports.{{ free_ffi_name }}(awaitedHandle);
   throw new Error("Unsupported async return route: Direct{{ return_route.ts_cast() }}");
 {% else %}
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  _exports.{{ free_ffi_name }}(awaitedHandle);
   throw new Error("Unsupported async return route: RawPacked {{ return_route.decode_expr() }}");
 {% endif %}
 {% else %}
   try {
-    const handle = (_exports.{{ entry_ffi_name }} as Function)({{ call_args }});
+    const handle = _exports.{{ entry_ffi_name }}({{ call_args }});
     const awaitedHandle = await _module.asyncManager.pollAsync(
       handle,
-      (h: number) => (_exports.{{ poll_sync_ffi_name }} as Function)(h),
-      (h: number) => (_exports.{{ panic_message_ffi_name }} as Function)(h),
-      (h: number) => (_exports.{{ free_ffi_name }} as Function)(h)
+      (h: number) => _exports.{{ poll_sync_ffi_name }}(h),
+      (h: number) => _exports.{{ panic_message_ffi_name }}(h),
+      (h: number) => _exports.{{ free_ffi_name }}(h)
     );
 
 {% if return_route.is_void() %}
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ free_ffi_name }}(awaitedHandle);
 {% elif return_route.is_async_scalar() %}
-    const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    const result = _exports.{{ complete_ffi_name }}(awaitedHandle){{ return_route.ts_cast() }};
+    _exports.{{ free_ffi_name }}(awaitedHandle);
     return result;
 {% elif return_route.is_async_fallible_handle_carrier() %}
     const __errPair = _module.allocErrOutPair();
     try {
-      const rawHandle = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4) as number;
+      const rawHandle = _exports.{{ complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
       if (rawHandle !== 0) {
         return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
       }
@@ -109,13 +109,13 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
       }
     } finally {
       _module.freeErrOutPair(__errPair);
-      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ free_ffi_name }}(awaitedHandle);
     }
 {% elif return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
-      (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+      _exports.{{ complete_ffi_name }}(outPtr, awaitedHandle, 0);
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
       const result = {{ return_route.decode_expr() }};
@@ -126,13 +126,13 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
       } else {
         _module.freeBufDescriptor(outPtr);
       }
-      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+      _exports.{{ free_ffi_name }}(awaitedHandle);
     }
 {% elif return_route.is_direct() %}
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ free_ffi_name }}(awaitedHandle);
     throw new Error("Unsupported async return route: Direct{{ return_route.ts_cast() }}");
 {% else %}
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    _exports.{{ free_ffi_name }}(awaitedHandle);
     throw new Error("Unsupported async return route: RawPacked {{ return_route.decode_expr() }}");
 {% endif %}
   } finally {
