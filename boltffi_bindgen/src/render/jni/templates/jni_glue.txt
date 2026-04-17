@@ -7,6 +7,8 @@
 #include <stdatomic.h>
 #include <{{ module_name }}.h>
 
+/* todo: Result<Handle, encoded E> JNI trampolines should take err_out_ptr/err_out_len, decode wire errors, and free with boltffi_free_return_buffer (parity with swift/ts). internal FfiBuf malloc/free pairs below stay libc-backed. */
+
 static inline bool boltffi_exception_pending(JNIEnv* env) {
     return (*env)->ExceptionCheck(env);
 }
