@@ -228,6 +228,12 @@ final class FfiFutureState<T>: @unchecked Sendable {
         bytes.append(contentsOf: v)
     }
 
+    /// `Option<[UInt8]>` / `Vec<u8>` some-branch closure binds `[UInt8]`; keep `Data` overload for raw buffers.
+    @inlinable mutating func writeBytes(_ v: [UInt8]) {
+        writeU32(UInt32(v.count))
+        bytes.append(contentsOf: v)
+    }
+
     @inlinable mutating func writeDuration(_ v: TimeInterval) {
         if v.rounded(.down) > Double(Int64.max) { fatalError("Duration overflow") }
         if v < 0 { fatalError("Invalid duration") }

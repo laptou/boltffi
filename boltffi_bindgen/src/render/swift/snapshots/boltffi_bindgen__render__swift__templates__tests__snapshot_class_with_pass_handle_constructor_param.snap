@@ -18,7 +18,8 @@ public final class Receiver {
         return h
     }
 
-    private func ffiHandleForCall() -> OpaquePointer {
+    /// same-file host thunks (e.g. async callback vtables) need the raw pointer; not `private` (type-only).
+    fileprivate func ffiHandleForCall() -> OpaquePointer {
         precondition(handle != nil, "BoltFFI: handle was already consumed")
         return handle!
     }

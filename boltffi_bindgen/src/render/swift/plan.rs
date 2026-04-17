@@ -1027,9 +1027,9 @@ impl SwiftCallbackMethod {
         match &self.returns {
             SwiftReturn::Handle { nullable, .. } => {
                 if *nullable {
-                    Some("result?.handle".to_string())
+                    Some("result?.ffiHandleForCall()".to_string())
                 } else {
-                    Some("result.handle".to_string())
+                    Some("result.ffiHandleForCall()".to_string())
                 }
             }
             SwiftReturn::Callback {
@@ -1111,9 +1111,9 @@ impl SwiftCallbackMethod {
             ),
             SwiftReturn::Handle { nullable, .. } => {
                 let val = if *nullable {
-                    "result?.handle ?? OpaquePointer(bitPattern: 0)!".to_string()
+                    "result?.ffiHandleForCall() ?? OpaquePointer(bitPattern: 0)!".to_string()
                 } else {
-                    "result.handle".to_string()
+                    "result.ffiHandleForCall()".to_string()
                 };
                 format!(
                     "if let outWrite = outPtr {{ outWrite.withMemoryRebound(to: OpaquePointer.self, capacity: 1) {{ $0.pointee = {} }} }}",
@@ -1132,9 +1132,9 @@ impl SwiftCallbackMethod {
         match &self.returns {
             SwiftReturn::Handle { nullable, .. } => {
                 if *nullable {
-                    "result?.handle".to_string()
+                    "result?.ffiHandleForCall()".to_string()
                 } else {
-                    "result.handle".to_string()
+                    "result.ffiHandleForCall()".to_string()
                 }
             }
             SwiftReturn::Callback {
@@ -2064,11 +2064,18 @@ impl SwiftReturn {
         match decode.ops.first() {
             Some(ReadOp::Result { ok, err, .. }) => {
                 let raw_ok_read = emit::emit_reader_read(ok);
-                let ok_read = match ok_return {
-                    SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
-                        format!("{}(rawValue: {})!", swift_type, raw_ok_read)
+                // `()` ok is often lowered as `FromWireBuffer { swift_type: "Void", .. }` (not `SwiftReturn::Void`).
+                let ok_read = if matches!(ok_return, SwiftReturn::Void)
+                    || ok_return.swift_type().as_deref() == Some("Void")
+                {
+                    "()".to_string()
+                } else {
+                    match ok_return {
+                        SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
+                            format!("{}(rawValue: {})!", swift_type, raw_ok_read)
+                        }
+                        _ => raw_ok_read,
                     }
-                    _ => raw_ok_read,
                 };
                 let err_read = emit::emit_reader_read(err);
                 let err_body = if err_is_string {
