@@ -535,7 +535,7 @@ func boltffiAsyncCallDirectWithErrOut<T>(
                             cont.resume(returning: value)
                         } else {
                             if errLen > 0, let p = errOutPtr {
-                                defer { free(UnsafeMutableRawPointer(p)) }
+                                defer { boltffi_free_return_buffer(p, Int(errLen)) }
                                 do {
                                     let err = try decodeTypedErr(UnsafePointer(p), Int(errLen))
                                     cont.resume(throwing: err)

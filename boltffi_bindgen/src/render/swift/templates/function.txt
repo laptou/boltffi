@@ -159,7 +159,7 @@
 {{ func.body_indent() }}
 {{ func.body_indent() }}}
 {{ func.body_indent() }}if errLen > 0, let p = errOutPtr {
-{{ func.body_indent() }}    defer { free(UnsafeMutableRawPointer(p)) }
+{{ func.body_indent() }}    defer { boltffi_free_return_buffer(p, Int(errLen)) }
 {{ func.body_indent() }}    throw try boltffiDecodeOwnedBuf(UnsafePointer(p), Int(errLen)) { reader in {{ func.returns.throws_direct_err_throw_expr().unwrap() }} }
 {{ func.body_indent() }}
 {{ func.body_indent() }}
