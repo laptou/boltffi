@@ -106,7 +106,7 @@ pub fn swift_type(type_expr: &TypeExpr) -> String {
         TypeExpr::Option(inner) => format!("{}?", swift_type(inner)),
         TypeExpr::Vec(inner) => {
             if matches!(inner.as_ref(), TypeExpr::Primitive(PrimitiveType::U8)) {
-                "Data".to_string()
+                "[UInt8]".to_string()
             } else {
                 format!("[{}]", swift_type(inner))
             }
@@ -870,7 +870,7 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
             ..
         } => {
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-                return "reader.readBytes()".into();
+                return "Array(reader.readBytes())".into();
             }
             match layout {
                 VecLayout::Blittable { .. } => format!(
@@ -960,7 +960,9 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
             }
         }
         WriteOp::Option { value, some } => {
-            let inner = emit_writer_write(some);
+            // inner encode ops are built with the optional root (`result`); rebind to `v` for the some-branch closure.
+            let some_rebased = remap_root_in_seq(some.as_ref(), ValueExpr::Var("v".to_string()));
+            let inner = emit_writer_write(&some_rebased);
             format!(
                 "writer.writeOptional({}) {{ writer, v in {} }}",
                 render_value(value),

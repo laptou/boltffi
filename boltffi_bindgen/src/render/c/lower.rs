@@ -221,6 +221,10 @@ impl<'a> CHeaderLowerer<'a> {
                     emit::primitive_c_type(origin.primitive())
                 )
             }
+            Some(Transport::Handle { class_id, .. }) => {
+                format!(", struct {} *", class_id.as_str())
+            }
+            Some(Transport::Callback { .. }) => ", BoltFFICallbackHandle".to_string(),
             _ => ", const uint8_t*, uintptr_t".to_string(),
         };
         format!("{value_params}, FfiStatus")
