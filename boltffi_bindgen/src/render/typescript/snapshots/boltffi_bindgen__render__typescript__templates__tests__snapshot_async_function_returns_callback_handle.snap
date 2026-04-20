@@ -1,0 +1,22 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: output
+---
+export async function makeCallback(): Promise<MyCallback> {
+
+
+  const handle = _exports.boltffi_make_callback();
+  const awaitedHandle = await _module.asyncManager.pollAsync(
+    handle,
+    (h: number) => _exports.boltffi_make_callback_poll_sync(h),
+    (h: number) => _exports.boltffi_make_callback_panic_message(h),
+    (h: number) => _exports.boltffi_make_callback_free(h)
+  );
+
+
+  const result = _exports.boltffi_make_callback_complete(awaitedHandle) as number;
+  _exports.boltffi_make_callback_free(awaitedHandle);
+  return wrapMyCallback(result);
+
+
+}

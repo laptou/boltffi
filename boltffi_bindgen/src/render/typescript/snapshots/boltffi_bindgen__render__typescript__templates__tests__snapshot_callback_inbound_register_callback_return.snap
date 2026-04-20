@@ -1,0 +1,117 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+
+export interface ParentCb {
+  getChild(): ChildCb;
+}
+
+const _parent_cb_registry = new Map<number, ParentCb>();
+const _parent_cb_ref_counts = new Map<number, number>();
+const _parent_cb_local_handles = new Set<number>();
+const _parent_cb_native_handle = Symbol("ParentCbNativeHandle");
+let _parent_cb_next_id = _callback_handle_js_namespace_start;
+const _parent_cb_finalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.__boltffi_local_parent_cb_free(handle);
+      });
+
+const _parent_cb_lookup = (handle: number): ParentCb => {
+  const handle_key = _callback_handle_key(handle);
+  const impl = _parent_cb_registry.get(handle_key);
+  if (!impl) {
+    throw new Error(`Callback handle ${handle_key} not found in ParentCb registry`);
+  }
+  return impl;
+};
+
+const _parent_cb_retain = (handle: number): number => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _parent_cb_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot clone unknown callback handle ${handle_key} in ParentCb registry`);
+  }
+  _parent_cb_ref_counts.set(handle_key, currentCount + 1);
+  return handle_key;
+};
+
+const _parent_cb_release = (handle: number): void => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _parent_cb_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot free unknown callback handle ${handle_key} in ParentCb registry`);
+  }
+  if (currentCount === 1) {
+    const impl = _parent_cb_registry.get(handle_key);
+    _parent_cb_ref_counts.delete(handle_key);
+    _parent_cb_registry.delete(handle_key);
+    if (_parent_cb_local_handles.delete(handle_key)) {
+      if (impl && typeof impl === "object") {
+        _parent_cb_finalizer?.unregister(impl as object);
+      }
+      _exports.__boltffi_local_parent_cb_free(handle_key);
+    }
+    return;
+  }
+  _parent_cb_ref_counts.set(handle_key, currentCount - 1);
+};
+
+export function registerParentCb(impl: ParentCb): number {
+  const existingHandle = (impl as unknown as Record<PropertyKey, unknown>)[_parent_cb_native_handle];
+  if (typeof existingHandle === "number") {
+    return _parent_cb_retain(existingHandle);
+  }
+  const id = _parent_cb_next_id++;
+  _parent_cb_registry.set(id, impl);
+  _parent_cb_ref_counts.set(id, 1);
+  return _callback_handle_key(_exports.boltffi_create_parent_cb_handle(id) as number);
+}
+
+export function unregisterParentCb(handle: number): void {
+  _parent_cb_release(handle);
+}
+
+_callbackImports["__boltffi_callback_parent_cb_free"] = (handle: number): void => {
+  _parent_cb_release(handle);
+};
+
+_callbackImports["__boltffi_callback_parent_cb_clone"] = (handle: number): number => {
+  return _parent_cb_retain(handle);
+};
+class ParentCbProxy implements ParentCb {
+  private readonly _handle: number;
+
+  constructor(handle: number) {
+    const handle_key = _callback_handle_key(handle);
+    this._handle = handle_key;
+    (this as unknown as Record<PropertyKey, unknown>)[_parent_cb_native_handle] = handle_key;
+  }
+
+  getChild(): ChildCb {
+    const result = _exports.__boltffi_local_parent_cb_get_child(this._handle) as number;
+    return wrapChildCb(result);
+  }
+}
+
+export function wrapParentCb(handle: number): ParentCb {
+  const handle_key = _callback_handle_key(handle);
+  const existingImpl = _parent_cb_registry.get(handle_key);
+  if (existingImpl) {
+    return existingImpl;
+  }
+  const wrapped = new ParentCbProxy(handle_key);
+  _parent_cb_registry.set(handle_key, wrapped);
+  _parent_cb_ref_counts.set(handle_key, 1);
+  _parent_cb_local_handles.add(handle_key);
+  _parent_cb_finalizer?.register(wrapped, handle_key, wrapped);
+  return wrapped;
+}
+
+_callbackImports["__boltffi_callback_parent_cb_get_child"] = (handle: number): number => {
+  const impl = _parent_cb_lookup(handle);
+  const __out = impl.getChild();
+  return registerChildCb(__out);
+};

@@ -14,9 +14,25 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
 {% if return_route.is_void() %}
   _exports.{{ free_ffi_name }}(awaitedHandle);
 {% elif return_route.is_async_scalar() %}
-  const result = _exports.{{ complete_ffi_name }}(awaitedHandle){{ return_route.ts_cast() }};
+  const result = _exports.{{ complete_ffi_name }}(awaitedHandle){% if let Some(_) = return_handle %} as number{% elif let Some(_) = return_callback %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
   _exports.{{ free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = return_handle %}
+{%- if handle_return.nullable %}
+  if (result === 0) {
+    return null;
+  }
+{%- endif %}
+  return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_ret) = return_callback %}
+{%- if callback_ret.nullable %}
+  if (result === 0) {
+    return null;
+  }
+{%- endif %}
+  return {{ callback_ret.wrap_fn }}(result);
+{%- else %}
   return result;
+{%- endif %}
 {% elif return_route.is_async_fallible_handle_carrier() %}
   const __errPair = _module.allocErrOutPair();
   try {
@@ -81,9 +97,25 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
 {% if return_route.is_void() %}
     _exports.{{ free_ffi_name }}(awaitedHandle);
 {% elif return_route.is_async_scalar() %}
-    const result = _exports.{{ complete_ffi_name }}(awaitedHandle){{ return_route.ts_cast() }};
+    const result = _exports.{{ complete_ffi_name }}(awaitedHandle){% if let Some(_) = return_handle %} as number{% elif let Some(_) = return_callback %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
     _exports.{{ free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = return_handle %}
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_ret) = return_callback %}
+{%- if callback_ret.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_ret.wrap_fn }}(result);
+{%- else %}
     return result;
+{%- endif %}
 {% elif return_route.is_async_fallible_handle_carrier() %}
     const __errPair = _module.allocErrOutPair();
     try {

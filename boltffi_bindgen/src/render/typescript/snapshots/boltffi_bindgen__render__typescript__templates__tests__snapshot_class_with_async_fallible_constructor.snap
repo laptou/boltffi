@@ -1,0 +1,102 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+const _EndpointFinalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.boltffi_endpoint_free(handle);
+      });
+
+export class Endpoint {
+  private _handle: number;
+  private _disposed: boolean;
+
+  private constructor(handle: number) {
+    this._handle = handle;
+    this._disposed = false;
+    _EndpointFinalizer?.register(this, handle, this);
+  }
+
+  static _fromHandle(handle: number): Endpoint {
+    if (handle === 0) {
+      throw new Error("Endpoint received a null handle");
+    }
+    return new Endpoint(handle);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+
+  dispose(): void {
+    if (this._disposed) {
+      return;
+    }
+    this._disposed = true;
+    _EndpointFinalizer?.unregister(this);
+    _exports.boltffi_endpoint_free(this._handle);
+    this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("Endpoint has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("Endpoint received a null handle");
+    }
+    this._disposed = true;
+    _EndpointFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
+  }
+
+  private _assertNotDisposed(): void {
+    if (this._disposed) {
+      throw new Error("Endpoint has been disposed");
+    }
+  }
+
+  static async new(cfg: string): Promise<Endpoint> {
+    const cfg_alloc = _module.allocString(cfg);
+    try {
+    const handle = _exports.boltffi_endpoint_new(cfg_alloc.ptr, cfg_alloc.len);
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.boltffi_endpoint_new_poll_sync(futureHandle),
+      (futureHandle: number) => _exports.boltffi_endpoint_new_panic_message(futureHandle),
+      (futureHandle: number) => _exports.boltffi_endpoint_new_free(futureHandle)
+    );
+      const __errPair = _module.allocErrOutPair();
+      try {
+        const rawHandle = _exports.boltffi_endpoint_new_complete(awaitedHandle, __errPair, __errPair + 4) as number;
+        if (rawHandle !== 0) {
+          return Endpoint._fromHandle(rawHandle);
+        }
+        const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+        try {
+          if (__errLen > 0) {
+            const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+            throw new TransferErrorException(TransferErrorCodec.decode(reader));
+          }
+          throw new Error("ffi call failed");
+        } finally {
+          if (__errLen > 0) {
+            _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+          }
+        }
+      } finally {
+        _module.freeErrOutPair(__errPair);
+        _exports.boltffi_endpoint_new_free(awaitedHandle);
+      }
+    } finally {
+      _module.freeAlloc(cfg_alloc);
+    }
+  }
+}

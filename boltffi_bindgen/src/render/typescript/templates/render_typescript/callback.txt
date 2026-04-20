@@ -89,6 +89,7 @@ _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_clone"] = (
 };
 
 {%- if callback.closure_fn_type.is_none() %}
+{%- if callback.is_returned %}
 class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
   private readonly _handle: number;
 
@@ -107,7 +108,25 @@ class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
 {%- if method.proxy_return_route.is_void() %}
     _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
 {%- elif method.proxy_return_route.is_direct() %}
+{%- if let Some(h) = method.proxy_return_handle %}
+    const result = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- if h.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ h.class_name }}._fromHandle(result);
+{%- elif let Some(cb) = method.proxy_return_callback %}
+    const result = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as number;
+{%- if cb.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ cb.wrap_fn }}(result);
+{%- else %}
     return _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- endif %}
 {%- elif method.proxy_return_route.is_packed() %}
     const packed = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
     const reader = _module.takePackedBuffer(packed);
@@ -129,7 +148,25 @@ class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
 {%- if method.proxy_return_route.is_void() %}
       _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
 {%- elif method.proxy_return_route.is_direct() %}
+{%- if let Some(h) = method.proxy_return_handle %}
+      const result = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- if h.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ h.class_name }}._fromHandle(result);
+{%- elif let Some(cb) = method.proxy_return_callback %}
+      const result = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as number;
+{%- if cb.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ cb.wrap_fn }}(result);
+{%- else %}
       return _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}){{ method.proxy_return_route.ts_cast() }};
+{%- endif %}
 {%- elif method.proxy_return_route.is_packed() %}
       const packed = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
       const reader = _module.takePackedBuffer(packed);
@@ -145,6 +182,202 @@ class {{ callback.proxy_class_name }} implements {{ callback.interface_name }} {
 {%- else %}
       const packed = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %}) as bigint;
       return {{ method.proxy_return_route.decode_expr() }};
+{%- endif %}
+    } finally {
+      {{ method.proxy_cleanup_code() }}
+    }
+{%- endif %}
+  }
+{%- endfor %}
+{%- for method in callback.async_methods %}
+  async {{ method.ts_name }}({% for param in method.proxy_params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Promise<{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}> {
+{%- if !method.proxy_wrapper_code().is_empty() %}
+    {{ method.proxy_wrapper_code() }}
+{%- endif %}
+{%- if method.proxy_cleanup_code().is_empty() %}
+    const handle = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.{{ method.poll_sync_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ method.panic_message_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ method.free_ffi_name }}(futureHandle)
+    );
+{%- if method.proxy_return_route.is_async_scalar() %}
+    const result = _exports.{{ method.complete_ffi_name }}(awaitedHandle){% if let Some(_) = method.return_handle %} as number{% elif let Some(_) = method.return_callback %} as number{% else %}{{ method.proxy_return_route.ts_cast() }}{% endif %};
+    _exports.{{ method.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+{%- if callback_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_return.wrap_fn }}(result);
+{%- else %}
+    return result;
+{%- endif %}
+{%- elif method.proxy_return_route.is_async_fallible_handle_carrier() %}
+{%- if let Some(handle_return) = method.return_handle %}
+    const __errPair = _module.allocErrOutPair();
+    try {
+      const rawHandle = _exports.{{ method.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
+      if (rawHandle !== 0) {
+        return {{ handle_return.class_name }}._fromHandle(rawHandle);
+      }
+      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+      try {
+        if (__errLen > 0) {
+          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+          throw {{ method.proxy_return_route.carrier_err_throw_expr_for_template() }};
+        }
+{%- if method.proxy_return_route.carrier_handle_nullable() %}
+        return null;
+{%- else %}
+        throw new Error("ffi call failed");
+{%- endif %}
+      } finally {
+        if (__errLen > 0) {
+          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+        }
+      }
+    } finally {
+      _module.freeErrOutPair(__errPair);
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+    }
+{%- endif %}
+{%- elif method.proxy_return_route.is_packed() %}
+    const outPtr = _module.allocBufDescriptor();
+    let completeCompleted = false;
+    try {
+      _exports.{{ method.complete_ffi_name }}(outPtr, awaitedHandle, 0);
+      completeCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ method.proxy_return_route.decode_expr() }};
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+      return result;
+{%- endif %}
+    } finally {
+      if (completeCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+    }
+{%- elif method.proxy_return_route.is_void() %}
+    _exports.{{ method.free_ffi_name }}(awaitedHandle);
+{%- elif method.proxy_return_route.is_direct() %}
+    _exports.{{ method.free_ffi_name }}(awaitedHandle);
+    throw new Error("Unsupported async return route: Direct{{ method.proxy_return_route.ts_cast() }}");
+{%- else %}
+    _exports.{{ method.free_ffi_name }}(awaitedHandle);
+    throw new Error("Unsupported async return route: RawPacked {{ method.proxy_return_route.decode_expr() }}");
+{%- endif %}
+{%- else %}
+    try {
+    const handle = _exports.{{ method.proxy_export_name }}(this._handle{% if !method.proxy_call_args().is_empty() %}, {{ method.proxy_call_args() }}{% endif %});
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.{{ method.poll_sync_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ method.panic_message_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ method.free_ffi_name }}(futureHandle)
+    );
+{%- if method.proxy_return_route.is_async_scalar() %}
+      const result = _exports.{{ method.complete_ffi_name }}(awaitedHandle){% if let Some(_) = method.return_handle %} as number{% elif let Some(_) = method.return_callback %} as number{% else %}{{ method.proxy_return_route.ts_cast() }}{% endif %};
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+{%- if callback_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ callback_return.wrap_fn }}(result);
+{%- else %}
+      return result;
+{%- endif %}
+{%- elif method.proxy_return_route.is_async_fallible_handle_carrier() %}
+{%- if let Some(handle_return) = method.return_handle %}
+      const __errPair = _module.allocErrOutPair();
+      try {
+        const rawHandle = _exports.{{ method.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
+        if (rawHandle !== 0) {
+          return {{ handle_return.class_name }}._fromHandle(rawHandle);
+        }
+        const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+        try {
+          if (__errLen > 0) {
+            const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+            throw {{ method.proxy_return_route.carrier_err_throw_expr_for_template() }};
+          }
+{%- if method.proxy_return_route.carrier_handle_nullable() %}
+          return null;
+{%- else %}
+          throw new Error("ffi call failed");
+{%- endif %}
+        } finally {
+          if (__errLen > 0) {
+            _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+          }
+        }
+      } finally {
+        _module.freeErrOutPair(__errPair);
+        _exports.{{ method.free_ffi_name }}(awaitedHandle);
+      }
+{%- endif %}
+{%- elif method.proxy_return_route.is_packed() %}
+      const outPtr = _module.allocBufDescriptor();
+      let completeCompleted = false;
+      try {
+        _exports.{{ method.complete_ffi_name }}(outPtr, awaitedHandle, 0);
+        completeCompleted = true;
+        const reader = _module.readerFromBuf(outPtr);
+        const result = {{ method.proxy_return_route.decode_expr() }};
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+        if (result === 0) {
+          return null;
+        }
+{%- endif %}
+        return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+        return result;
+{%- endif %}
+      } finally {
+        if (completeCompleted) {
+          _module.freeBuf(outPtr);
+        } else {
+          _module.freeBufDescriptor(outPtr);
+        }
+        _exports.{{ method.free_ffi_name }}(awaitedHandle);
+      }
+{%- elif method.proxy_return_route.is_void() %}
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+{%- elif method.proxy_return_route.is_direct() %}
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+      throw new Error("Unsupported async return route: Direct{{ method.proxy_return_route.ts_cast() }}");
+{%- else %}
+      _exports.{{ method.free_ffi_name }}(awaitedHandle);
+      throw new Error("Unsupported async return route: RawPacked {{ method.proxy_return_route.decode_expr() }}");
 {%- endif %}
     } finally {
       {{ method.proxy_cleanup_code() }}
@@ -168,47 +401,66 @@ export function {{ callback.wrap_handle_fn }}(handle: number): {{ callback.inter
   return wrapped;
 }
 {%- endif %}
+{%- endif %}
 
 {%- for method in callback.methods %}
 {% match method.import_return %}
 {% when TsCallbackImportReturn::Encoded with (encoded_return) %}
-_callbackImports["{{ method.import_name }}"] = (handle: number, out_ptr: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+_callbackImports["{{ method.import_name }}"] = (handle: number, out_ptr: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::InboundHandle with { .. } %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
   const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  const result: {% match method.return_type %}{% when Some with (return_type) %}{{ return_type }}{% when None %}never{% endmatch %} = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% when TsCallbackParamKind::InboundHandle with { .. } %}{% endmatch %}{% endfor %}
+  const result: {% match method.return_type %}{% when Some with (return_type) %}{{ return_type }}{% when None %}never{% endmatch %} = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
   const writer = _module.allocWriter({{ encoded_return.size_expr }});
   {{ encoded_return.encode_expr }};
   _module.writeBufDescriptor(out_ptr, writer.ptr, writer.len, writer.capacity);
 };
-{% when TsCallbackImportReturn::Direct with { wasm_type } %}
-_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): {{ wasm_type }} => {
+{% when TsCallbackImportReturn::Direct with { wasm_type, outbound_wrap } %}
+_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::InboundHandle with { .. } %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): {{ wasm_type }} => {
   const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% when TsCallbackParamKind::InboundHandle with { .. } %}{% endmatch %}{% endfor %}
+{%- if let Some(wrap) = outbound_wrap %}
+  const __out = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- match wrap %}
+{%- when TsCallbackImportOutboundWrap::TakeHandle { nullable, .. } %}
+{%- if *nullable %}
+  return __out === null ? 0 : __out.takeHandle();
+{%- else %}
+  return __out.takeHandle();
+{%- endif %}
+{%- when TsCallbackImportOutboundWrap::RegisterCallback { register_fn, nullable } %}
+{%- if *nullable %}
+  return __out === null ? 0 : {{ register_fn }}(__out);
+{%- else %}
+  return {{ register_fn }}(__out);
+{%- endif %}
+{%- endmatch %}
+{%- else %}
+  return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endif %}
 };
 {% when TsCallbackImportReturn::PackedUtf8 %}
-_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): bigint => {
+_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::InboundHandle with { .. } %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): bigint => {
   const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  const result: string = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% when TsCallbackParamKind::InboundHandle with { .. } %}{% endmatch %}{% endfor %}
+  const result: string = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
   const result_alloc = _module.allocString(result);
   return (BigInt(result_alloc.len) << 32n) | BigInt(result_alloc.ptr >>> 0);
 };
 {% when TsCallbackImportReturn::Void %}
-_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::InboundHandle with { .. } %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
   const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% when TsCallbackParamKind::InboundHandle with { .. } %}{% endmatch %}{% endfor %}
+  {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
 };
 {% endmatch %}
 {%- endfor %}
 
 {%- for method in callback.async_methods %}
-_callbackImports["{{ method.start_import_name }}"] = (handle: number, requestId: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+_callbackImports["{{ method.start_import_name }}"] = (handle: number, requestId: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::InboundHandle with { .. } %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
   const complete = _exports.{{ method.complete_export_name }};
   const completeError = (err: unknown): void => {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -229,10 +481,10 @@ _callbackImports["{{ method.start_import_name }}"] = (handle: number, requestId:
     return;
   }
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% when TsCallbackParamKind::InboundHandle with { .. } %}{% endmatch %}{% endfor %}
   Promise.resolve()
     .then(() => {
-      return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+      return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{{ param.pass_expr() }}{% if !loop.last %}, {% endif %}{% endfor %});
     })
     .then((result) => {
       {%- match method.return_type %}

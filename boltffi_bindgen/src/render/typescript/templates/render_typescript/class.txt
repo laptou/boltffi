@@ -60,6 +60,8 @@ export class {{ cls.class_name }} {
     }
   }
 {%- for constructor in cls.constructors %}
+{%- match constructor.mode %}
+{%- when TsClassConstructorMode::Sync with (_sync_ctor) %}
 
 {{ crate::render::typescript::templates::ts_doc_block(constructor.doc, "  ") }}  static {{ constructor.ts_name }}({% for param in constructor.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ cls.class_name }}{% if constructor.returns_nullable_handle %} | null{% endif %} {
 {%- if !constructor.wrapper_code().is_empty() %}
@@ -87,6 +89,203 @@ export class {{ cls.class_name }} {
     }
 {%- endif %}
   }
+{%- when TsClassConstructorMode::Async with (async_ctor) %}
+
+{{ crate::render::typescript::templates::ts_doc_block(constructor.doc, "  ") }}  static async {{ constructor.ts_name }}({% for param in constructor.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Promise<{% match constructor.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}> {
+{%- if !constructor.wrapper_code().is_empty() %}
+    {{ constructor.wrapper_code() }}
+{%- endif %}
+{%- if constructor.cleanup_code().is_empty() %}
+    const handle = _exports.{{ constructor.ffi_name }}({{ constructor.ffi_call_args() }});
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.{{ async_ctor.poll_sync_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_ctor.panic_message_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_ctor.free_ffi_name }}(futureHandle)
+    );
+{%- if async_ctor.return_route.is_async_scalar() %}
+    const result = _exports.{{ async_ctor.complete_ffi_name }}(awaitedHandle){% if let Some(_) = constructor.return_handle %} as number{% elif let Some(_) = constructor.return_callback %} as number{% else %}{{ async_ctor.return_route.ts_cast() }}{% endif %};
+    _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = constructor.return_handle %}
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = constructor.return_callback %}
+{%- if callback_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_return.wrap_fn }}(result);
+{%- else %}
+    return result;
+{%- endif %}
+{%- elif async_ctor.return_route.is_async_fallible_handle_carrier() %}
+{%- if let Some(handle_return) = constructor.return_handle %}
+    const __errPair = _module.allocErrOutPair();
+    try {
+      const rawHandle = _exports.{{ async_ctor.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
+      if (rawHandle !== 0) {
+        return {{ handle_return.class_name }}._fromHandle(rawHandle);
+      }
+      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+      try {
+        if (__errLen > 0) {
+          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+          throw {{ async_ctor.return_route.carrier_err_throw_expr_for_template() }};
+        }
+{%- if async_ctor.return_route.carrier_handle_nullable() %}
+        return null;
+{%- else %}
+        throw new Error("ffi call failed");
+{%- endif %}
+      } finally {
+        if (__errLen > 0) {
+          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+        }
+      }
+    } finally {
+      _module.freeErrOutPair(__errPair);
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+    }
+{%- endif %}
+{%- elif async_ctor.return_route.is_packed() %}
+    const outPtr = _module.allocBufDescriptor();
+    let completeCompleted = false;
+    try {
+      _exports.{{ async_ctor.complete_ffi_name }}(outPtr, awaitedHandle, 0);
+      completeCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ async_ctor.return_route.decode_expr() }};
+{%- if let Some(handle_return) = constructor.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+      return result;
+{%- endif %}
+    } finally {
+      if (completeCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+    }
+{%- elif async_ctor.return_route.is_void() %}
+    _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+{%- elif async_ctor.return_route.is_direct() %}
+    _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+    throw new Error("Unsupported async return route: Direct{{ async_ctor.return_route.ts_cast() }}");
+{%- else %}
+    _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+    throw new Error("Unsupported async return route: RawPacked {{ async_ctor.return_route.decode_expr() }}");
+{%- endif %}
+{%- else %}
+    try {
+    const handle = _exports.{{ constructor.ffi_name }}({{ constructor.ffi_call_args() }});
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.{{ async_ctor.poll_sync_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_ctor.panic_message_ffi_name }}(futureHandle),
+      (futureHandle: number) => _exports.{{ async_ctor.free_ffi_name }}(futureHandle)
+    );
+{%- if async_ctor.return_route.is_async_scalar() %}
+      const result = _exports.{{ async_ctor.complete_ffi_name }}(awaitedHandle){% if let Some(_) = constructor.return_handle %} as number{% elif let Some(_) = constructor.return_callback %} as number{% else %}{{ async_ctor.return_route.ts_cast() }}{% endif %};
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = constructor.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = constructor.return_callback %}
+{%- if callback_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ callback_return.wrap_fn }}(result);
+{%- else %}
+      return result;
+{%- endif %}
+{%- elif async_ctor.return_route.is_async_fallible_handle_carrier() %}
+{%- if let Some(handle_return) = constructor.return_handle %}
+      const __errPair = _module.allocErrOutPair();
+      try {
+        const rawHandle = _exports.{{ async_ctor.complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
+        if (rawHandle !== 0) {
+          return {{ handle_return.class_name }}._fromHandle(rawHandle);
+        }
+        const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+        try {
+          if (__errLen > 0) {
+            const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+            throw {{ async_ctor.return_route.carrier_err_throw_expr_for_template() }};
+          }
+{%- if async_ctor.return_route.carrier_handle_nullable() %}
+          return null;
+{%- else %}
+          throw new Error("ffi call failed");
+{%- endif %}
+        } finally {
+          if (__errLen > 0) {
+            _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+          }
+        }
+      } finally {
+        _module.freeErrOutPair(__errPair);
+        _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+      }
+{%- endif %}
+{%- elif async_ctor.return_route.is_packed() %}
+      const outPtr = _module.allocBufDescriptor();
+      let completeCompleted = false;
+      try {
+        _exports.{{ async_ctor.complete_ffi_name }}(outPtr, awaitedHandle, 0);
+        completeCompleted = true;
+        const reader = _module.readerFromBuf(outPtr);
+        const result = {{ async_ctor.return_route.decode_expr() }};
+{%- if let Some(handle_return) = constructor.return_handle %}
+{%- if handle_return.nullable %}
+        if (result === 0) {
+          return null;
+        }
+{%- endif %}
+        return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+        return result;
+{%- endif %}
+      } finally {
+        if (completeCompleted) {
+          _module.freeBuf(outPtr);
+        } else {
+          _module.freeBufDescriptor(outPtr);
+        }
+        _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+      }
+{%- elif async_ctor.return_route.is_void() %}
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+{%- elif async_ctor.return_route.is_direct() %}
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+      throw new Error("Unsupported async return route: Direct{{ async_ctor.return_route.ts_cast() }}");
+{%- else %}
+      _exports.{{ async_ctor.free_ffi_name }}(awaitedHandle);
+      throw new Error("Unsupported async return route: RawPacked {{ async_ctor.return_route.decode_expr() }}");
+{%- endif %}
+    } finally {
+      {{ constructor.cleanup_code() }}
+    }
+{%- endif %}
+  }
+{%- endmatch %}
 {%- endfor %}
 {%- for method in cls.methods %}
 
@@ -182,9 +381,25 @@ export class {{ cls.class_name }} {
       (futureHandle: number) => _exports.{{ async_method.free_ffi_name }}(futureHandle)
     );
 {%- if async_method.return_route.is_async_scalar() %}
-    const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){{ async_method.return_route.ts_cast() }};
+    const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){% if let Some(_) = method.return_handle %} as number{% elif let Some(_) = method.return_callback %} as number{% else %}{{ async_method.return_route.ts_cast() }}{% endif %};
     _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+{%- if callback_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_return.wrap_fn }}(result);
+{%- else %}
     return result;
+{%- endif %}
 {%- elif async_method.return_route.is_async_fallible_handle_carrier() %}
 {%- if let Some(handle_return) = method.return_handle %}
     const __errPair = _module.allocErrOutPair();
@@ -340,9 +555,25 @@ export class {{ cls.class_name }} {
         (futureHandle: number) => _exports.{{ async_method.free_ffi_name }}(futureHandle)
       );
 {%- if async_method.return_route.is_async_scalar() %}
-      const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){{ async_method.return_route.ts_cast() }};
+      const result = _exports.{{ async_method.complete_ffi_name }}(awaitedHandle){% if let Some(_) = method.return_handle %} as number{% elif let Some(_) = method.return_callback %} as number{% else %}{{ async_method.return_route.ts_cast() }}{% endif %};
       _exports.{{ async_method.free_ffi_name }}(awaitedHandle);
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_return) = method.return_callback %}
+{%- if callback_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ callback_return.wrap_fn }}(result);
+{%- else %}
       return result;
+{%- endif %}
 {%- elif async_method.return_route.is_async_fallible_handle_carrier() %}
 {%- if let Some(handle_return) = method.return_handle %}
       const __errPair = _module.allocErrOutPair();

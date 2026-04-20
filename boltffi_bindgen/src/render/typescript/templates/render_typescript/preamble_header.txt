@@ -1,8 +1,19 @@
 /// <reference lib="esnext.disposable" />
 import { WireReader, WireWriter, BoltFFIModule, instantiateBoltFFI, wireStringSize } from "@boltffi/runtime";
 import type { Duration, WireCodec, BoltFFIImports } from "@boltffi/runtime";
+{%- if let Some(glue) = wasm_bindgen_glue %}
+import { __wbg_get_imports, __wbg_finalize_init } from "./{{ glue }}";
+{%- endif %}
 
 const EXPECTED_ABI_VERSION = {{ abi_version }};
 const _callback_handle_js_namespace_start = 0x80000000;
 const _callback_handle_key = (handle: number): number => handle >>> 0;
+
+/** string errors from ffi status-code paths (mirrors swift `FfiError`). */
+export class FfiError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FfiError";
+  }
+}
 

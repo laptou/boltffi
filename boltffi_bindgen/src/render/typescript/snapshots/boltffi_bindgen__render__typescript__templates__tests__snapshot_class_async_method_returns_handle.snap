@@ -1,0 +1,79 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+const _ReceivedTransferFinalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.boltffi_received_transfer_free(handle);
+      });
+
+export class ReceivedTransfer {
+  private _handle: number;
+  private _disposed: boolean;
+
+  private constructor(handle: number) {
+    this._handle = handle;
+    this._disposed = false;
+    _ReceivedTransferFinalizer?.register(this, handle, this);
+  }
+
+  static _fromHandle(handle: number): ReceivedTransfer {
+    if (handle === 0) {
+      throw new Error("ReceivedTransfer received a null handle");
+    }
+    return new ReceivedTransfer(handle);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+
+  dispose(): void {
+    if (this._disposed) {
+      return;
+    }
+    this._disposed = true;
+    _ReceivedTransferFinalizer?.unregister(this);
+    _exports.boltffi_received_transfer_free(this._handle);
+    this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("ReceivedTransfer has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("ReceivedTransfer received a null handle");
+    }
+    this._disposed = true;
+    _ReceivedTransferFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
+  }
+
+  private _assertNotDisposed(): void {
+    if (this._disposed) {
+      throw new Error("ReceivedTransfer has been disposed");
+    }
+  }
+
+  async stream(fileIndex: bigint): Promise<DataStreamHandle> {
+    this._assertNotDisposed();
+    const handle = _exports.boltffi_received_transfer_stream(this._handle, fileIndex);
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => _exports.boltffi_received_transfer_stream_poll_sync(futureHandle),
+      (futureHandle: number) => _exports.boltffi_received_transfer_stream_panic_message(futureHandle),
+      (futureHandle: number) => _exports.boltffi_received_transfer_stream_free(futureHandle)
+    );
+    const result = _exports.boltffi_received_transfer_stream_complete(awaitedHandle) as number;
+    _exports.boltffi_received_transfer_stream_free(awaitedHandle);
+    return DataStreamHandle._fromHandle(result);
+  }
+}

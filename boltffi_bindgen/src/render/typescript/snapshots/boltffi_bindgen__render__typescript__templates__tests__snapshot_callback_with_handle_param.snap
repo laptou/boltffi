@@ -1,0 +1,116 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+
+export interface SenderCallbacks {
+  onTransferStarted(transfer: Transfer): void;
+}
+
+const _sender_callbacks_registry = new Map<number, SenderCallbacks>();
+const _sender_callbacks_ref_counts = new Map<number, number>();
+const _sender_callbacks_local_handles = new Set<number>();
+const _sender_callbacks_native_handle = Symbol("SenderCallbacksNativeHandle");
+let _sender_callbacks_next_id = _callback_handle_js_namespace_start;
+const _sender_callbacks_finalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.__boltffi_local_sender_callbacks_free(handle);
+      });
+
+const _sender_callbacks_lookup = (handle: number): SenderCallbacks => {
+  const handle_key = _callback_handle_key(handle);
+  const impl = _sender_callbacks_registry.get(handle_key);
+  if (!impl) {
+    throw new Error(`Callback handle ${handle_key} not found in SenderCallbacks registry`);
+  }
+  return impl;
+};
+
+const _sender_callbacks_retain = (handle: number): number => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _sender_callbacks_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot clone unknown callback handle ${handle_key} in SenderCallbacks registry`);
+  }
+  _sender_callbacks_ref_counts.set(handle_key, currentCount + 1);
+  return handle_key;
+};
+
+const _sender_callbacks_release = (handle: number): void => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _sender_callbacks_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot free unknown callback handle ${handle_key} in SenderCallbacks registry`);
+  }
+  if (currentCount === 1) {
+    const impl = _sender_callbacks_registry.get(handle_key);
+    _sender_callbacks_ref_counts.delete(handle_key);
+    _sender_callbacks_registry.delete(handle_key);
+    if (_sender_callbacks_local_handles.delete(handle_key)) {
+      if (impl && typeof impl === "object") {
+        _sender_callbacks_finalizer?.unregister(impl as object);
+      }
+      _exports.__boltffi_local_sender_callbacks_free(handle_key);
+    }
+    return;
+  }
+  _sender_callbacks_ref_counts.set(handle_key, currentCount - 1);
+};
+
+export function registerSenderCallbacks(impl: SenderCallbacks): number {
+  const existingHandle = (impl as unknown as Record<PropertyKey, unknown>)[_sender_callbacks_native_handle];
+  if (typeof existingHandle === "number") {
+    return _sender_callbacks_retain(existingHandle);
+  }
+  const id = _sender_callbacks_next_id++;
+  _sender_callbacks_registry.set(id, impl);
+  _sender_callbacks_ref_counts.set(id, 1);
+  return _callback_handle_key(_exports.boltffi_create_sender_callbacks_handle(id) as number);
+}
+
+export function unregisterSenderCallbacks(handle: number): void {
+  _sender_callbacks_release(handle);
+}
+
+_callbackImports["__boltffi_callback_sender_callbacks_free"] = (handle: number): void => {
+  _sender_callbacks_release(handle);
+};
+
+_callbackImports["__boltffi_callback_sender_callbacks_clone"] = (handle: number): number => {
+  return _sender_callbacks_retain(handle);
+};
+class SenderCallbacksProxy implements SenderCallbacks {
+  private readonly _handle: number;
+
+  constructor(handle: number) {
+    const handle_key = _callback_handle_key(handle);
+    this._handle = handle_key;
+    (this as unknown as Record<PropertyKey, unknown>)[_sender_callbacks_native_handle] = handle_key;
+  }
+
+  onTransferStarted(transfer: Transfer) {
+    const transfer_handle = transfer.takeHandle();
+    _exports.__boltffi_local_sender_callbacks_on_transfer_started(this._handle, transfer_handle);
+  }
+}
+
+export function wrapSenderCallbacks(handle: number): SenderCallbacks {
+  const handle_key = _callback_handle_key(handle);
+  const existingImpl = _sender_callbacks_registry.get(handle_key);
+  if (existingImpl) {
+    return existingImpl;
+  }
+  const wrapped = new SenderCallbacksProxy(handle_key);
+  _sender_callbacks_registry.set(handle_key, wrapped);
+  _sender_callbacks_ref_counts.set(handle_key, 1);
+  _sender_callbacks_local_handles.add(handle_key);
+  _sender_callbacks_finalizer?.register(wrapped, handle_key, wrapped);
+  return wrapped;
+}
+
+_callbackImports["__boltffi_callback_sender_callbacks_on_transfer_started"] = (handle: number, transfer: number): void => {
+  const impl = _sender_callbacks_lookup(handle);
+  impl.onTransferStarted(Transfer._fromHandle(transfer));
+};

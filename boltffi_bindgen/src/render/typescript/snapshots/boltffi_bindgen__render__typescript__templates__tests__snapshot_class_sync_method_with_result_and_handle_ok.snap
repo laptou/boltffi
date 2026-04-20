@@ -1,0 +1,97 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+const _ReceiverFinalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.boltffi_receiver_free(handle);
+      });
+
+export class Receiver {
+  private _handle: number;
+  private _disposed: boolean;
+
+  private constructor(handle: number) {
+    this._handle = handle;
+    this._disposed = false;
+    _ReceiverFinalizer?.register(this, handle, this);
+  }
+
+  static _fromHandle(handle: number): Receiver {
+    if (handle === 0) {
+      throw new Error("Receiver received a null handle");
+    }
+    return new Receiver(handle);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+
+  dispose(): void {
+    if (this._disposed) {
+      return;
+    }
+    this._disposed = true;
+    _ReceiverFinalizer?.unregister(this);
+    _exports.boltffi_receiver_free(this._handle);
+    this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("Receiver has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("Receiver received a null handle");
+    }
+    this._disposed = true;
+    _ReceiverFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
+  }
+
+  private _assertNotDisposed(): void {
+    if (this._disposed) {
+      throw new Error("Receiver has been disposed");
+    }
+  }
+
+  receive(): Transfer {
+    this._assertNotDisposed();
+    const __outOkSlot = _module.exports.boltffi_wasm_alloc(4);
+    const __errPair = _module.allocErrOutPair();
+    try {
+      const __status = _exports.boltffi_receiver_receive(this._handle, __outOkSlot, __errPair, __errPair + 4) as number;
+      if (__status === 0) {
+        const _u32 = new Uint32Array(_module.exports.memory.buffer);
+        const h = _u32[__outOkSlot >>> 2];
+        if (h === 0) {
+          throw new Error("ffi call failed");
+        }
+        return Transfer._fromHandle(h);
+      }
+      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+      try {
+        if (__errLen > 0) {
+          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+          throw new TransferErrorException(TransferErrorCodec.decode(reader));
+        }
+        throw new Error("ffi call failed");
+      } finally {
+        if (__errLen > 0) {
+          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+        }
+      }
+    } finally {
+      _module.exports.boltffi_wasm_free(__outOkSlot, 4);
+      _module.freeErrOutPair(__errPair);
+    }
+  }
+}

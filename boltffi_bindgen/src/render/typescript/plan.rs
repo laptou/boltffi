@@ -1,3 +1,4 @@
+use crate::ir::abi::ReturnShape;
 use crate::ir::ops::{ReadSeq, WriteSeq};
 use crate::ir::plan::AbiType;
 use crate::render::typescript::emit;
@@ -6,6 +7,8 @@ use crate::render::typescript::emit;
 pub struct TsModule {
     pub module_name: String,
     pub abi_version: u32,
+    /// when set, emit wasm-bindgen glue import + `wasmBindgen` hooks (see `{module}.boltffi.json` from pack)
+    pub wasm_bindgen_glue: Option<String>,
     pub records: Vec<TsRecord>,
     pub enums: Vec<TsEnum>,
     pub error_exceptions: Vec<TsErrorException>,
@@ -35,6 +38,7 @@ pub struct TsAsyncFunction {
     pub params: Vec<TsParam>,
     pub return_type: Option<String>,
     pub return_route: TsOutputRoute,
+    pub return_handle: Option<TsHandleReturn>,
     pub return_callback: Option<TsCallbackHandleReturn>,
     pub throws: bool,
     pub err_type: String,
@@ -77,11 +81,30 @@ pub struct TsClassConstructor {
     pub ffi_name: String,
     pub is_default: bool,
     pub params: Vec<TsParam>,
+    /// sync constructors only: nullable `new`/`open` that return 0
     pub returns_nullable_handle: bool,
+    pub return_type: Option<String>,
+    pub return_handle: Option<TsHandleReturn>,
+    pub return_callback: Option<TsCallbackHandleReturn>,
+    pub mode: TsClassConstructorMode,
     pub doc: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub enum TsClassConstructorMode {
+    Sync(TsClassSyncConstructor),
+    Async(TsClassAsyncMethod),
+}
+
+/// marker for sync constructors (direct handle return)
+#[derive(Debug, Clone)]
+pub struct TsClassSyncConstructor {}
+
 impl TsClassConstructor {
+    pub fn is_async(&self) -> bool {
+        matches!(self.mode, TsClassConstructorMode::Async(_))
+    }
+
     pub fn wrapper_code(&self) -> String {
         self.params
             .iter()
@@ -198,6 +221,8 @@ pub struct TsCallback {
     pub local_free_fn: String,
     pub wrap_handle_fn: String,
     pub proxy_class_name: String,
+    /// true when rust returns this callback trait to ts (mirrors swift `supports_foreign_wrap`).
+    pub is_returned: bool,
     pub methods: Vec<TsCallbackMethod>,
     pub async_methods: Vec<TsAsyncCallbackMethod>,
     pub closure_fn_type: Option<String>,
@@ -214,6 +239,12 @@ pub struct TsCallbackMethod {
     pub return_type: Option<String>,
     pub import_return: TsCallbackImportReturn,
     pub proxy_return_route: TsOutputRoute,
+    /// when rust returns a handle through the proxy export, wrap with `_fromHandle`
+    pub proxy_return_handle: Option<TsHandleReturn>,
+    /// when rust returns a callback handle through the proxy export, wrap with `wrapFn`
+    pub proxy_return_callback: Option<TsCallbackHandleReturn>,
+    /// abi return shape for wasm export typing (e.g. u64 -> bigint)
+    pub proxy_abi_returns: ReturnShape,
     pub doc: Option<String>,
 }
 
@@ -242,9 +273,26 @@ impl TsCallbackMethod {
 #[derive(Debug, Clone)]
 pub enum TsCallbackImportReturn {
     Void,
-    Direct { wasm_type: String },
+    /// wasm return type plus optional wrap from ts value to numeric handle.
+    Direct {
+        wasm_type: String,
+        outbound_wrap: Option<TsCallbackImportOutboundWrap>,
+    },
     Encoded(TsEncodedCallbackReturn),
     PackedUtf8,
+}
+
+/// how to convert a ts return value into the wasm scalar the rust import expects.
+#[derive(Debug, Clone)]
+pub enum TsCallbackImportOutboundWrap {
+    TakeHandle {
+        class_name: String,
+        nullable: bool,
+    },
+    RegisterCallback {
+        register_fn: String,
+        nullable: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -260,11 +308,28 @@ pub struct TsCallbackParam {
     pub kind: TsCallbackParamKind,
 }
 
+impl TsCallbackParam {
+    /// expression passed to the user callback (decoded wire args or handle wrappers)
+    pub fn pass_expr(&self) -> String {
+        match &self.kind {
+            TsCallbackParamKind::Primitive { call_expr, .. } => call_expr.clone(),
+            TsCallbackParamKind::WireEncoded { .. } => self.name.clone(),
+            TsCallbackParamKind::InboundHandle { class_name } => {
+                format!("{class_name}._fromHandle({})", self.name)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TsCallbackParamKind {
     Primitive {
         import_ts_type: String,
         call_expr: String,
+    },
+    /// rust passes a raw handle id; unwrap with `ClassName._fromHandle(...)` at the js boundary
+    InboundHandle {
+        class_name: String,
     },
     WireEncoded {
         decode_expr: String,
@@ -272,10 +337,34 @@ pub enum TsCallbackParamKind {
 }
 
 #[derive(Debug, Clone)]
+pub struct TsWasmImport {
+    pub ffi_name: String,
+    pub params: Vec<TsWasmParam>,
+    pub return_wasm_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TsWasmParam {
+    pub name: String,
+    pub wasm_type: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct TsAsyncCallbackMethod {
     pub ts_name: String,
     pub start_import_name: String,
     pub complete_export_name: String,
+    /// js proxy calling rust implementation (`__boltffi_local_*` entry + poll/complete)
+    pub proxy_export_name: String,
+    pub proxy_params: Vec<TsParam>,
+    pub poll_sync_ffi_name: String,
+    pub complete_ffi_name: String,
+    pub panic_message_ffi_name: String,
+    pub cancel_ffi_name: String,
+    pub free_ffi_name: String,
+    pub proxy_return_route: TsOutputRoute,
+    pub return_handle: Option<TsHandleReturn>,
+    pub return_callback: Option<TsCallbackHandleReturn>,
     pub params: Vec<TsCallbackParam>,
     pub return_type: Option<String>,
     pub encode_expr: Option<String>,
@@ -283,7 +372,31 @@ pub struct TsAsyncCallbackMethod {
     pub direct_write_method: Option<String>,
     pub direct_write_value_expr: Option<String>,
     pub direct_size: Option<usize>,
+    /// wasm exports for `__boltffi_local_*` async entry/poll/complete (merged into [`TsModule::wasm_imports`])
+    pub proxy_wasm_imports: Vec<TsWasmImport>,
     pub doc: Option<String>,
+}
+
+impl TsAsyncCallbackMethod {
+    pub fn proxy_wrapper_code(&self) -> String {
+        self.proxy_params
+            .iter()
+            .filter_map(TsParam::wrapper_code)
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    }
+
+    pub fn proxy_cleanup_code(&self) -> String {
+        self.proxy_params
+            .iter()
+            .filter_map(TsParam::cleanup_code)
+            .collect::<Vec<_>>()
+            .join("\n      ")
+    }
+
+    pub fn proxy_call_args(&self) -> String {
+        flatten_ffi_args(&self.proxy_params).join(", ")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1155,17 +1268,4 @@ impl TsOutputRoute {
         self.ts_cast = ts_cast;
         self
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TsWasmImport {
-    pub ffi_name: String,
-    pub params: Vec<TsWasmParam>,
-    pub return_wasm_type: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TsWasmParam {
-    pub name: String,
-    pub wasm_type: String,
 }

@@ -260,6 +260,7 @@ impl<'a> TypeScriptLowerer<'a> {
         Ok(TsModule {
             module_name: self.module_name.clone(),
             abi_version: 1,
+            wasm_bindgen_glue: None,
             records,
             enums,
             error_exceptions,
@@ -815,16 +816,60 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        TsClassConstructor {
-            ts_name,
-            ffi_name: abi_call.symbol.as_str().to_string(),
-            is_default: constructor.name().is_none(),
-            params,
-            returns_nullable_handle: matches!(
-                abi_call.returns.transport,
-                Some(Transport::Handle { nullable: true, .. })
-            ),
-            doc: constructor.doc().map(String::from),
+        let ctor_err_string = constructor.is_fallible() && !constructor.is_optional();
+
+        match &abi_call.mode {
+            CallMode::Sync => TsClassConstructor {
+                ts_name,
+                ffi_name: abi_call.symbol.as_str().to_string(),
+                is_default: constructor.name().is_none(),
+                params,
+                returns_nullable_handle: matches!(
+                    abi_call.returns.transport,
+                    Some(Transport::Handle { nullable: true, .. })
+                ),
+                return_type: None,
+                return_handle: None,
+                return_callback: None,
+                mode: TsClassConstructorMode::Sync(TsClassSyncConstructor {}),
+                doc: constructor.doc().map(String::from),
+            },
+            CallMode::Async(async_call) => {
+                let entry_ffi_name = abi_call.symbol.as_str().to_string();
+                let (return_type, return_route) = self.select_output_route(
+                    &async_call.result,
+                    &async_call.error,
+                    TsExecutionModel::AsyncMethod,
+                    ctor_err_string,
+                );
+                let return_handle = match &async_call.result.transport {
+                    Some(Transport::Handle { class_id, nullable }) => Some(TsHandleReturn {
+                        class_name: naming::to_upper_camel_case(class_id.as_str()),
+                        nullable: *nullable,
+                    }),
+                    _ => None,
+                };
+                let return_callback = self.callback_return(&async_call.result);
+                TsClassConstructor {
+                    ts_name,
+                    ffi_name: entry_ffi_name.clone(),
+                    is_default: constructor.name().is_none(),
+                    params,
+                    returns_nullable_handle: false,
+                    return_type,
+                    return_handle,
+                    return_callback,
+                    mode: TsClassConstructorMode::Async(TsClassAsyncMethod {
+                        poll_sync_ffi_name: format!("{entry_ffi_name}_poll_sync"),
+                        complete_ffi_name: format!("{entry_ffi_name}_complete"),
+                        panic_message_ffi_name: format!("{entry_ffi_name}_panic_message"),
+                        cancel_ffi_name: format!("{entry_ffi_name}_cancel"),
+                        free_ffi_name: format!("{entry_ffi_name}_free"),
+                        return_route,
+                    }),
+                    doc: constructor.doc().map(String::from),
+                }
+            }
         }
     }
 
@@ -987,6 +1032,13 @@ impl<'a> TypeScriptLowerer<'a> {
                                     let decode_expr = emit::emit_reader_read(decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
                                 }
+                                ParamRole::Input {
+                                    transport: Transport::Handle { class_id, .. },
+                                    ..
+                                } => {
+                                    let class_name = naming::to_upper_camel_case(class_id.as_str());
+                                    TsCallbackParamKind::InboundHandle { class_name }
+                                }
                                 _ => callback_primitive_param_kind(
                                     callback_param_name.as_str(),
                                     Some(&abi_param.abi_type),
@@ -1034,7 +1086,10 @@ impl<'a> TypeScriptLowerer<'a> {
                             let ts_type = ts_abi_type(&AbiType::from(origin.primitive()));
                             (
                                 Some(ts_type.clone()),
-                                TsCallbackImportReturn::Direct { wasm_type: ts_type },
+                                TsCallbackImportReturn::Direct {
+                                    wasm_type: ts_type,
+                                    outbound_wrap: None,
+                                },
                             )
                         }
                         ReturnShape { contract, .. }
@@ -1069,14 +1124,49 @@ impl<'a> TypeScriptLowerer<'a> {
                             )
                         }
                         ReturnShape {
-                            transport: Some(Transport::Handle { .. } | Transport::Callback { .. }),
+                            transport: Some(Transport::Handle { class_id, nullable, .. }),
                             ..
-                        } => (
-                            Some("number".to_string()),
-                            TsCallbackImportReturn::Direct {
-                                wasm_type: "number".to_string(),
-                            },
-                        ),
+                        } => {
+                            let class_name = naming::to_upper_camel_case(class_id.as_str());
+                            let ts_ret = if *nullable {
+                                format!("{class_name} | null")
+                            } else {
+                                class_name.clone()
+                            };
+                            (
+                                Some(ts_ret),
+                                TsCallbackImportReturn::Direct {
+                                    wasm_type: "number".to_string(),
+                                    outbound_wrap: Some(TsCallbackImportOutboundWrap::TakeHandle {
+                                        class_name,
+                                        nullable: *nullable,
+                                    }),
+                                },
+                            )
+                        }
+                        ReturnShape {
+                            transport: Some(Transport::Callback { callback_id, nullable, .. }),
+                            ..
+                        } => {
+                            let if_name = naming::to_upper_camel_case(callback_id.as_str());
+                            let ts_ret = if *nullable {
+                                format!("{if_name} | null")
+                            } else {
+                                if_name.clone()
+                            };
+                            (
+                                Some(ts_ret),
+                                TsCallbackImportReturn::Direct {
+                                    wasm_type: "number".to_string(),
+                                    outbound_wrap: Some(
+                                        TsCallbackImportOutboundWrap::RegisterCallback {
+                                            register_fn: format!("register{}", if_name),
+                                            nullable: *nullable,
+                                        },
+                                    ),
+                                },
+                            )
+                        }
                         ReturnShape {
                             transport: Some(Transport::Scalar(origin)),
                             ..
@@ -1084,7 +1174,10 @@ impl<'a> TypeScriptLowerer<'a> {
                             let ts_type = ts_abi_type(&AbiType::from(origin.primitive()));
                             (
                                 Some(ts_type.clone()),
-                                TsCallbackImportReturn::Direct { wasm_type: ts_type },
+                                TsCallbackImportReturn::Direct {
+                                    wasm_type: ts_type,
+                                    outbound_wrap: None,
+                                },
                             )
                         }
                         _ => (None, TsCallbackImportReturn::Void),
@@ -1096,6 +1189,8 @@ impl<'a> TypeScriptLowerer<'a> {
                     TsExecutionModel::Sync,
                     result_err_is_string(&method_def.returns),
                 );
+                let proxy_return_handle = self.handle_return(&abi_method.returns);
+                let proxy_return_callback = self.callback_return(&abi_method.returns);
 
                 Some(TsCallbackMethod {
                     ts_name,
@@ -1106,6 +1201,9 @@ impl<'a> TypeScriptLowerer<'a> {
                     return_type,
                     import_return,
                     proxy_return_route,
+                    proxy_return_handle,
+                    proxy_return_callback,
+                    proxy_abi_returns: abi_method.returns.clone(),
                     doc: method_def.doc.clone(),
                 })
             })
@@ -1152,6 +1250,13 @@ impl<'a> TypeScriptLowerer<'a> {
                                 } => {
                                     let decode_expr = emit::emit_reader_read(decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
+                                }
+                                ParamRole::Input {
+                                    transport: Transport::Handle { class_id, .. },
+                                    ..
+                                } => {
+                                    let class_name = naming::to_upper_camel_case(class_id.as_str());
+                                    TsCallbackParamKind::InboundHandle { class_name }
                                 }
                                 _ => callback_primitive_param_kind(
                                     callback_param_name.as_str(),
@@ -1223,7 +1328,26 @@ impl<'a> TypeScriptLowerer<'a> {
                         )
                     }
                     ReturnShape {
-                        transport: Some(Transport::Handle { .. } | Transport::Callback { .. }),
+                        transport: Some(Transport::Handle { class_id, nullable, .. }),
+                        ..
+                    } => {
+                        let class_name = naming::to_upper_camel_case(class_id.as_str());
+                        let ts_ret = if *nullable {
+                            format!("{class_name} | null")
+                        } else {
+                            class_name
+                        };
+                        (
+                            Some(ts_ret),
+                            None,
+                            None,
+                            Some("writeU32".to_string()),
+                            Some("result.takeHandle()".to_string()),
+                            Some(4),
+                        )
+                    }
+                    ReturnShape {
+                        transport: Some(Transport::Callback { .. }),
                         ..
                     } => (
                         Some("number".to_string()),
@@ -1236,10 +1360,56 @@ impl<'a> TypeScriptLowerer<'a> {
                     _ => (None, None, None, None, None, None),
                 };
 
+                let proxy_export_name = format!(
+                    "__boltffi_local_{}_{}",
+                    trait_name_snake,
+                    naming::to_snake_case(method_def.id.as_str())
+                );
+                let entry_ffi_name = proxy_export_name.clone();
+                let proxy_params: Vec<TsParam> = method_def
+                    .params
+                    .iter()
+                    .map(|parameter_def| {
+                        let abi_param = abi_method
+                            .params
+                            .iter()
+                            .find(|candidate| candidate.name == parameter_def.name)
+                            .expect("callback async method abi param");
+                        self.lower_param(Some(parameter_def), abi_param)
+                    })
+                    .collect();
+
+                let (_, proxy_return_route) = self.select_output_route(
+                    &abi_method.returns,
+                    &abi_method.error,
+                    TsExecutionModel::AsyncMethod,
+                    result_err_is_string(&method_def.returns),
+                );
+                let return_handle = self.handle_return(&abi_method.returns);
+                let return_callback = self.callback_return(&abi_method.returns);
+
+                let proxy_wasm_imports = self.wasm_imports_for_async_proxy_local(
+                    &entry_ffi_name,
+                    &proxy_params,
+                    &abi_method.returns,
+                    &abi_method.error,
+                    result_err_is_string(&method_def.returns),
+                );
+
                 Some(TsAsyncCallbackMethod {
                     ts_name,
                     start_import_name,
                     complete_export_name,
+                    proxy_export_name,
+                    proxy_params,
+                    poll_sync_ffi_name: format!("{entry_ffi_name}_poll_sync"),
+                    complete_ffi_name: format!("{entry_ffi_name}_complete"),
+                    panic_message_ffi_name: format!("{entry_ffi_name}_panic_message"),
+                    cancel_ffi_name: format!("{entry_ffi_name}_cancel"),
+                    free_ffi_name: format!("{entry_ffi_name}_free"),
+                    proxy_return_route,
+                    return_handle,
+                    return_callback,
                     params,
                     return_type,
                     encode_expr,
@@ -1247,6 +1417,7 @@ impl<'a> TypeScriptLowerer<'a> {
                     direct_write_method,
                     direct_write_value_expr,
                     direct_size,
+                    proxy_wasm_imports,
                     doc: method_def.doc.clone(),
                 })
             })
@@ -1279,11 +1450,38 @@ impl<'a> TypeScriptLowerer<'a> {
             local_free_fn,
             wrap_handle_fn,
             proxy_class_name,
+            is_returned: self.callback_is_returned(&def.id),
             methods,
             async_methods,
             closure_fn_type,
             doc: def.doc.clone(),
         }
+    }
+
+    fn callback_is_returned(&self, callback_id: &CallbackId) -> bool {
+        self.abi.calls.iter().any(|call| {
+            self.return_shape_references_callback(&call.returns, callback_id)
+                || match &call.mode {
+                    CallMode::Sync => false,
+                    CallMode::Async(async_call) => {
+                        self.return_shape_references_callback(&async_call.result, callback_id)
+                    }
+                }
+        })
+    }
+
+    fn return_shape_references_callback(
+        &self,
+        return_shape: &ReturnShape,
+        callback_id: &CallbackId,
+    ) -> bool {
+        matches!(
+            &return_shape.transport,
+            Some(Transport::Callback {
+                callback_id: returned_callback,
+                ..
+            }) if returned_callback == callback_id
+        )
     }
 
     fn lower_function(&self, def: &FunctionDef, index: &AbiIndex) -> Option<TsFunction> {
@@ -1365,6 +1563,7 @@ impl<'a> TypeScriptLowerer<'a> {
             result_err_is_string(&def.returns),
         );
         let (throws, err_type) = self.lower_error(&async_call.error);
+        let return_handle = self.handle_return(&async_call.result);
         let return_callback = self.callback_return(&async_call.result);
 
         Some(TsAsyncFunction {
@@ -1378,6 +1577,7 @@ impl<'a> TypeScriptLowerer<'a> {
             params,
             return_type,
             return_route,
+            return_handle,
             return_callback,
             throws,
             err_type,
@@ -1590,9 +1790,14 @@ impl<'a> TypeScriptLowerer<'a> {
                     ),
                     TsOutputRoute::direct(String::new()),
                 ),
-                TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => {
-                    (None, TsOutputRoute::void())
-                }
+                TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
+                    Some(
+                        self.callback_return(returns)
+                            .map(|callback_return| callback_return.interface_name)
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ),
+                    TsOutputRoute::async_scalar(String::new()),
+                ),
             },
             ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => {
                 match &returns.transport {
@@ -1778,7 +1983,8 @@ impl<'a> TypeScriptLowerer<'a> {
             let err_throw_expr = if err_is_string {
                 format!("new FfiError({})", err_inner)
             } else {
-                err_inner
+                let err_type_name = infer_ts_type_from_read_ops(decode_ops);
+                format!("new {err_type_name}Exception({err_inner})")
             };
             return match execution_model {
                 TsExecutionModel::Sync => (
@@ -1803,9 +2009,10 @@ impl<'a> TypeScriptLowerer<'a> {
 
         match execution_model {
             TsExecutionModel::Sync => (Some(ts_type), TsOutputRoute::direct(String::new())),
+            // wasm `complete` returns the packed handle as a u32; template wraps via `return_handle`.
             TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
                 Some(ts_type),
-                TsOutputRoute::packed("reader.readU32()".to_string()),
+                TsOutputRoute::async_scalar(String::new()),
             ),
         }
     }
@@ -2133,37 +2340,42 @@ impl<'a> TypeScriptLowerer<'a> {
                 return_wasm_type: None,
             });
 
-            for method in &cb.methods {
-                push_unique(self.wasm_import_for_callback_proxy_method(method));
-            }
+            if cb.is_returned {
+                for method in &cb.methods {
+                    push_unique(self.wasm_import_for_callback_proxy_method(method));
+                }
 
-            for async_m in &cb.async_methods {
-                push_unique(TsWasmImport {
-                    ffi_name: async_m.complete_export_name.clone(),
-                    params: vec![
-                        TsWasmParam {
-                            name: "requestId".to_string(),
-                            wasm_type: "number".to_string(),
-                        },
-                        TsWasmParam {
-                            name: "status".to_string(),
-                            wasm_type: "number".to_string(),
-                        },
-                        TsWasmParam {
-                            name: "ptr".to_string(),
-                            wasm_type: "number".to_string(),
-                        },
-                        TsWasmParam {
-                            name: "len".to_string(),
-                            wasm_type: "number".to_string(),
-                        },
-                        TsWasmParam {
-                            name: "capacity".to_string(),
-                            wasm_type: "number".to_string(),
-                        },
-                    ],
-                    return_wasm_type: None,
-                });
+                for async_m in &cb.async_methods {
+                    for imp in &async_m.proxy_wasm_imports {
+                        push_unique(imp.clone());
+                    }
+                    push_unique(TsWasmImport {
+                        ffi_name: async_m.complete_export_name.clone(),
+                        params: vec![
+                            TsWasmParam {
+                                name: "requestId".to_string(),
+                                wasm_type: "number".to_string(),
+                            },
+                            TsWasmParam {
+                                name: "status".to_string(),
+                                wasm_type: "number".to_string(),
+                            },
+                            TsWasmParam {
+                                name: "ptr".to_string(),
+                                wasm_type: "number".to_string(),
+                            },
+                            TsWasmParam {
+                                name: "len".to_string(),
+                                wasm_type: "number".to_string(),
+                            },
+                            TsWasmParam {
+                                name: "capacity".to_string(),
+                                wasm_type: "number".to_string(),
+                            },
+                        ],
+                        return_wasm_type: None,
+                    });
+                }
             }
         }
 
@@ -2260,7 +2472,10 @@ impl<'a> TypeScriptLowerer<'a> {
         let return_wasm_type = if method.proxy_return_route.is_void() {
             None
         } else if method.proxy_return_route.is_direct() {
-            Some("number".to_string())
+            self.sync_return_wasm_type_for_route(
+                &method.proxy_abi_returns,
+                &method.proxy_return_route,
+            )
         } else if method.proxy_return_route.is_packed() || method.proxy_return_route.is_raw_packed()
         {
             Some("bigint".to_string())
@@ -2275,6 +2490,129 @@ impl<'a> TypeScriptLowerer<'a> {
             params: wasm_params,
             return_wasm_type,
         }
+    }
+
+    /// wasm exports for `__boltffi_local_*` async callback methods (mirrors async [`AbiCall`] symbols).
+    fn wasm_imports_for_async_proxy_local(
+        &self,
+        sym: &str,
+        proxy_params: &[TsParam],
+        returns: &ReturnShape,
+        error: &ErrorTransport,
+        err_is_string: bool,
+    ) -> Vec<TsWasmImport> {
+        let mut out = Vec::new();
+        let mut entry_params = vec![TsWasmParam {
+            name: "self".to_string(),
+            wasm_type: "number".to_string(),
+        }];
+        for p in proxy_params {
+            entry_params.extend(self.wasm_params_for_ts_param(p));
+        }
+        out.push(TsWasmImport {
+            ffi_name: sym.to_string(),
+            params: entry_params,
+            return_wasm_type: Some("number".to_string()),
+        });
+        out.push(TsWasmImport {
+            ffi_name: format!("{sym}_poll_sync"),
+            params: vec![TsWasmParam {
+                name: "h".to_string(),
+                wasm_type: "number".to_string(),
+            }],
+            return_wasm_type: Some("number".to_string()),
+        });
+        out.push(TsWasmImport {
+            ffi_name: format!("{sym}_panic_message"),
+            params: vec![TsWasmParam {
+                name: "h".to_string(),
+                wasm_type: "number".to_string(),
+            }],
+            return_wasm_type: Some("number".to_string()),
+        });
+        out.push(TsWasmImport {
+            ffi_name: format!("{sym}_free"),
+            params: vec![TsWasmParam {
+                name: "h".to_string(),
+                wasm_type: "number".to_string(),
+            }],
+            return_wasm_type: None,
+        });
+
+        let execution_model = TsExecutionModel::AsyncMethod;
+        let (_, return_route) =
+            self.select_output_route(returns, error, execution_model, err_is_string);
+
+        let complete_name = format!("{sym}_complete");
+        if return_route.is_void() {
+            out.push(TsWasmImport {
+                ffi_name: complete_name,
+                params: vec![TsWasmParam {
+                    name: "h".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: None,
+            });
+        } else if return_route.is_async_scalar() {
+            let rt = self.sync_return_wasm_type_for_route(returns, &return_route);
+            out.push(TsWasmImport {
+                ffi_name: complete_name,
+                params: vec![TsWasmParam {
+                    name: "h".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: rt.or(Some("number".to_string())),
+            });
+        } else if return_route.is_async_fallible_handle_carrier() {
+            out.push(TsWasmImport {
+                ffi_name: complete_name,
+                params: vec![
+                    TsWasmParam {
+                        name: "h".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                    TsWasmParam {
+                        name: "errOutPtr".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                    TsWasmParam {
+                        name: "errOutLen".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                ],
+                return_wasm_type: Some("number".to_string()),
+            });
+        } else if return_route.is_packed() || return_route.is_raw_packed() {
+            out.push(TsWasmImport {
+                ffi_name: complete_name,
+                params: vec![
+                    TsWasmParam {
+                        name: "outPtr".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                    TsWasmParam {
+                        name: "h".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                    TsWasmParam {
+                        name: "flags".to_string(),
+                        wasm_type: "number".to_string(),
+                    },
+                ],
+                return_wasm_type: None,
+            });
+        } else {
+            out.push(TsWasmImport {
+                ffi_name: complete_name,
+                params: vec![TsWasmParam {
+                    name: "h".to_string(),
+                    wasm_type: "number".to_string(),
+                }],
+                return_wasm_type: None,
+            });
+        }
+
+        out
     }
 
     fn wasm_params_for_ts_param(&self, param: &TsParam) -> Vec<TsWasmParam> {
@@ -3176,8 +3514,19 @@ mod tests {
 
         let module = lower_contract(&contract);
 
-        assert_eq!(module.wasm_imports.len(), 1);
-        assert_eq!(module.wasm_imports[0].ffi_name, "boltffi_sync_value");
+        assert!(
+            module
+                .wasm_imports
+                .iter()
+                .any(|imp| imp.ffi_name == "boltffi_sync_value")
+        );
+        assert!(
+            module
+                .wasm_imports
+                .iter()
+                .any(|imp| imp.ffi_name == "boltffi_async_value_poll_sync"),
+            "async functions still declare poll/complete exports for wasm"
+        );
     }
 
     #[test]
@@ -3580,6 +3929,9 @@ mod tests {
             TsCallbackParamKind::WireEncoded { .. } => {
                 panic!("expected primitive callback param kind")
             }
+            TsCallbackParamKind::InboundHandle { .. } => {
+                panic!("expected primitive callback param kind")
+            }
         }
     }
 
@@ -3595,6 +3947,9 @@ mod tests {
                 assert_eq!(call_expr, "isActive !== 0");
             }
             TsCallbackParamKind::WireEncoded { .. } => {
+                panic!("expected primitive callback param kind")
+            }
+            TsCallbackParamKind::InboundHandle { .. } => {
                 panic!("expected primitive callback param kind")
             }
         }

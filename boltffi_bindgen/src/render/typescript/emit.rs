@@ -162,6 +162,12 @@ pub fn ts_type(type_expr: &TypeExpr) -> String {
         TypeExpr::Result { ok, .. } => ts_type(ok),
         TypeExpr::Record(id) => to_pascal_case(id.as_str()),
         TypeExpr::Enum(id) => to_pascal_case(id.as_str()),
+        // anyhow::Error decodes as utf-8 string on the wire; never emit a synthetic `AnyhowError` type
+        TypeExpr::Custom(id)
+            if id.as_str() == "AnyhowError" || id.as_str().contains("anyhow::Error") =>
+        {
+            "string".to_string()
+        }
         TypeExpr::Custom(id) => to_pascal_case(id.as_str()),
         TypeExpr::Handle(id) => to_pascal_case(id.as_str()),
         TypeExpr::Callback(id) => to_pascal_case(id.as_str()),

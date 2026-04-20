@@ -3,6 +3,16 @@ let _exports: WasmExports;
 const _callbackImports: Record<string, WebAssembly.ImportValue> = {};
 
 export default async function init(source: BufferSource | Response): Promise<void> {
+{%- if wasm_bindgen_glue.is_some() %}
+  _module = await instantiateBoltFFI(source, EXPECTED_ABI_VERSION, {
+    env: _callbackImports,
+    wasmBindgen: {
+      getImports: __wbg_get_imports,
+      finalize: __wbg_finalize_init,
+    },
+  });
+{%- else %}
   _module = await instantiateBoltFFI(source, EXPECTED_ABI_VERSION, { env: _callbackImports });
+{%- endif %}
   _exports = _module.exports as unknown as WasmExports;
 }

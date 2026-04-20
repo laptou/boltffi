@@ -1,0 +1,115 @@
+---
+source: boltffi_bindgen/src/render/typescript/templates.rs
+expression: template.render().unwrap()
+---
+
+export interface StreamSource {
+  count(): bigint;
+}
+
+const _stream_source_registry = new Map<number, StreamSource>();
+const _stream_source_ref_counts = new Map<number, number>();
+const _stream_source_local_handles = new Set<number>();
+const _stream_source_native_handle = Symbol("StreamSourceNativeHandle");
+let _stream_source_next_id = _callback_handle_js_namespace_start;
+const _stream_source_finalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        _exports.__boltffi_local_stream_source_free(handle);
+      });
+
+const _stream_source_lookup = (handle: number): StreamSource => {
+  const handle_key = _callback_handle_key(handle);
+  const impl = _stream_source_registry.get(handle_key);
+  if (!impl) {
+    throw new Error(`Callback handle ${handle_key} not found in StreamSource registry`);
+  }
+  return impl;
+};
+
+const _stream_source_retain = (handle: number): number => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _stream_source_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot clone unknown callback handle ${handle_key} in StreamSource registry`);
+  }
+  _stream_source_ref_counts.set(handle_key, currentCount + 1);
+  return handle_key;
+};
+
+const _stream_source_release = (handle: number): void => {
+  const handle_key = _callback_handle_key(handle);
+  const currentCount = _stream_source_ref_counts.get(handle_key);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot free unknown callback handle ${handle_key} in StreamSource registry`);
+  }
+  if (currentCount === 1) {
+    const impl = _stream_source_registry.get(handle_key);
+    _stream_source_ref_counts.delete(handle_key);
+    _stream_source_registry.delete(handle_key);
+    if (_stream_source_local_handles.delete(handle_key)) {
+      if (impl && typeof impl === "object") {
+        _stream_source_finalizer?.unregister(impl as object);
+      }
+      _exports.__boltffi_local_stream_source_free(handle_key);
+    }
+    return;
+  }
+  _stream_source_ref_counts.set(handle_key, currentCount - 1);
+};
+
+export function registerStreamSource(impl: StreamSource): number {
+  const existingHandle = (impl as unknown as Record<PropertyKey, unknown>)[_stream_source_native_handle];
+  if (typeof existingHandle === "number") {
+    return _stream_source_retain(existingHandle);
+  }
+  const id = _stream_source_next_id++;
+  _stream_source_registry.set(id, impl);
+  _stream_source_ref_counts.set(id, 1);
+  return _callback_handle_key(_exports.boltffi_create_stream_source_handle(id) as number);
+}
+
+export function unregisterStreamSource(handle: number): void {
+  _stream_source_release(handle);
+}
+
+_callbackImports["__boltffi_callback_stream_source_free"] = (handle: number): void => {
+  _stream_source_release(handle);
+};
+
+_callbackImports["__boltffi_callback_stream_source_clone"] = (handle: number): number => {
+  return _stream_source_retain(handle);
+};
+class StreamSourceProxy implements StreamSource {
+  private readonly _handle: number;
+
+  constructor(handle: number) {
+    const handle_key = _callback_handle_key(handle);
+    this._handle = handle_key;
+    (this as unknown as Record<PropertyKey, unknown>)[_stream_source_native_handle] = handle_key;
+  }
+
+  count(): bigint {
+    return _exports.__boltffi_local_stream_source_count(this._handle);
+  }
+}
+
+export function wrapStreamSource(handle: number): StreamSource {
+  const handle_key = _callback_handle_key(handle);
+  const existingImpl = _stream_source_registry.get(handle_key);
+  if (existingImpl) {
+    return existingImpl;
+  }
+  const wrapped = new StreamSourceProxy(handle_key);
+  _stream_source_registry.set(handle_key, wrapped);
+  _stream_source_ref_counts.set(handle_key, 1);
+  _stream_source_local_handles.add(handle_key);
+  _stream_source_finalizer?.register(wrapped, handle_key, wrapped);
+  return wrapped;
+}
+
+_callbackImports["__boltffi_callback_stream_source_count"] = (handle: number): bigint => {
+  const impl = _stream_source_lookup(handle);
+  return impl.count();
+};
