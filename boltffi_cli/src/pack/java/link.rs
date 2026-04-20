@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use crate::build::{OutputCallback, run_command_streaming};
+use crate::build::{CargoBuildProfile, OutputCallback, run_command_streaming};
 use crate::cli::{CliError, Result};
 use crate::config::Config;
 use crate::pack::PackError;
@@ -18,8 +18,252 @@ pub(crate) struct JvmBuildArtifacts {
     pub(crate) static_library_filename: Option<String>,
 }
 
+pub(crate) enum DesktopJniStripMode {
+    Disabled,
+    Automatic,
+    Explicit,
+}
+
+pub(crate) fn desktop_jni_strip_mode(
+    config: &Config,
+    build_profile: &CargoBuildProfile,
+) -> DesktopJniStripMode {
+    if matches!(build_profile, CargoBuildProfile::Release) {
+        DesktopJniStripMode::Automatic
+    } else if matches!(build_profile, CargoBuildProfile::Named(_))
+        && config.java_jvm_strip_symbols()
+    {
+        DesktopJniStripMode::Explicit
+    } else {
+        DesktopJniStripMode::Disabled
+    }
+}
+
+pub(crate) fn validate_desktop_jni_symbol_stripping(
+    config: &Config,
+    host_target: JavaHostTarget,
+) -> Result<()> {
+    if config.java_jvm_strip_symbols() && matches!(host_target, JavaHostTarget::WindowsX86_64) {
+        return Err(CliError::CommandFailed {
+            command: "targets.java.jvm.strip_symbols is not supported for windows-x86_64 yet"
+                .to_string(),
+            status: None,
+        });
+    }
+
+    Ok(())
+}
+
+fn strip_packaged_desktop_shared_library(
+    strip_mode: DesktopJniStripMode,
+    host_target: JavaHostTarget,
+    jni_compiler_program: &Path,
+    rust_target_triple: &str,
+    library_path: &Path,
+) -> Result<()> {
+    let Some(mut command) = packaged_desktop_shared_library_strip_command(
+        strip_mode,
+        host_target,
+        jni_compiler_program,
+        rust_target_triple,
+    )?
+    else {
+        return Ok(());
+    };
+    command.arg(library_path);
+
+    let status = command.status().map_err(|source| CliError::CommandFailed {
+        command: format!(
+            "desktop strip tool failed to launch for '{}': {}",
+            library_path.display(),
+            source
+        ),
+        status: None,
+    })?;
+
+    if !status.success() {
+        return Err(CliError::CommandFailed {
+            command: format!(
+                "desktop strip tool failed for '{}' on '{}'",
+                library_path.display(),
+                host_target.canonical_name()
+            ),
+            status: status.code(),
+        });
+    }
+
+    Ok(())
+}
+
+fn packaged_desktop_shared_library_strip_command(
+    strip_mode: DesktopJniStripMode,
+    host_target: JavaHostTarget,
+    jni_compiler_program: &Path,
+    rust_target_triple: &str,
+) -> Result<Option<Command>> {
+    match host_target {
+        JavaHostTarget::DarwinArm64 | JavaHostTarget::DarwinX86_64 => {
+            let mut command = Command::new("xcrun");
+            command.arg("strip").arg("-x");
+            Ok(Some(command))
+        }
+        JavaHostTarget::LinuxX86_64 | JavaHostTarget::LinuxAarch64 => {
+            let Some(strip_program) =
+                resolve_linux_strip_program(strip_mode, jni_compiler_program, rust_target_triple)?
+            else {
+                return Ok(None);
+            };
+            let mut command = Command::new(strip_program);
+            command.arg("--strip-all");
+            Ok(Some(command))
+        }
+        JavaHostTarget::Current | JavaHostTarget::WindowsX86_64 => Ok(None),
+    }
+}
+
+fn resolve_linux_strip_program(
+    strip_mode: DesktopJniStripMode,
+    jni_compiler_program: &Path,
+    rust_target_triple: &str,
+) -> Result<Option<PathBuf>> {
+    for candidate in linux_strip_program_candidates(jni_compiler_program, rust_target_triple) {
+        if let Ok(resolved) = which::which(&candidate) {
+            return Ok(Some(resolved));
+        }
+    }
+
+    let message = format!(
+        "no supported Linux strip tool found to strip packaged JVM shared libraries (compiler: '{}')",
+        jni_compiler_program.display()
+    );
+
+    handle_missing_linux_strip_program(strip_mode, &message)
+}
+
+fn handle_missing_linux_strip_program(
+    strip_mode: DesktopJniStripMode,
+    message: &str,
+) -> Result<Option<PathBuf>> {
+    match strip_mode {
+        DesktopJniStripMode::Explicit => Err(CliError::CommandFailed {
+            command: message.to_string(),
+            status: None,
+        }),
+        DesktopJniStripMode::Automatic => {
+            print_cargo_line(&format!("warning: {message}; skipping symbol stripping"));
+            Ok(None)
+        }
+        DesktopJniStripMode::Disabled => Ok(None),
+    }
+}
+
+fn linux_strip_program_candidates(
+    jni_compiler_program: &Path,
+    rust_target_triple: &str,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(directory) = jni_compiler_program.parent() {
+        if let Some(prefix) = target_prefixed_binutils_prefix(jni_compiler_program) {
+            push_unique_path(&mut candidates, directory.join(format!("{prefix}-strip")));
+        }
+        if let Some(version_suffix) = compiler_tool_version_suffix(jni_compiler_program) {
+            push_unique_path(
+                &mut candidates,
+                directory.join(format!("llvm-strip-{version_suffix}")),
+            );
+        }
+        push_unique_path(&mut candidates, directory.join("llvm-strip"));
+    }
+
+    for candidate in target_prefixed_strip_tool_candidates(rust_target_triple) {
+        push_unique_path(&mut candidates, PathBuf::from(candidate));
+    }
+    if let Some(version_suffix) = compiler_tool_version_suffix(jni_compiler_program) {
+        push_unique_path(
+            &mut candidates,
+            PathBuf::from(format!("llvm-strip-{version_suffix}")),
+        );
+    }
+    push_unique_path(&mut candidates, PathBuf::from("llvm-strip"));
+
+    if cfg!(target_os = "linux") {
+        push_unique_path(&mut candidates, PathBuf::from("strip"));
+    }
+
+    candidates
+}
+
+fn target_prefixed_binutils_prefix(jni_compiler_program: &Path) -> Option<String> {
+    let name = jni_compiler_program.file_name()?.to_str()?;
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let mut parts = name.split('-').collect::<Vec<_>>();
+
+    if parts
+        .last()
+        .is_some_and(|part| is_numeric_tool_suffix(part))
+    {
+        parts.pop();
+    }
+
+    let compiler = parts.pop()?;
+    if !matches!(compiler, "clang" | "gcc" | "cc") || parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join("-"))
+}
+
+fn compiler_tool_version_suffix(jni_compiler_program: &Path) -> Option<String> {
+    let name = jni_compiler_program.file_name()?.to_str()?;
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let parts = name.split('-').collect::<Vec<_>>();
+    let version_suffix = parts.last()?;
+
+    is_numeric_tool_suffix(version_suffix).then(|| (*version_suffix).to_string())
+}
+
+fn target_prefixed_strip_tool_candidates(rust_target_triple: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    if let Some(vendorless_triple) = vendorless_linux_target_triple(rust_target_triple) {
+        candidates.push(format!("{vendorless_triple}-strip"));
+    }
+
+    candidates.push(format!("{rust_target_triple}-strip"));
+    candidates.dedup();
+    candidates
+}
+
+fn vendorless_linux_target_triple(rust_target_triple: &str) -> Option<String> {
+    let parts = rust_target_triple.split('-').collect::<Vec<_>>();
+    if parts.len() < 4 {
+        return None;
+    }
+
+    let vendorless = std::iter::once(parts[0])
+        .chain(parts[2..].iter().copied())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    (vendorless != rust_target_triple && vendorless.contains("linux")).then_some(vendorless)
+}
+
+fn is_numeric_tool_suffix(part: &str) -> bool {
+    !part.is_empty()
+        && part
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !paths.contains(&candidate) {
+        paths.push(candidate);
+    }
+}
 pub(crate) struct JniLinkerArgs<'a> {
     pub(crate) host_target: JavaHostTarget,
+    pub(crate) release: bool,
     pub(crate) output_lib: &'a Path,
     pub(crate) jni_glue: &'a Path,
     pub(crate) link_input: &'a Path,
@@ -79,6 +323,9 @@ pub(crate) fn compile_jni_library(
 ) -> Result<JvmPackagedNativeOutput> {
     let cargo_context = &packaging_target.cargo_context;
     let host_target = cargo_context.host_target;
+    validate_desktop_jni_symbol_stripping(config, host_target)?;
+    let strip_mode = desktop_jni_strip_mode(config, &cargo_context.build_profile);
+    let strip_symbols = !matches!(strip_mode, DesktopJniStripMode::Disabled);
     let java_output = config.java_jvm_output();
     let jni_dir = java_output.join("jni");
     let jni_glue = jni_dir.join("jni_glue.c");
@@ -125,6 +372,7 @@ pub(crate) fn compile_jni_library(
     let jni_linker_args = if packaging_target.toolchain.uses_msvc_compiler() {
         clang_cl_jni_linker_args(&JniLinkerArgs {
             host_target,
+            release: strip_symbols,
             output_lib: &output_lib,
             jni_glue: &jni_glue,
             link_input: link_input.path(),
@@ -138,6 +386,7 @@ pub(crate) fn compile_jni_library(
     } else {
         clang_style_jni_linker_args(&JniLinkerArgs {
             host_target,
+            release: strip_symbols,
             output_lib: &output_lib,
             jni_glue: &jni_glue,
             link_input: link_input.path(),
@@ -205,14 +454,24 @@ pub(crate) fn compile_jni_library(
         let structured_copy = host_native_output.join(shared_library_name);
         std::fs::copy(shared_library, &structured_copy).map_err(|source| CliError::CopyFailed {
             from: shared_library.to_path_buf(),
-            to: structured_copy,
+            to: structured_copy.clone(),
             source,
         })?;
 
+        if strip_symbols {
+            strip_packaged_desktop_shared_library(
+                strip_mode,
+                host_target,
+                packaging_target.toolchain.jni_compiler_program(),
+                packaging_target.toolchain.rust_target_triple(),
+                &structured_copy,
+            )?;
+        }
+
         if current_host == Some(host_target) {
             let flat_copy = java_output.join(shared_library_name);
-            std::fs::copy(shared_library, &flat_copy).map_err(|source| CliError::CopyFailed {
-                from: shared_library.to_path_buf(),
+            std::fs::copy(&structured_copy, &flat_copy).map_err(|source| CliError::CopyFailed {
+                from: structured_copy.clone(),
                 to: flat_copy,
                 source,
             })?;
@@ -578,12 +837,32 @@ pub(crate) fn clang_style_jni_linker_args(args: &JniLinkerArgs<'_>) -> Vec<Strin
         args.host_target,
         args.native_static_libraries,
     ));
+    resolved_args.extend(clang_release_optimization_flags(
+        args.host_target,
+        args.release,
+    ));
     if let Some(rpath_flag) = args.rpath_flag {
         resolved_args.push(rpath_flag.to_string());
     }
     resolved_args
 }
 
+pub(crate) fn clang_release_optimization_flags(
+    host_target: JavaHostTarget,
+    release: bool,
+) -> Vec<String> {
+    if !release {
+        return Vec::new();
+    }
+
+    match host_target {
+        JavaHostTarget::DarwinArm64 | JavaHostTarget::DarwinX86_64 => vec!["-Wl,-x".to_string()],
+        JavaHostTarget::LinuxX86_64 | JavaHostTarget::LinuxAarch64 => {
+            vec!["-Wl,--strip-all".to_string()]
+        }
+        JavaHostTarget::Current | JavaHostTarget::WindowsX86_64 => Vec::new(),
+    }
+}
 pub(crate) fn clang_cl_jni_linker_args(args: &JniLinkerArgs<'_>) -> Result<Vec<String>> {
     let mut resolved_args = vec![
         "/LD".to_string(),
@@ -755,10 +1034,20 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
         target_specific_java_home_env_key(&cargo_context.rust_target_triple);
     let include_override_env =
         target_specific_java_include_env_key(&cargo_context.rust_target_triple);
+    let resolved_java_home = target_java_home_override
+        .as_deref()
+        .and_then(|java_home| resolve_java_home_for_target(java_home, cargo_context.host_target))
+        .or_else(|| {
+            default_java_home.as_deref().and_then(|java_home| {
+                resolve_java_home_for_target(java_home, cargo_context.host_target)
+            })
+        })
+        .or(target_java_home_override.clone())
+        .or(default_java_home.clone());
+
     let platform_include = target_include_override.clone().unwrap_or_else(|| {
-        target_java_home_override
+        resolved_java_home
             .clone()
-            .or(default_java_home.clone())
             .map(|java_home| {
                 java_home
                     .join("include")
@@ -770,11 +1059,7 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
     let shared_include = target_include_override
         .as_ref()
         .and_then(|platform_include| platform_include.parent().map(Path::to_path_buf))
-        .or_else(|| {
-            target_java_home_override
-                .or(default_java_home)
-                .map(|java_home| java_home.join("include"))
-        })
+        .or_else(|| resolved_java_home.map(|java_home| java_home.join("include")))
         .or_else(|| platform_include.parent().map(Path::to_path_buf))
         .ok_or_else(|| CliError::CommandFailed {
             command: format!(
@@ -817,6 +1102,44 @@ pub(crate) fn resolve_jni_include_directories_with_overrides(
     })
 }
 
+fn resolve_java_home_for_target(java_home: &Path, host_target: JavaHostTarget) -> Option<PathBuf> {
+    candidate_java_home_roots(java_home).find(|candidate| {
+        let include_root = candidate.join("include");
+        include_root.join("jni.h").exists()
+            && include_root
+                .join(host_target.jni_platform())
+                .join("jni_md.h")
+                .exists()
+    })
+}
+
+fn candidate_java_home_roots(java_home: &Path) -> impl Iterator<Item = PathBuf> {
+    let java_home = java_home.to_path_buf();
+    let macos_bundle_home = java_home.join("Contents").join("Home");
+    let homebrew_bundle_home = java_home
+        .join("libexec")
+        .join("openjdk.jdk")
+        .join("Contents")
+        .join("Home");
+
+    [
+        java_home.clone(),
+        macos_bundle_home.clone(),
+        homebrew_bundle_home,
+        java_home.join("Home"),
+        macos_bundle_home.join("Home"),
+    ]
+    .into_iter()
+    .scan(Vec::<PathBuf>::new(), |seen, candidate| {
+        if seen.iter().any(|existing| existing == &candidate) {
+            Some(None)
+        } else {
+            seen.push(candidate.clone());
+            Some(Some(candidate))
+        }
+    })
+    .flatten()
+}
 pub(crate) fn target_specific_java_home_env_key(rust_target_triple: &str) -> String {
     format!(
         "BOLTFFI_JAVA_HOME_{}",
@@ -1027,18 +1350,27 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use super::{
-        JniIncludeDirectories, JniLinkerArgs, bundled_jvm_shared_library_path,
-        clang_cl_jni_linker_args, clang_native_static_library_flags, clang_style_jni_linker_args,
-        existing_jvm_shared_library_path, extract_library_filenames, extract_link_search_paths,
-        extract_native_static_libraries, link_search_path_flags, msvc_link_search_path_flags,
-        msvc_native_static_library_flags, msvc_rustflag_linker_args, parse_native_static_libraries,
-        resolve_jni_include_directories_with_overrides, resolve_jvm_native_link_input,
-        select_windows_static_library_filename, target_specific_java_home_env_key,
-        target_specific_java_include_env_key,
+        DesktopJniStripMode, JniIncludeDirectories, JniLinkerArgs, bundled_jvm_shared_library_path,
+        clang_cl_jni_linker_args, clang_native_static_library_flags,
+        clang_release_optimization_flags, clang_style_jni_linker_args,
+        compiler_tool_version_suffix, desktop_jni_strip_mode, existing_jvm_shared_library_path,
+        extract_library_filenames, extract_link_search_paths, extract_native_static_libraries,
+        handle_missing_linux_strip_program, link_search_path_flags, linux_strip_program_candidates,
+        msvc_link_search_path_flags, msvc_native_static_library_flags, msvc_rustflag_linker_args,
+        parse_native_static_libraries, resolve_jni_include_directories_with_overrides,
+        resolve_jvm_native_link_input, resolve_linux_strip_program,
+        select_windows_static_library_filename, target_prefixed_binutils_prefix,
+        target_prefixed_strip_tool_candidates, target_specific_java_home_env_key,
+        target_specific_java_include_env_key, validate_desktop_jni_symbol_stripping,
+        vendorless_linux_target_triple,
     };
     use crate::build::CargoBuildProfile;
     use crate::cli::CliError;
+    use crate::config::{CargoConfig, Config, PackageConfig, TargetsConfig};
     use crate::pack::java::plan::{JvmCargoContext, JvmCrateOutputs};
     use crate::target::JavaHostTarget;
 
@@ -1068,6 +1400,24 @@ mod tests {
                 builds_cdylib: false,
             },
         }
+    }
+
+    fn config(strip_symbols: bool) -> Config {
+        let mut config = Config {
+            experimental: Vec::new(),
+            cargo: CargoConfig::default(),
+            package: PackageConfig {
+                name: "demo".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig::default(),
+        };
+        config.targets.java.jvm.strip_symbols = strip_symbols;
+        config
     }
 
     #[test]
@@ -1286,6 +1636,7 @@ mod tests {
 
         let args = clang_cl_jni_linker_args(&JniLinkerArgs {
             host_target: JavaHostTarget::WindowsX86_64,
+            release: true,
             output_lib: Path::new("/tmp/out/demo_jni.dll"),
             jni_glue: Path::new("/tmp/jni/jni_glue.c"),
             link_input: Path::new("/tmp/target/demo.lib"),
@@ -1327,6 +1678,7 @@ mod tests {
 
         let args = clang_style_jni_linker_args(&JniLinkerArgs {
             host_target: JavaHostTarget::DarwinArm64,
+            release: false,
             output_lib: Path::new("/tmp/out/libdemo_jni.dylib"),
             jni_glue: Path::new("/tmp/jni/jni_glue.c"),
             link_input: Path::new("/tmp/target/libdemo.a"),
@@ -1363,6 +1715,294 @@ mod tests {
                 "-Wl,-rpath,@loader_path".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn adds_darwin_release_jni_strip_flags() {
+        let flags = clang_release_optimization_flags(JavaHostTarget::DarwinArm64, true);
+
+        assert_eq!(flags, vec!["-Wl,-x".to_string()]);
+    }
+
+    #[test]
+    fn adds_linux_release_jni_strip_flags() {
+        let flags = clang_release_optimization_flags(JavaHostTarget::LinuxX86_64, true);
+
+        assert_eq!(flags, vec!["-Wl,--strip-all".to_string()]);
+    }
+
+    #[test]
+    fn extracts_target_prefixed_strip_tool_prefixes() {
+        assert_eq!(
+            target_prefixed_binutils_prefix(Path::new("/tmp/x86_64-linux-gnu-clang")),
+            Some("x86_64-linux-gnu".to_string())
+        );
+        assert_eq!(
+            target_prefixed_binutils_prefix(Path::new("/tmp/aarch64-linux-gnu-gcc")),
+            Some("aarch64-linux-gnu".to_string())
+        );
+        assert_eq!(
+            target_prefixed_binutils_prefix(Path::new("/tmp/x86_64-linux-gnu-clang-18")),
+            Some("x86_64-linux-gnu".to_string())
+        );
+        assert_eq!(
+            target_prefixed_binutils_prefix(Path::new("/tmp/aarch64-linux-gnu-gcc-14.2")),
+            Some("aarch64-linux-gnu".to_string())
+        );
+        assert_eq!(
+            target_prefixed_binutils_prefix(Path::new("/tmp/clang")),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_compiler_tool_version_suffixes() {
+        assert_eq!(
+            compiler_tool_version_suffix(Path::new("/tmp/clang-18")),
+            Some("18".to_string())
+        );
+        assert_eq!(
+            compiler_tool_version_suffix(Path::new("/tmp/x86_64-linux-gnu-clang-18")),
+            Some("18".to_string())
+        );
+        assert_eq!(
+            compiler_tool_version_suffix(Path::new("/tmp/aarch64-linux-gnu-gcc-14.2")),
+            Some("14.2".to_string())
+        );
+        assert_eq!(compiler_tool_version_suffix(Path::new("/tmp/clang")), None);
+    }
+
+    #[test]
+    fn linux_strip_program_candidates_include_sibling_tools() {
+        let candidates = linux_strip_program_candidates(
+            Path::new("/tmp/toolchain/bin/x86_64-linux-gnu-clang"),
+            "x86_64-unknown-linux-gnu",
+        );
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("/tmp/toolchain/bin/x86_64-linux-gnu-strip")
+        );
+        assert_eq!(
+            candidates[1],
+            PathBuf::from("/tmp/toolchain/bin/llvm-strip")
+        );
+        assert_eq!(candidates[2], PathBuf::from("x86_64-linux-gnu-strip"));
+    }
+
+    #[test]
+    fn linux_strip_program_candidates_include_versioned_llvm_strip_tools() {
+        let candidates = linux_strip_program_candidates(
+            Path::new("/tmp/toolchain/bin/clang-18"),
+            "x86_64-unknown-linux-gnu",
+        );
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("/tmp/toolchain/bin/llvm-strip-18")
+        );
+        assert_eq!(
+            candidates[1],
+            PathBuf::from("/tmp/toolchain/bin/llvm-strip")
+        );
+        assert_eq!(candidates[2], PathBuf::from("x86_64-linux-gnu-strip"));
+        assert_eq!(candidates[4], PathBuf::from("llvm-strip-18"));
+    }
+
+    #[test]
+    fn resolves_linux_strip_program_from_sibling_target_prefixed_tool() {
+        let temp_root = temporary_directory("boltffi-linux-strip-test");
+        let bin_dir = temp_root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let compiler = bin_dir.join("x86_64-linux-gnu-clang");
+        let strip_tool = bin_dir.join("x86_64-linux-gnu-strip");
+        fs::write(&compiler, []).expect("write fake compiler");
+        fs::write(&strip_tool, []).expect("write fake strip tool");
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&strip_tool, fs::Permissions::from_mode(0o755))
+                .expect("mark fake strip executable");
+        }
+
+        let resolved = resolve_linux_strip_program(
+            DesktopJniStripMode::Explicit,
+            &compiler,
+            "x86_64-unknown-linux-gnu",
+        )
+        .expect("resolve sibling strip tool")
+        .expect("strip tool should be present");
+
+        assert_eq!(resolved, strip_tool);
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn resolves_linux_strip_program_from_sibling_versioned_llvm_strip_tool() {
+        let temp_root = temporary_directory("boltffi-linux-llvm-strip-test");
+        let bin_dir = temp_root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let compiler = bin_dir.join("clang-18");
+        let strip_tool = bin_dir.join("llvm-strip-18");
+        fs::write(&compiler, []).expect("write fake compiler");
+        fs::write(&strip_tool, []).expect("write fake strip tool");
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&strip_tool, fs::Permissions::from_mode(0o755))
+                .expect("mark fake strip executable");
+        }
+
+        let resolved = resolve_linux_strip_program(
+            DesktopJniStripMode::Explicit,
+            &compiler,
+            "x86_64-unknown-linux-gnu",
+        )
+        .expect("resolve sibling versioned llvm-strip tool")
+        .expect("strip tool should be present");
+
+        assert_eq!(resolved, strip_tool);
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn skips_missing_linux_strip_program_for_automatic_release_stripping() {
+        let resolved = handle_missing_linux_strip_program(
+            DesktopJniStripMode::Automatic,
+            "no supported Linux strip tool found",
+        )
+        .expect("automatic stripping should not fail without a strip tool");
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn rejects_missing_linux_strip_program_for_explicit_stripping() {
+        let error = handle_missing_linux_strip_program(
+            DesktopJniStripMode::Explicit,
+            "no supported Linux strip tool found",
+        )
+        .expect_err("explicit stripping should fail without a strip tool");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command.contains("no supported Linux strip tool found")
+        ));
+    }
+
+    #[test]
+    fn derives_target_prefixed_strip_tool_candidates_from_linux_target_triple() {
+        assert_eq!(
+            target_prefixed_strip_tool_candidates("x86_64-unknown-linux-gnu"),
+            vec![
+                "x86_64-linux-gnu-strip".to_string(),
+                "x86_64-unknown-linux-gnu-strip".to_string(),
+            ]
+        );
+        assert_eq!(
+            target_prefixed_strip_tool_candidates("aarch64-unknown-linux-gnu"),
+            vec![
+                "aarch64-linux-gnu-strip".to_string(),
+                "aarch64-unknown-linux-gnu-strip".to_string(),
+            ]
+        );
+        assert_eq!(
+            target_prefixed_strip_tool_candidates("x86_64-alpine-linux-musl"),
+            vec![
+                "x86_64-linux-musl-strip".to_string(),
+                "x86_64-alpine-linux-musl-strip".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn derives_vendorless_linux_target_triples() {
+        assert_eq!(
+            vendorless_linux_target_triple("x86_64-unknown-linux-gnu"),
+            Some("x86_64-linux-gnu".to_string())
+        );
+        assert_eq!(
+            vendorless_linux_target_triple("aarch64-alpine-linux-musl"),
+            Some("aarch64-linux-musl".to_string())
+        );
+        assert_eq!(vendorless_linux_target_triple("x86_64-linux-musl"), None);
+    }
+
+    #[test]
+    fn skips_release_jni_optimization_flags_for_debug_builds() {
+        let flags = clang_release_optimization_flags(JavaHostTarget::DarwinArm64, false);
+
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn strips_desktop_jni_symbols_for_release_and_opted_in_named_profiles() {
+        let default_config = config(false);
+        let opted_in_config = config(true);
+
+        assert!(!matches!(
+            desktop_jni_strip_mode(&default_config, &CargoBuildProfile::Release),
+            DesktopJniStripMode::Disabled
+        ));
+        assert!(matches!(
+            desktop_jni_strip_mode(&default_config, &CargoBuildProfile::Debug),
+            DesktopJniStripMode::Disabled
+        ));
+        assert!(matches!(
+            desktop_jni_strip_mode(
+                &default_config,
+                &CargoBuildProfile::Named("asan".to_string())
+            ),
+            DesktopJniStripMode::Disabled
+        ));
+        assert!(!matches!(
+            desktop_jni_strip_mode(
+                &opted_in_config,
+                &CargoBuildProfile::Named("dist".to_string())
+            ),
+            DesktopJniStripMode::Disabled
+        ));
+    }
+
+    #[test]
+    fn distinguishes_automatic_and_explicit_desktop_jni_strip_modes() {
+        assert_eq!(
+            desktop_jni_strip_mode(&config(false), &CargoBuildProfile::Release),
+            DesktopJniStripMode::Automatic
+        );
+        assert_eq!(
+            desktop_jni_strip_mode(&config(true), &CargoBuildProfile::Release),
+            DesktopJniStripMode::Automatic
+        );
+        assert_eq!(
+            desktop_jni_strip_mode(&config(true), &CargoBuildProfile::Named("dist".to_string())),
+            DesktopJniStripMode::Explicit
+        );
+        assert_eq!(
+            desktop_jni_strip_mode(&config(false), &CargoBuildProfile::Debug),
+            DesktopJniStripMode::Disabled
+        );
+    }
+
+    #[test]
+    fn rejects_explicit_windows_symbol_stripping_opt_in() {
+        let error =
+            validate_desktop_jni_symbol_stripping(&config(true), JavaHostTarget::WindowsX86_64)
+                .expect_err("windows strip opt-in should fail");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command.contains("strip_symbols")
+                    && command.contains("windows-x86_64")
+        ));
+    }
+
+    #[test]
+    fn allows_automatic_windows_release_behavior_without_strip_opt_in() {
+        validate_desktop_jni_symbol_stripping(&config(false), JavaHostTarget::WindowsX86_64)
+            .expect("windows release packaging should remain unchanged without explicit opt-in");
     }
 
     #[test]
@@ -1515,6 +2155,35 @@ mod tests {
 
         assert_eq!(include_directories.shared, target_include_root);
         assert_eq!(include_directories.platform, target_platform_include);
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn resolves_homebrew_java_home_layout_for_host_headers() {
+        let temp_root = temporary_directory("boltffi-java-homebrew-layout-test");
+        let homebrew_prefix = temp_root.join("openjdk@17");
+        let resolved_home = homebrew_prefix
+            .join("libexec")
+            .join("openjdk.jdk")
+            .join("Contents")
+            .join("Home");
+        let include_root = resolved_home.join("include");
+        let platform_include = include_root.join("darwin");
+        fs::create_dir_all(&platform_include).expect("create homebrew include dirs");
+        fs::write(include_root.join("jni.h"), []).expect("write jni.h");
+        fs::write(platform_include.join("jni_md.h"), []).expect("write jni_md.h");
+
+        let include_directories = resolve_jni_include_directories_with_overrides(
+            &cargo_context(&temp_root, JavaHostTarget::DarwinArm64),
+            Some(homebrew_prefix),
+            None,
+            None,
+        )
+        .expect("homebrew java layout should resolve");
+
+        assert_eq!(include_directories.shared, include_root);
+        assert_eq!(include_directories.platform, platform_include);
 
         fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
     }

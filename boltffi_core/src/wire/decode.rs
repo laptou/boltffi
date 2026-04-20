@@ -305,6 +305,13 @@ impl WireDecode for DateTime<Utc> {
     }
 }
 
+impl WireDecode for () {
+    #[inline]
+    fn decode_from(_buf: &[u8]) -> DecodeResult<Self> {
+        Ok(((), 0))
+    }
+}
+
 impl<T: WireDecode> WireDecode for Option<T> {
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let mut reader = WireReader::new(buf);
@@ -331,6 +338,13 @@ impl<T: WireDecode, E: WireDecode> WireDecode for Result<T, E> {
                 reader.finish(Err(value))
             }
         }
+    }
+}
+
+impl<T: WireDecode> WireDecode for Box<T> {
+    fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
+        let (value, consumed) = T::decode_from(buf)?;
+        Ok((Box::new(value), consumed))
     }
 }
 
@@ -458,6 +472,141 @@ mod tests {
         let (decoded, size) = Vec::<Option<String>>::decode_from(&buf).unwrap();
         assert_eq!(decoded, original);
         assert_eq!(size, written);
+    }
+
+    mod unit_type {
+        use super::*;
+
+        #[test]
+        fn unit_decode_from_empty_buffer() {
+            let buf: [u8; 0] = [];
+            let (value, consumed) = <()>::decode_from(&buf).unwrap();
+            assert_eq!(value, ());
+            assert_eq!(consumed, 0);
+        }
+
+        #[test]
+        fn unit_decode_from_nonempty_buffer() {
+            let buf = [0xFF; 8];
+            let (value, consumed) = <()>::decode_from(&buf).unwrap();
+            assert_eq!(value, ());
+            assert_eq!(consumed, 0);
+        }
+
+        #[test]
+        fn unit_roundtrip() {
+            let original = ();
+            let mut buf = [0u8; 4];
+            let written = original.encode_to(&mut buf);
+            assert_eq!(written, 0);
+
+            let (_decoded, consumed) = <()>::decode_from(&buf).unwrap();
+            assert_eq!(consumed, 0);
+        }
+
+        #[test]
+        fn result_ok_unit_roundtrip() {
+            let original: Result<(), i32> = Ok(());
+            let mut buf = [0u8; 16];
+            let written = original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Result::<(), i32>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, Ok(()));
+            assert_eq!(consumed, written);
+        }
+
+        #[test]
+        fn result_err_with_unit_ok_roundtrip() {
+            let original: Result<(), i32> = Err(99);
+            let mut buf = [0u8; 16];
+            let written = original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Result::<(), i32>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, Err(99));
+            assert_eq!(consumed, written);
+        }
+
+        #[test]
+        fn option_some_unit_roundtrip() {
+            let original: Option<()> = Some(());
+            let mut buf = [0u8; 4];
+            let written = original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Option::<()>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, Some(()));
+            assert_eq!(consumed, written);
+        }
+    }
+
+    mod box_type {
+        use super::*;
+
+        #[test]
+        fn box_i32_roundtrip() {
+            let original = Box::new(42i32);
+            let mut buf = [0u8; 4];
+            original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Box::<i32>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(consumed, 4);
+        }
+
+        #[test]
+        fn box_string_roundtrip() {
+            let original = Box::new("hello".to_string());
+            let mut buf = vec![0u8; original.wire_size()];
+            original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Box::<String>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(consumed, 9);
+        }
+
+        #[test]
+        fn box_decode_matches_bare_decode() {
+            let mut buf = [0u8; 4];
+            42i32.encode_to(&mut buf);
+
+            let (bare, bare_consumed) = i32::decode_from(&buf).unwrap();
+            let (boxed, box_consumed) = Box::<i32>::decode_from(&buf).unwrap();
+
+            assert_eq!(*boxed, bare);
+            assert_eq!(box_consumed, bare_consumed);
+        }
+
+        #[test]
+        fn box_vec_roundtrip() {
+            let original = Box::new(vec![1i32, 2, 3]);
+            let mut buf = vec![0u8; original.wire_size()];
+            original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Box::<Vec<i32>>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(consumed, 16);
+        }
+
+        #[test]
+        fn nested_box_roundtrip() {
+            let original = Box::new(Box::new(42i32));
+            let mut buf = [0u8; 4];
+            original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Box::<Box<i32>>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(consumed, 4);
+        }
+
+        #[test]
+        fn option_box_roundtrip() {
+            let original: Option<Box<i32>> = Some(Box::new(99));
+            let mut buf = [0u8; 16];
+            let written = original.encode_to(&mut buf);
+
+            let (decoded, consumed) = Option::<Box<i32>>::decode_from(&buf).unwrap();
+            assert_eq!(decoded, Some(Box::new(99)));
+            assert_eq!(consumed, written);
+        }
     }
 
     mod large_payload_roundtrip {

@@ -995,36 +995,34 @@ impl SourceScanner {
 
         for item in &syntax.items {
             match item {
-                Item::Struct(item_struct) => {
+                Item::Struct(item_struct)
                     if has_attribute(&item_struct.attrs, "ffi_record")
                         || has_attribute(&item_struct.attrs, "data")
                         || has_attribute(&item_struct.attrs, "error")
                         || has_repr_c(&item_struct.attrs)
                         || (has_attribute(&item_struct.attrs, "derive")
-                            && has_ffi_type_derive(&item_struct.attrs))
-                    {
-                        self.type_registry.register(
-                            item_struct.ident.to_string(),
-                            TypeMeta {
-                                doc: extract_doc_string(&item_struct.attrs),
-                                shape: TypeShape::Pending(PendingKind::Record),
-                            },
-                        );
-                    }
+                            && has_ffi_type_derive(&item_struct.attrs)) =>
+                {
+                    self.type_registry.register(
+                        item_struct.ident.to_string(),
+                        TypeMeta {
+                            doc: extract_doc_string(&item_struct.attrs),
+                            shape: TypeShape::Pending(PendingKind::Record),
+                        },
+                    );
                 }
-                Item::Enum(item_enum) => {
+                Item::Enum(item_enum)
                     if has_repr_int(&item_enum.attrs)
                         || has_attribute(&item_enum.attrs, "data")
-                        || has_attribute(&item_enum.attrs, "error")
-                    {
-                        self.type_registry.register(
-                            item_enum.ident.to_string(),
-                            TypeMeta {
-                                doc: extract_doc_string(&item_enum.attrs),
-                                shape: TypeShape::Pending(PendingKind::Enum),
-                            },
-                        );
-                    }
+                        || has_attribute(&item_enum.attrs, "error") =>
+                {
+                    self.type_registry.register(
+                        item_enum.ident.to_string(),
+                        TypeMeta {
+                            doc: extract_doc_string(&item_enum.attrs),
+                            shape: TypeShape::Pending(PendingKind::Enum),
+                        },
+                    );
                 }
                 Item::Impl(item_impl) => {
                     if (has_attribute(&item_impl.attrs, "ffi_class")

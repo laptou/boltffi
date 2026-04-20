@@ -15,9 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: rustfmt
+          # caching handled by Swatinem/rust-cache in other jobs
+          cache: false
       - run: cargo fmt --all --check
 
   clippy:
@@ -25,9 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: clippy
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -42,7 +44,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -63,9 +68,11 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          # caching handled by Swatinem/rust-cache below
+          cache: false
+          target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -78,7 +85,10 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -90,7 +100,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -106,90 +119,68 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
-      - run: cargo miri setup
-      - run: cargo miri test -p boltffi -p boltffi_tests
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test -p boltffi -p boltffi_tests
 
-  cross-build:
-    name: Cross Build (${{ matrix.os }})
+  android-packaging:
+    name: Android Packaging (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: benchmarks/rust-boltffi
+        working-directory: examples/demo
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          key: cross-${{ matrix.os }}
-          workspaces: |
-            .
-            benchmarks/rust-boltffi
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-      - run: npm install -g typescript
-      - uses: Aandreba/setup-binaryen@v1.0.0
-        with:
-          token: ${{ github.token }}
-      - run: cargo install --path ../../boltffi_cli
-      - if: matrix.os == 'macos-latest'
-        run: boltffi check --fix
-      - if: matrix.os == 'macos-latest'
-        run: boltffi -v pack all
-      - if: matrix.os != 'macos-latest'
-        run: boltffi check --android --wasm --fix
-      - if: matrix.os != 'macos-latest'
-        run: boltffi -v pack android
-      - if: matrix.os != 'macos-latest'
-        run: boltffi -v pack wasm
+          key: android-packaging-${{ matrix.os }}
+          workspaces: .
+      - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- check --android --fix
+      - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- -v pack android
 
-  python-packaging:
-    name: Python Packaging (${{ matrix.os }}, py${{ matrix.python-version }})
+  demo-platforms:
+    name: Demo Platforms (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         python-version: ['3.11', '3.12', '3.13']
-    defaults:
-      run:
-        working-directory: examples/demo
-        shell: bash
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          key: python-packaging-${{ matrix.os }}-${{ matrix.python-version }}
+          key: demo-platforms-${{ matrix.os }}-${{ matrix.python-version }}
+      - if: matrix.python-version == '3.13'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - if: matrix.python-version == '3.13'
+        run: npm install -g typescript
+      - if: matrix.python-version == '3.13'
+        uses: Aandreba/setup-binaryen@v1.0.0
+        with:
+          token: ${{ github.token }}
       - run: python -m pip install --upgrade pip setuptools wheel
-      - run: rm -rf dist/python .tmp/python-smoke
-      - run: |
-          cat <<'TOML' > boltffi.python.ci.toml
-          [targets.python]
-          enabled = true
-          output = "dist/python"
-          TOML
-      - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- --overlay boltffi.python.ci.toml pack python --release --experimental --python python
-      - run: python -m pip install --target .tmp/python-smoke dist/python/wheelhouse/*.whl
-      - run: |
-          python - <<'PY'
-          import pathlib
-          import sys
-
-          sys.path.insert(0, str(pathlib.Path(".tmp/python-smoke").resolve()))
-
-          import demo
-
-          assert demo.echo_i32(7) == 7
-          assert abs(demo.add_f64(1.5, 2.25) - 3.75) < 1e-12
-          assert demo.negate_bool(True) is False
-          PY
+      - if: matrix.python-version == '3.13'
+        run: ./examples/demo/verify-platform-demos.sh --host-defaults --python python
+        shell: bash
+      - if: matrix.python-version != '3.13'
+        run: ./examples/demo/verify-platform-demos.sh --platform python --python python
+        shell: bash

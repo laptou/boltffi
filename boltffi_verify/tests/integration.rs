@@ -10,7 +10,7 @@ fn verify_swift(source: &str) -> VerificationResult {
 
 #[test]
 fn test_verify_generated_benchboltffi() {
-    let swift_path = Path::new("../benchmarks/rust-boltffi/dist/BenchBoltFFI.swift");
+    let swift_path = Path::new("../benchmarks/generated/boltffi/dist/BenchBoltFFI.swift");
 
     if !swift_path.exists() {
         eprintln!("Skipping test: BenchBoltFFI.swift not found (run `boltffi pack` first)");

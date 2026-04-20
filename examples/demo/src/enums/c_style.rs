@@ -1,4 +1,5 @@
 use boltffi::*;
+use demo_bench_macros::benchmark_candidate;
 
 /// Lifecycle status of an entity.
 #[data]
@@ -34,6 +35,7 @@ pub fn echo_vec_status(values: Vec<Status>) -> Vec<Status> {
     values
 }
 
+#[benchmark_candidate(enum, uniffi, wasm_bindgen)]
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Direction {
@@ -101,16 +103,74 @@ impl Direction {
 }
 
 #[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn echo_direction(d: Direction) -> Direction {
     d
 }
 
 #[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn opposite_direction(d: Direction) -> Direction {
     match d {
         Direction::North => Direction::South,
         Direction::South => Direction::North,
         Direction::East => Direction::West,
         Direction::West => Direction::East,
+    }
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
+pub fn direction_to_degrees(direction: Direction) -> i32 {
+    match direction {
+        Direction::North => 0,
+        Direction::East => 90,
+        Direction::South => 180,
+        Direction::West => 270,
+    }
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
+pub fn generate_directions(count: i32) -> Vec<Direction> {
+    let directions = [
+        Direction::North,
+        Direction::East,
+        Direction::South,
+        Direction::West,
+    ];
+    (0..count as usize)
+        .map(|index| directions[index % directions.len()])
+        .collect()
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
+pub fn count_north(directions: Vec<Direction>) -> i32 {
+    directions
+        .iter()
+        .filter(|direction| matches!(direction, Direction::North))
+        .count() as i32
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi, wasm_bindgen)]
+pub fn find_direction(id: i32) -> Option<Direction> {
+    match id {
+        0 => Some(Direction::North),
+        1 => Some(Direction::East),
+        2 => Some(Direction::South),
+        3 => Some(Direction::West),
+        _ => None,
+    }
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn find_directions(count: i32) -> Option<Vec<Direction>> {
+    if count > 0 {
+        Some(generate_directions(count))
+    } else {
+        None
     }
 }

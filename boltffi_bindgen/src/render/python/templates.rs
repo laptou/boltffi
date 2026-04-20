@@ -3,7 +3,7 @@ use askama::Template;
 use crate::ir::types::PrimitiveType;
 use crate::render::python::PythonModule;
 use crate::render::python::primitives::{
-    CPythonFunctionExt as _, CPythonParameterExt as _, CPythonPrimitiveTypeExt as _,
+    CPythonCallableExt as _, CPythonParameterExt as _, CPythonPrimitiveTypeExt as _,
     CPythonTypeExt as _,
 };
 
@@ -36,5 +36,5 @@ pub struct SetupTemplate<'a> {
 #[template(path = "render_python/native_module.c.txt", escape = "none")]
 pub struct NativeModuleTemplate<'a> {
     pub module: &'a PythonModule,
-    pub used_scalar_types: &'a [PrimitiveType],
+    pub used_primitive_types: &'a [PrimitiveType],
 }

@@ -17,4 +17,7 @@ export async function run() {
   assert.equal(demo.echoOptionalVec(null), null);
   assert.equal(demo.optionalVecLength([9, 8]), 2);
   assert.equal(demo.optionalVecLength(null), null);
+  assert.deepEqual(demo.findApiResult(0), { tag: "Success" });
+  assert.deepEqual(demo.findApiResult(1), { tag: "ErrorCode", value0: -1 });
+  assert.equal(demo.findApiResult(99), null);
 }

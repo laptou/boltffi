@@ -1,7 +1,9 @@
 use boltffi::*;
 
 use crate::enums::{Filter, Message, Priority};
-use crate::records::{Address, Classroom, Person, Point, Polygon, SearchResult, Task, Team, UserProfile};
+use crate::records::{
+    Address, Classroom, Person, Point, Polygon, SearchResult, Task, Team, UserProfile,
+};
 
 pub struct ConstructorCoverageMatrix {
     constructor_variant: String,
@@ -80,9 +82,7 @@ impl ConstructorCoverageMatrix {
         let joined_tags = tags.join("|");
         Self::from_parts(
             "with_vectors_and_polygon",
-            format!(
-                "tags={joined_tags};anchors={anchor_count};polygon={polygon_count}"
-            ),
+            format!("tags={joined_tags};anchors={anchor_count};polygon={polygon_count}"),
             0,
             tags.len() as u32 + anchor_count + polygon_count,
         )
@@ -161,10 +161,7 @@ impl ConstructorCoverageMatrix {
             format!(
                 "query={};cursor={};filter={}",
                 search_result.query,
-                search_result
-                    .next_cursor
-                    .as_deref()
-                    .unwrap_or("none"),
+                search_result.next_cursor.as_deref().unwrap_or("none"),
                 Self::summarize_filter(&filter)
             ),
             payload_checksum,

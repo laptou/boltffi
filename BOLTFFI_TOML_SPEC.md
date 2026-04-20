@@ -217,6 +217,13 @@ Desktop JVM target configuration.
   - Supported canonical values: `current`, `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`
   - Supported aliases: `darwin-aarch64`, `darwin-x86-64`, `linux-x86-64`, `linux-arm64`, `windows-x86-64`
   - Default: `["current"]`
+- `strip_symbols` (bool): Strip symbol tables from packaged desktop JNI libraries for custom named Cargo profiles used with `boltffi pack java`.
+  - Default: `false`
+  - Currently supported for Darwin and Linux desktop JNI packaging only.
+  - Built-in `release` profile strips desktop JNI symbols automatically on Darwin and Linux.
+  - Named profiles such as `--profile dist` strip only when this is set to `true`.
+  - Diagnostic profiles such as `--profile asan` should normally leave this unset.
+  - `windows-x86_64` does not support this option yet; enabling it there returns an error instead of silently doing nothing.
   - Phase 3 behavior: all configured values must resolve to the current host target after `current` expansion and deduping
   - Packaging layout: `boltffi pack java` writes the JNI library to `dist/java/native/<host-target>/` and also keeps a flat current-host `_jni` copy in `dist/java/`
   - `boltffi pack java --no-build` is unsupported in Phase 3; rerun without `--no-build`
