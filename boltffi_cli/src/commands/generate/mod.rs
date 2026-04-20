@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn python_generate_writes_scalar_package_files() {
+    fn python_generate_writes_python_package_sources() {
         let output_directory = unique_temp_dir("boltffi-python-generate-test");
         let config = parse_config(
             r#"
@@ -171,17 +171,14 @@ enabled = true
         assert!(generated_init.contains("from pathlib import Path"));
         assert!(generated_init.contains("from . import _native"));
         assert!(generated_init.contains("_native._initialize_loader"));
-        assert!(generated_init.contains("echo_i32"));
+        assert!(generated_init.contains("__all__ = ["));
         assert!(generated_init.contains("PACKAGE_NAME = \"demo\""));
+        assert!(generated_stub.contains("MODULE_NAME: str"));
         assert!(generated_stub.contains("def echo_i32"));
-        assert!(!generated_stub.contains("def echo_string"));
-        assert!(!generated_stub.contains("def echo_vec_i32"));
         assert!(generated_pyproject.contains("setuptools.build_meta"));
         assert!(generated_setup.contains("Extension("));
         assert!(generated_setup.contains("\"demo._native\""));
-        assert!(generated_native.contains("boltffi_python_echo_i32_symbol_fn"));
-        assert!(!generated_native.contains("boltffi_echo_string"));
-        assert!(!generated_native.contains("boltffi_echo_vec_i32"));
+        assert!(generated_native.contains("boltffi_python_symbol_echo_i32_fn"));
         assert!(generated_native.contains("boltffi_python_initialize_loader"));
         assert!(generated_native.contains("PyInit__native"));
 

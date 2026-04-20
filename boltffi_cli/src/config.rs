@@ -340,6 +340,8 @@ pub struct JavaJvmConfig {
     #[serde(default = "default_java_jvm_output")]
     pub output: PathBuf,
     pub host_targets: Option<Vec<JavaHostTarget>>,
+    #[serde(default)]
+    pub strip_symbols: bool,
 }
 
 impl Default for JavaJvmConfig {
@@ -348,6 +350,7 @@ impl Default for JavaJvmConfig {
             enabled: false,
             output: default_java_jvm_output(),
             host_targets: None,
+            strip_symbols: false,
         }
     }
 }
@@ -1162,6 +1165,10 @@ impl Config {
 
     pub fn java_jvm_output(&self) -> PathBuf {
         self.targets.java.jvm.output.clone()
+    }
+
+    pub fn java_jvm_strip_symbols(&self) -> bool {
+        self.targets.java.jvm.strip_symbols
     }
 
     pub fn java_jvm_requested_host_targets(&self) -> &[JavaHostTarget] {

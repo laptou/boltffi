@@ -39,13 +39,13 @@ pub(crate) fn pack_wasm(
 
     reporter.section("🌐", "Packing WASM");
 
-    let requested_wasm_profile = if options.release {
+    let requested_wasm_profile = if options.execution.release {
         WasmProfile::Release
     } else {
         config.wasm_profile()
     };
 
-    let build_cargo_args = resolve_build_cargo_args(config, &options.cargo_args);
+    let build_cargo_args = resolve_build_cargo_args(config, &options.execution.cargo_args);
     let build_profile = crate::build::resolve_build_profile(
         matches!(requested_wasm_profile, WasmProfile::Release),
         &build_cargo_args,
@@ -68,7 +68,7 @@ pub(crate) fn pack_wasm(
         }
     };
 
-    if !options.no_build {
+    if !options.execution.no_build {
         let step = reporter.step("Building WASM target");
         build_wasm_target(config, requested_wasm_profile, &build_cargo_args, &step)?;
         step.finish_success();
@@ -85,7 +85,7 @@ pub(crate) fn pack_wasm(
         step.finish_success();
     }
 
-    if options.regenerate {
+    if options.execution.regenerate {
         let step = reporter.step("Generating TypeScript bindings");
         run_generate_with_output(
             config,

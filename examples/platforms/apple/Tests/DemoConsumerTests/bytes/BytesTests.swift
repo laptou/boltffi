@@ -9,6 +9,6 @@ final class BytesTests: XCTestCase {
         XCTAssertEqual(bytesSum(data: Data([1, 2, 3, 4])), 10)
         XCTAssertEqual(makeBytes(len: 4), Data([0, 1, 2, 3]))
         XCTAssertEqual(reverseBytes(data: Data([1, 2, 3, 4])), Data([4, 3, 2, 1]))
+        XCTAssertEqual(generateBytes(size: 4), Data([42, 42, 42, 42]))
     }
 }
-

@@ -32,23 +32,24 @@ pub(crate) fn pack_android(
 
     reporter.section("🤖", "Packing Android");
 
-    let build_cargo_args = resolve_build_cargo_args(config, &options.cargo_args);
-    let build_profile = crate::build::resolve_build_profile(options.release, &build_cargo_args);
+    let build_cargo_args = resolve_build_cargo_args(config, &options.execution.cargo_args);
+    let build_profile =
+        crate::build::resolve_build_profile(options.execution.release, &build_cargo_args);
     let android_targets = config.android_targets();
 
-    if !options.no_build {
+    if !options.execution.no_build {
         let step = reporter.step("Building Android targets");
         build_android_targets(
             config,
             &android_targets,
-            options.release,
+            options.execution.release,
             &build_cargo_args,
             &step,
         )?;
         step.finish_success();
     }
 
-    if options.regenerate {
+    if options.execution.regenerate {
         let step = reporter.step("Generating Kotlin bindings");
         run_generate_with_output(
             config,

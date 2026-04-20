@@ -46,16 +46,17 @@ pub(crate) fn pack_apple(
         });
     }
 
-    let build_cargo_args = resolve_build_cargo_args(config, &options.cargo_args);
-    let build_profile = crate::build::resolve_build_profile(options.release, &build_cargo_args);
+    let build_cargo_args = resolve_build_cargo_args(config, &options.execution.cargo_args);
+    let build_profile =
+        crate::build::resolve_build_profile(options.execution.release, &build_cargo_args);
     let apple_targets = config.apple_targets();
 
-    if !options.no_build {
+    if !options.execution.no_build {
         let step = reporter.step("Building Apple targets");
         build_apple_targets(
             config,
             &apple_targets,
-            options.release,
+            options.execution.release,
             &build_cargo_args,
             &step,
         )?;
@@ -65,7 +66,7 @@ pub(crate) fn pack_apple(
     let layout = options.layout.unwrap_or_else(|| config.apple_spm_layout());
     let package_root = config.apple_spm_output();
 
-    if options.regenerate {
+    if options.execution.regenerate {
         let step = reporter.step("Generating Apple bindings");
         generate_apple_bindings(config, layout, &package_root)?;
         step.finish_success();

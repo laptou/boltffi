@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -162,20 +163,36 @@ impl<'a> AndroidPackager<'a> {
         run_command(compile)?;
 
         let mut link = Command::new(&clang);
-        link.arg("-shared")
-            .arg("-o")
-            .arg(&dest_path)
-            .arg(&object_path)
-            .arg("-Wl,--whole-archive")
-            .arg(&library.path)
-            .arg("-Wl,--no-whole-archive")
-            .arg("-lm")
-            .arg("-llog")
-            .arg("-ldl");
+        link.args(android_shared_link_args(
+            &dest_path,
+            &object_path,
+            &library.path,
+        ));
         run_command(link)?;
 
         Ok(dest_path)
     }
+}
+
+fn android_shared_link_args(
+    dest_path: &Path,
+    object_path: &Path,
+    library_path: &Path,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("-shared"),
+        OsString::from("-o"),
+        dest_path.as_os_str().to_os_string(),
+        object_path.as_os_str().to_os_string(),
+        OsString::from("-Wl,--whole-archive"),
+        library_path.as_os_str().to_os_string(),
+        OsString::from("-Wl,--no-whole-archive"),
+        OsString::from("-Wl,--exclude-libs,ALL"),
+        OsString::from("-Wl,--gc-sections"),
+        OsString::from("-lm"),
+        OsString::from("-llog"),
+        OsString::from("-ldl"),
+    ]
 }
 
 fn run_command(mut command: Command) -> Result<()> {
@@ -196,10 +213,14 @@ fn run_command(mut command: Command) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::AndroidPackager;
+    use super::{AndroidPackager, android_shared_link_args};
     use crate::config::Config;
     use crate::target::{BuiltLibrary, RustTarget};
+    use std::ffi::OsString;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn parse_config(input: &str) -> Config {
@@ -254,5 +275,39 @@ output = "{}"
         assert!(unrelated.exists());
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn android_linker_hides_archive_symbols_and_collects_unused_sections() {
+        let args = android_shared_link_args(
+            Path::new("/tmp/out/libdemo.so"),
+            Path::new("/tmp/out/jni_glue.o"),
+            Path::new("/tmp/out/libdemo.a"),
+        );
+
+        assert!(args.contains(&OsString::from("-Wl,--exclude-libs,ALL")));
+        assert!(args.contains(&OsString::from("-Wl,--gc-sections")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn android_linker_preserves_non_utf8_paths() {
+        let dest_path = PathBuf::from(OsString::from_vec(b"/tmp/out-\xFF.so".to_vec()));
+        let object_path = PathBuf::from(OsString::from_vec(b"/tmp/jni-\xFE.o".to_vec()));
+        let library_path = PathBuf::from(OsString::from_vec(b"/tmp/lib-\xFD.a".to_vec()));
+        let args = android_shared_link_args(&dest_path, &object_path, &library_path);
+
+        assert_eq!(
+            args[2].as_os_str().as_bytes(),
+            dest_path.as_os_str().as_bytes()
+        );
+        assert_eq!(
+            args[3].as_os_str().as_bytes(),
+            object_path.as_os_str().as_bytes()
+        );
+        assert_eq!(
+            args[5].as_os_str().as_bytes(),
+            library_path.as_os_str().as_bytes()
+        );
     }
 }

@@ -55,6 +55,29 @@ pub fn result_to_string(v: Result<i32, String>) -> String {
     }
 }
 
+#[export]
+pub fn divide(a: i32, b: i32) -> Result<i32, String> {
+    safe_divide(a, b)
+}
+
+#[export]
+pub fn parse_int(input: String) -> Result<i32, String> {
+    input
+        .parse::<i32>()
+        .map_err(|_| "invalid integer".to_string())
+}
+
+#[export]
+pub fn validate_name(name: String) -> Result<String, String> {
+    if name.is_empty() {
+        Err("name cannot be empty".to_string())
+    } else if name.len() > 100 {
+        Err("name too long".to_string())
+    } else {
+        Ok(format!("Hello, {}!", name))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use boltffi::__private::wire;

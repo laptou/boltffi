@@ -24,5 +24,22 @@ final class WithCollectionsRecordsTests: XCTestCase {
         XCTAssertEqual(echoTaggedScores(ts: TaggedScores(label: "set", scores: [1.0, 2.0, 3.0])), TaggedScores(label: "set", scores: [1.0, 2.0, 3.0]))
         XCTAssertEqual(averageScore(ts: TaggedScores(label: "set", scores: [1.0, 2.0, 3.0])), 2.0, accuracy: 1e-9)
     }
-}
 
+    func testBenchmarkUserProfileFns() {
+        let users = generateUserProfiles(count: 3)
+        XCTAssertEqual(users.count, 3)
+        XCTAssertEqual(users[0], BenchmarkUserProfile(
+            id: 0,
+            name: "User 0",
+            email: "user0@example.com",
+            bio: "This is a bio for user 0. It contains enough text to behave like a real payload.",
+            age: 20,
+            score: 0,
+            tags: ["tag0", "category0", "common"],
+            scores: [0, 10, 20],
+            isActive: true
+        ))
+        XCTAssertEqual(sumUserScores(users: users), 4.5, accuracy: 1e-9)
+        XCTAssertEqual(countActiveUsers(users: users), 2)
+    }
+}

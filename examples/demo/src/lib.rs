@@ -1,3 +1,6 @@
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
 pub mod async_fns;
 pub mod builtins;
 pub mod bytes;
@@ -9,6 +12,8 @@ pub mod options;
 pub mod primitives;
 pub mod records;
 pub mod results;
+#[cfg(feature = "wasm-bench")]
+pub mod wasm_bench;
 
 pub use async_fns::*;
 pub use builtins::*;

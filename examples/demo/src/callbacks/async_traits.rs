@@ -18,10 +18,7 @@ pub async fn fetch_with_async_callback(fetcher: impl AsyncFetcher, key: i32) -> 
 }
 
 #[export]
-pub async fn fetch_string_with_async_callback(
-    fetcher: impl AsyncFetcher,
-    input: String,
-) -> String {
+pub async fn fetch_string_with_async_callback(fetcher: impl AsyncFetcher, input: String) -> String {
     fetcher.fetch_string(input).await
 }
 

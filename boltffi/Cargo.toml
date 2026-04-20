@@ -1,11 +1,11 @@
 [package]
 name = "boltffi"
-version = "0.23.1"
-edition = "2024"
-authors = ["Ali A. Hilal <me@alihilal.com>"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "High-performance FFI bindings generator for Rust. Up to 1000x faster than UniFFI, 450x faster than wasm-bindgen."
-repository = "https://github.com/boltffi/boltffi"
 homepage = "https://boltffi.dev"
 documentation = "https://boltffi.dev/docs"
 readme = "../README.md"
@@ -20,11 +20,11 @@ chrono = ["boltffi_core/chrono"]
 url = ["boltffi_core/url"]
 
 [dependencies]
-boltffi_core = { version = "0.23.1", path = "../boltffi_core" }
-boltffi_macros = { version = "0.23.1", path = "../boltffi_macros" }
+boltffi_core.workspace = true
+boltffi_macros.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

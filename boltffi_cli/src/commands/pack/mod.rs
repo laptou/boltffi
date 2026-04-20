@@ -6,8 +6,8 @@ use crate::config::Config;
 use crate::reporter::Reporter;
 
 pub use self::request::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackPythonOptions, PackWasmOptions,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackExecutionOptions,
+    PackJavaOptions, PackPythonOptions, PackWasmOptions,
 };
 pub(crate) use crate::pack::android::pack_android;
 pub(crate) use crate::pack::apple::pack_apple;

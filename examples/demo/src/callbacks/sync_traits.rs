@@ -1,7 +1,8 @@
 use boltffi::*;
+use demo_bench_macros::benchmark_candidate;
 
 use crate::enums::c_style::Status;
-use crate::records::blittable::Point;
+use crate::records::blittable::{DataPoint, Point};
 use crate::results::error_enums::MathError;
 
 /// A callback trait for transforming integer values.
@@ -27,10 +28,7 @@ pub fn invoke_boxed_value_callback(callback: Box<dyn ValueCallback>, input: i32)
 }
 
 #[export]
-pub fn invoke_optional_value_callback(
-    callback: Option<Box<dyn ValueCallback>>,
-    input: i32,
-) -> i32 {
+pub fn invoke_optional_value_callback(callback: Option<Box<dyn ValueCallback>>, input: i32) -> i32 {
     callback
         .map(|value_callback| value_callback.on_value(input))
         .unwrap_or(input)
@@ -255,4 +253,50 @@ pub fn invoke_boxed_offset_callback(
     delta: usize,
 ) -> isize {
     callback.offset(value, delta)
+}
+
+#[export]
+#[benchmark_candidate(callback_interface, uniffi)]
+pub trait DataProvider: Send + Sync {
+    fn get_count(&self) -> u32;
+    fn get_item(&self, index: u32) -> DataPoint;
+}
+
+#[benchmark_candidate(object, uniffi)]
+pub struct DataConsumer {
+    provider: std::sync::Mutex<Option<Box<dyn DataProvider>>>,
+}
+
+impl Default for DataConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[export]
+#[benchmark_candidate(impl, uniffi, constructor = "new")]
+impl DataConsumer {
+    pub fn new() -> Self {
+        Self {
+            provider: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn set_provider(&self, provider: Box<dyn DataProvider>) {
+        *self.provider.lock().unwrap() = Some(provider);
+    }
+
+    pub fn compute_sum(&self) -> u64 {
+        let provider_guard = self.provider.lock().unwrap();
+        let Some(provider) = provider_guard.as_ref() else {
+            return 0;
+        };
+
+        (0..provider.get_count())
+            .map(|index| {
+                let point = provider.get_item(index);
+                (point.x + point.y) as u64
+            })
+            .sum()
+    }
 }

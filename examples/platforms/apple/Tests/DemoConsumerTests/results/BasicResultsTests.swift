@@ -13,6 +13,11 @@ final class BasicResultsTests: XCTestCase {
         assertThrowsMessageContains("boom", try alwaysErr(msg: "boom"))
         XCTAssertEqual(resultToString(v: .success(7)), "ok: 7")
         XCTAssertEqual(resultToString(v: .failure(FfiError(message: "bad"))), "err: bad")
+        XCTAssertEqual(try divide(a: 10, b: 2), 5)
+        assertThrowsMessageContains("division by zero", try divide(a: 10, b: 0))
+        XCTAssertEqual(try parseInt(input: "42"), 42)
+        assertThrowsMessageContains("invalid integer", try parseInt(input: "nope"))
+        XCTAssertEqual(try validateName(name: "Ali"), "Hello, Ali!")
+        assertThrowsMessageContains("name cannot be empty", try validateName(name: ""))
     }
 }
-

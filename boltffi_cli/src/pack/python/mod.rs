@@ -41,13 +41,13 @@ pub(crate) fn pack_python(
     let step = reporter.step("Preparing Python packaging");
     let plan = PythonPackagingPlan::from_config(
         config,
-        options.release,
-        &options.cargo_args,
+        options.execution.release,
+        &options.execution.cargo_args,
         &options.python_interpreters,
     )?;
     step.finish_success();
 
-    if options.regenerate {
+    if options.execution.regenerate {
         let step = reporter.step("Generating Python sources");
         run_generate_python_with_output_from_source_dir(
             config,
@@ -59,7 +59,7 @@ pub(crate) fn pack_python(
     }
 
     let shared_library_builder = PythonSharedLibraryBuilder::new(&plan);
-    let shared_library = if options.no_build {
+    let shared_library = if options.execution.no_build {
         let step = reporter.step("Reusing host Rust shared library");
         let shared_library = shared_library_builder.existing()?;
         step.finish_success_with(&format!("{}", shared_library.source_path.display()));
@@ -94,7 +94,7 @@ pub(crate) fn pack_python(
 #[cfg(test)]
 mod tests {
     use super::pack_python;
-    use crate::commands::pack::PackPythonOptions;
+    use crate::commands::pack::{PackExecutionOptions, PackPythonOptions};
     use crate::config::{CargoConfig, Config, PackageConfig, PythonConfig, TargetsConfig};
     use crate::reporter::{Reporter, Verbosity};
 
@@ -132,12 +132,14 @@ mod tests {
         let error = pack_python(
             &config(false, false),
             PackPythonOptions {
-                release: false,
-                regenerate: false,
-                no_build: true,
+                execution: PackExecutionOptions {
+                    release: false,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: Vec::new(),
+                },
                 experimental: false,
                 python_interpreters: Vec::new(),
-                cargo_args: Vec::new(),
             },
             &reporter(),
         )
@@ -155,12 +157,14 @@ mod tests {
         let error = pack_python(
             &config(true, false),
             PackPythonOptions {
-                release: false,
-                regenerate: false,
-                no_build: true,
+                execution: PackExecutionOptions {
+                    release: false,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: Vec::new(),
+                },
                 experimental: false,
                 python_interpreters: Vec::new(),
-                cargo_args: Vec::new(),
             },
             &reporter(),
         )

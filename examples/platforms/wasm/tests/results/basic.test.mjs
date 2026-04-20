@@ -12,4 +12,10 @@ export async function run() {
   assertThrowsWithMessage(() => demo.alwaysErr("boom"), "boom");
   assert.equal(demo.resultToString(wireOk(7)), "ok: 7");
   assert.equal(demo.resultToString(wireErr("bad")), "err: bad");
+  assert.equal(demo.divide(10, 2), 5);
+  assertThrowsWithMessage(() => demo.divide(10, 0), "division by zero");
+  assert.equal(demo.parseInt("42"), 42);
+  assertThrowsWithMessage(() => demo.parseInt("nope"), "invalid integer");
+  assert.equal(demo.validateName("Ali"), "Hello, Ali!");
+  assertThrowsWithMessage(() => demo.validateName(""), "name cannot be empty");
 }
