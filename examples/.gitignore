@@ -14,3 +14,7 @@ platforms/apple/Sources/
 
 platforms/android/src/main/jniLibs/
 platforms/android/src/main/kotlin/
+
+platforms/csharp/dist/
+platforms/csharp/DemoTest/bin/
+platforms/csharp/DemoTest/obj/

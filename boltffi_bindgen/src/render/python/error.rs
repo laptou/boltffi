@@ -1,20 +1,46 @@
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PythonLowerError {
     #[error(
-        "Python top-level function name `{generated_name}` collides between function `{existing_function}` and function `{colliding_function}`"
+        "Python top-level name `{generated_name}` collides between {existing_subject} and {colliding_subject}"
     )]
-    TopLevelFunctionNameCollision {
+    TopLevelNameCollision {
         generated_name: String,
-        existing_function: String,
-        colliding_function: String,
+        existing_subject: String,
+        colliding_subject: String,
     },
     #[error(
-        "Python parameter name `{generated_name}` collides in function `{function_name}` between parameter `{existing_parameter}` and parameter `{colliding_parameter}`"
+        "Python parameter name `{generated_name}` collides in `{callable_name}` between parameter `{existing_parameter}` and parameter `{colliding_parameter}`"
     )]
     ParameterNameCollision {
-        function_name: String,
+        callable_name: String,
         generated_name: String,
         existing_parameter: String,
         colliding_parameter: String,
+    },
+    #[error(
+        "Python enum member name `{generated_name}` collides in enum `{enum_name}` between variant `{existing_variant}` and variant `{colliding_variant}`"
+    )]
+    EnumMemberNameCollision {
+        enum_name: String,
+        generated_name: String,
+        existing_variant: String,
+        colliding_variant: String,
+    },
+    #[error(
+        "Python enum member name `{generated_name}` collides in enum `{enum_name}` between {existing_subject} and {colliding_subject}"
+    )]
+    EnumCallableNameCollision {
+        enum_name: String,
+        generated_name: String,
+        existing_subject: String,
+        colliding_subject: String,
+    },
+    #[error(
+        "Python native module name `{generated_name}` collides between {existing_subject} and {colliding_subject}"
+    )]
+    NativeModuleNameCollision {
+        generated_name: String,
+        existing_subject: String,
+        colliding_subject: String,
     },
 }

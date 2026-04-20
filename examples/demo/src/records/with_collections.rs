@@ -1,4 +1,5 @@
 use boltffi::*;
+use demo_bench_macros::benchmark_candidate;
 
 use crate::records::blittable::Point;
 use crate::records::with_strings::Person;
@@ -95,4 +96,60 @@ pub fn average_score(ts: TaggedScores) -> f64 {
     }
     let sum: f64 = ts.scores.iter().sum();
     sum / ts.scores.len() as f64
+}
+
+/// A heavier benchmark profile with heap-owned collections.
+#[benchmark_candidate(record, uniffi)]
+#[data]
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct BenchmarkUserProfile {
+    pub id: i64,
+    pub name: String,
+    pub email: String,
+    pub bio: String,
+    pub age: i32,
+    pub score: f64,
+    pub tags: Vec<String>,
+    pub scores: Vec<i32>,
+    pub is_active: bool,
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn generate_user_profiles(count: i32) -> Vec<BenchmarkUserProfile> {
+    (0..count as i64)
+        .map(|index| BenchmarkUserProfile {
+            id: index,
+            name: format!("User {index}"),
+            email: format!("user{index}@example.com"),
+            bio: format!(
+                "This is a bio for user {index}. It contains enough text to behave like a real payload."
+            ),
+            age: 20 + (index % 50) as i32,
+            score: index as f64 * 1.5,
+            tags: vec![
+                format!("tag{}", index % 5),
+                format!("category{}", index % 3),
+                "common".to_string(),
+            ],
+            scores: vec![
+                (index % 100) as i32,
+                ((index + 10) % 100) as i32,
+                ((index + 20) % 100) as i32,
+            ],
+            is_active: index % 2 == 0,
+        })
+        .collect()
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn sum_user_scores(users: Vec<BenchmarkUserProfile>) -> f64 {
+    users.iter().map(|user| user.score).sum()
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn count_active_users(users: Vec<BenchmarkUserProfile>) -> i32 {
+    users.iter().filter(|user| user.is_active).count() as i32
 }

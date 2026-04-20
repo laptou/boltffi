@@ -1,4 +1,5 @@
 use boltffi::*;
+use demo_bench_macros::benchmark_candidate;
 
 use crate::records::blittable::Point;
 
@@ -6,10 +7,19 @@ use crate::records::blittable::Point;
 #[data]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Circle { radius: f64 },
-    Rectangle { width: f64, height: f64 },
+    Circle {
+        radius: f64,
+    },
+    Rectangle {
+        width: f64,
+        height: f64,
+    },
     /// Triangle defined by three vertices.
-    Triangle { a: Point, b: Point, c: Point },
+    Triangle {
+        a: Point,
+        b: Point,
+        c: Point,
+    },
     Point,
 }
 
@@ -24,7 +34,10 @@ impl Shape {
     }
 
     pub fn square(side: f64) -> Self {
-        Shape::Rectangle { width: side, height: side }
+        Shape::Rectangle {
+            width: side,
+            height: side,
+        }
     }
 
     pub fn try_circle(radius: f64) -> Result<Self, String> {
@@ -83,8 +96,14 @@ pub fn echo_vec_shape(values: Vec<Shape>) -> Vec<Shape> {
 #[data]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
-    Text { body: String },
-    Image { url: String, width: u32, height: u32 },
+    Text {
+        body: String,
+    },
+    Image {
+        url: String,
+        width: u32,
+        height: u32,
+    },
     Ping,
 }
 
@@ -121,4 +140,31 @@ pub fn animal_name(a: Animal) -> String {
         Animal::Dog { name, .. } | Animal::Cat { name, .. } => name,
         Animal::Fish { count } => format!("{} fish", count),
     }
+}
+
+#[benchmark_candidate(enum, uniffi)]
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TaskStatus {
+    Pending,
+    InProgress { progress: i32 },
+    Completed { result: i32 },
+    Failed { error_code: i32, retry_count: i32 },
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn get_status_progress(status: TaskStatus) -> i32 {
+    match status {
+        TaskStatus::Pending => 0,
+        TaskStatus::InProgress { progress } => progress,
+        TaskStatus::Completed { result } => result,
+        TaskStatus::Failed { error_code, .. } => error_code,
+    }
+}
+
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn is_status_complete(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Completed { .. })
 }

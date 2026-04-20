@@ -1,29 +1,30 @@
 [package]
 name = "boltffi_bindgen"
-version = "0.23.1"
-edition = "2024"
-authors = ["Ali A. Hilal <me@alihilal.com>"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Code generation library for BoltFFI - generates Swift, Kotlin, and TypeScript bindings"
-repository = "https://github.com/boltffi/boltffi"
 keywords = ["ffi", "codegen", "swift", "kotlin", "typescript"]
 categories = ["development-tools::ffi", "development-tools::build-utils"]
 
 [dependencies]
-boltffi_ffi_rules = { version = "0.23.1", path = "../boltffi_ffi_rules", features = ["serde"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
+boltffi_ffi_rules = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 heck = "0.5"
 askama = "0.15"
-syn = { version = "2.0", features = ["full", "parsing", "visit"] }
-quote = "1.0"
-proc-macro2 = "1.0"
-walkdir = "2.4"
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+walkdir.workspace = true
 indexmap = "2.7"
 
 [dev-dependencies]
 insta = "1.46"
+rstest.workspace = true
 
 [lints]
 workspace = true

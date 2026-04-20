@@ -71,6 +71,22 @@ final class SyncTraitsTests: XCTestCase {
         }
     }
 
+    final class SwiftDataProvider: DataProvider {
+        private let items: [DataPoint]
+
+        init(items: [DataPoint]) {
+            self.items = items
+        }
+
+        func getCount() -> UInt32 {
+            UInt32(items.count)
+        }
+
+        func getItem(index: UInt32) -> DataPoint {
+            items[Int(index)]
+        }
+    }
+
     func testSyncTraitFns() throws {
         let doubler = Doubler()
         let tripler = Tripler()
@@ -157,5 +173,13 @@ final class SyncTraitsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? MathError, .negativeInput)
         }
+
+        let dataConsumer = DataConsumer()
+        let dataProvider = SwiftDataProvider(items: [
+            DataPoint(x: 1.0, y: 2.0, timestamp: 3),
+            DataPoint(x: 4.0, y: 5.0, timestamp: 6),
+        ])
+        dataConsumer.setProvider(provider: dataProvider)
+        XCTAssertEqual(dataConsumer.computeSum(), 12)
     }
 }

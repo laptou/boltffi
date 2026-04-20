@@ -1,0 +1,36 @@
+{%- if module.has_functions() %}
+    public static class {{ module.class_name }}
+    {
+{%- for func in module.functions %}
+        public static {{ func.return_type }} {{ func.name }}({{ func.wrapper_param_list() }})
+        {
+{%- for param in func.params %}
+{%- if let Some(stmt) = param.setup_statement() %}
+            {{ stmt }}
+{%- endif %}
+{%- endfor %}
+{%- for writer in func.wire_writers %}
+            using var {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }});
+            {{ writer.encode_expr }};
+            byte[] {{ writer.bytes_binding_name }} = {{ writer.binding_name }}.ToArray();
+{%- endfor %}
+{%- if let Some(body) = func.return_kind.wire_decode_return("_buf") %}
+            FfiBuf _buf = NativeMethods.{{ func.name }}({{ func.native_call_args() }});
+            try
+            {
+                {{ body }}
+            }
+            finally
+            {
+                NativeMethods.FreeBuf(_buf);
+            }
+{%- else if func.is_void() %}
+            NativeMethods.{{ func.name }}({{ func.native_call_args() }});
+{%- else %}
+            return NativeMethods.{{ func.name }}({{ func.native_call_args() }});
+{%- endif %}
+        }
+{% endfor %}
+    }
+
+{% endif -%}

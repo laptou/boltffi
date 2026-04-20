@@ -205,6 +205,10 @@ impl NativeHostToolchain {
         command
     }
 
+    pub fn jni_compiler_program(&self) -> &Path {
+        &self.jni_compiler_program
+    }
+
     pub fn uses_msvc_compiler(&self) -> bool {
         linker_program_name(&self.jni_compiler_program).is_some_and(|name| {
             name.eq_ignore_ascii_case("clang-cl") || name.eq_ignore_ascii_case("cl")

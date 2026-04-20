@@ -4400,6 +4400,23 @@ impl<'a> KotlinLowerer<'a> {
                 CallMode::Sync => None,
             });
 
+        let callback_returns_from_decode = self
+            .abi
+            .callbacks
+            .iter()
+            .flat_map(|callback| callback.methods.iter())
+            .filter_map(|method| {
+                self.output_read_ops(&method.returns)
+                    .and_then(|seq| self.blittable_record_id_from_read_seq(&seq))
+            });
+
+        let callback_returns_from_transport = self
+            .abi
+            .callbacks
+            .iter()
+            .flat_map(|callback| callback.methods.iter())
+            .filter_map(|method| self.blittable_record_id_from_transport(&method.returns));
+
         let stream_items =
             self.abi
                 .streams
@@ -4417,6 +4434,8 @@ impl<'a> KotlinLowerer<'a> {
             .chain(sync_returns_from_transport)
             .chain(async_returns_from_decode)
             .chain(async_returns_from_transport)
+            .chain(callback_returns_from_decode)
+            .chain(callback_returns_from_transport)
             .chain(stream_items)
             .collect()
     }
@@ -4772,9 +4791,13 @@ mod tests {
     use super::*;
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
-    use crate::ir::definitions::{ClassDef, FieldDef, RecordDef, StreamDef, StreamMode};
-    use crate::ir::ids::{ClassId, FieldName, RecordId, StreamId};
+    use crate::ir::definitions::{
+        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, FieldDef, ParamDef, RecordDef,
+        ReturnDef, StreamDef, StreamMode,
+    };
+    use crate::ir::ids::{CallbackId, ClassId, FieldName, MethodId, ParamName, RecordId, StreamId};
     use crate::ir::types::{PrimitiveType, TypeExpr};
+    use boltffi_ffi_rules::callable::ExecutionKind;
 
     fn field(name: &str, primitive: PrimitiveType) -> FieldDef {
         FieldDef {
@@ -4864,6 +4887,78 @@ mod tests {
             stream.pop_batch_items_expr.contains("PointReader.readAll"),
             "expected stream items to be decoded via PointReader, got: {}",
             stream.pop_batch_items_expr,
+        );
+    }
+
+    #[test]
+    fn lowering_emits_record_reader_for_blittable_callback_returns() {
+        let point_id = RecordId::new("DataPoint");
+        let mut catalog = crate::ir::contract::TypeCatalog::default();
+        catalog.insert_record(record_def(
+            point_id.as_str(),
+            vec![
+                field("x", PrimitiveType::F64),
+                field("y", PrimitiveType::F64),
+                field("timestamp", PrimitiveType::I64),
+            ],
+        ));
+        catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("DataProvider"),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new("get_item"),
+                params: vec![ParamDef {
+                    name: ParamName::new("index"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::U32),
+                    passing: crate::ir::definitions::ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::Record(point_id)),
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+            }],
+            kind: CallbackKind::Trait,
+            doc: None,
+        });
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions::default(),
+        )
+        .lower();
+
+        assert!(
+            module
+                .record_readers
+                .iter()
+                .any(|reader| reader.reader_name == "DataPointReader"),
+            "expected DataPointReader to be emitted for callback proxy returns",
+        );
+
+        let callback = module
+            .callbacks
+            .iter()
+            .find(|callback| callback.interface_name == "DataProvider")
+            .expect("callback should be lowered");
+        let proxy_method = callback
+            .proxy_methods
+            .iter()
+            .find(|method| method.contains("override fun getItem"))
+            .expect("proxy method should exist");
+        assert!(
+            proxy_method.contains("DataPointReader.read(buffer, 0)"),
+            "expected callback proxy to decode via DataPointReader, got: {}",
+            proxy_method,
         );
     }
 }

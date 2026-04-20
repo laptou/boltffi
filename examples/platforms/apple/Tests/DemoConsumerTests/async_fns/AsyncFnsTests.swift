@@ -15,5 +15,20 @@ final class AsyncFnsTests: XCTestCase {
         XCTAssertNil(missingPositive)
         let concatenated = try await asyncConcat(strings: ["a", "b", "c"])
         XCTAssertEqual(concatenated, "a, b, c")
+        let computedValue = try await tryComputeAsync(value: 4)
+        XCTAssertEqual(computedValue, 8)
+        do {
+            _ = try await tryComputeAsync(value: -1)
+            XCTFail("expected tryComputeAsync to throw")
+        } catch {
+            XCTAssertEqual(error as? ComputeError, .overflow(value: -1, limit: 0))
+        }
+        let fetchedValue = try await fetchData(id: 7)
+        XCTAssertEqual(fetchedValue, 70)
+        await assertAsyncThrowsMessageContains("invalid id") {
+            try await fetchData(id: 0)
+        }
+        let numbers = try await asyncGetNumbers(count: 4)
+        XCTAssertEqual(numbers, [0, 1, 2, 3])
     }
 }

@@ -18,8 +18,7 @@ let package = Package(
             dependencies: [
                 .product(name: "DemoFFI", package: "ffi"),
             ],
-            path: "Sources/Demo",
-            exclude: ["DemoBoltFFI.swift"]
+            path: "Sources/Demo"
         ),
         .testTarget(
             name: "DemoConsumerTests",

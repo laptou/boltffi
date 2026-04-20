@@ -27,5 +27,31 @@ final class BlittableRecordsTests: XCTestCase {
         XCTAssertEqual(echoColor(c: Color(r: 1, g: 2, b: 3, a: 4)), Color(r: 1, g: 2, b: 3, a: 4))
         XCTAssertEqual(makeColor(r: 10, g: 20, b: 30, a: 40), Color(r: 10, g: 20, b: 30, a: 40))
     }
-}
 
+    func testBenchmarkRecordFns() {
+        let locations = generateLocations(count: 2)
+        XCTAssertEqual(locations.count, 2)
+        XCTAssertEqual(processLocations(locations: locations), 2)
+        XCTAssertEqual(sumRatings(locations: locations), 6.1, accuracy: 1e-9)
+
+        let trades = generateTrades(count: 3)
+        XCTAssertEqual(trades.count, 3)
+        XCTAssertEqual(sumTradeVolumes(trades: trades), 3000)
+
+        let particles = generateParticles(count: 3)
+        XCTAssertEqual(particles.count, 3)
+        XCTAssertEqual(sumParticleMasses(particles: particles), 3.003, accuracy: 1e-9)
+
+        let readings = generateSensorReadings(count: 2)
+        XCTAssertEqual(readings.count, 2)
+        XCTAssertEqual(avgSensorTemperature(readings: readings), 20.5, accuracy: 1e-9)
+
+        XCTAssertEqual(
+            findLocation(id: 7),
+            Location(id: 7, lat: 37.7749, lng: -122.4194, rating: 4.5, reviewCount: 100, isOpen: true)
+        )
+        XCTAssertNil(findLocation(id: 0))
+        XCTAssertEqual(findLocations(count: 2)?.count, 2)
+        XCTAssertNil(findLocations(count: 0))
+    }
+}

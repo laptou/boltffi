@@ -56,7 +56,11 @@ pub fn filter_vec_with_closure(f: impl Fn(i32) -> bool, values: Vec<i32>) -> Vec
 }
 
 #[export]
-pub fn apply_offset_closure(f: impl Fn(isize, usize) -> isize, value: isize, delta: usize) -> isize {
+pub fn apply_offset_closure(
+    f: impl Fn(isize, usize) -> isize,
+    value: isize,
+    delta: usize,
+) -> isize {
     f(value, delta)
 }
 

@@ -1,4 +1,4 @@
-import { assert, assertArrayEqual, demo } from "../support/index.mjs";
+import { assert, assertArrayEqual, assertRejectsWithMessage, demo } from "../support/index.mjs";
 
 export async function run() {
   assert.equal(await demo.asyncAdd(3, 7), 10);
@@ -7,4 +7,14 @@ export async function run() {
   assert.equal(await demo.asyncFindPositive([-1, 0, 5, 3]), 5);
   assert.equal(await demo.asyncFindPositive([-1, -2, -3]), null);
   assert.equal(await demo.asyncConcat(["a", "b", "c"]), "a, b, c");
+  assert.equal(await demo.tryComputeAsync(4), 8);
+  try {
+    await demo.tryComputeAsync(-1);
+    assert.fail("expected tryComputeAsync(-1) to reject");
+  } catch (error) {
+    assert.ok(error instanceof demo.ComputeErrorException);
+    assert.deepEqual(error.value, { tag: "Overflow", value: -1, limit: 0 });
+  }
+  assert.equal(await demo.fetchData(7), 70);
+  await assertRejectsWithMessage(() => demo.fetchData(0), "invalid id");
 }

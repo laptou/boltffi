@@ -19,6 +19,15 @@ final class ComplexOptionsTests: XCTestCase {
         XCTAssertNil(echoOptionalVec(v: nil))
         XCTAssertEqual(optionalVecLength(v: [9, 8]), 2)
         XCTAssertNil(optionalVecLength(v: nil))
+        XCTAssertEqual(findName(id: 1), "Name_1")
+        XCTAssertNil(findName(id: 0))
+        XCTAssertEqual(findNumbers(count: 3), [0, 1, 2])
+        XCTAssertNil(findNumbers(count: 0))
+        XCTAssertEqual(findNames(count: 2), ["Name_0", "Name_1"])
+        XCTAssertNil(findNames(count: 0))
+        XCTAssertEqual(findApiResult(code: 0), .success)
+        XCTAssertEqual(findApiResult(code: 1), .errorCode(-1))
+        XCTAssertEqual(findApiResult(code: 2), .errorWithData(code: -1, detail: -2))
+        XCTAssertNil(findApiResult(code: 99))
     }
 }
-

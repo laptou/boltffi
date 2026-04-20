@@ -39,9 +39,7 @@ impl MathUtils {
     }
 
     pub fn parse_int(input: String) -> Result<i32, String> {
-        input
-            .parse::<i32>()
-            .map_err(|err| err.to_string())
+        input.parse::<i32>().map_err(|err| err.to_string())
     }
 
     pub fn safe_sqrt(value: f64) -> Option<f64> {

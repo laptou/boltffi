@@ -3,6 +3,7 @@
 
 mod emit;
 mod lower;
+mod mappings;
 mod names;
 mod plan;
 mod templates;
