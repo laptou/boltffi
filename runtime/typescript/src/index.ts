@@ -10,6 +10,7 @@ export {
   BoltFFIModule,
   BoltFFIExports,
   BoltFFIImports,
+  BoltFFIWasmBindgenHooks,
   PrimitiveBufferAlloc,
   PrimitiveBufferElementType,
   StringAlloc,
@@ -20,4 +21,5 @@ export {
   BoltFFIPanicError,
   BoltFFICancelledError,
   WasmPollStatus,
+  __boltffi_takePendingEnv,
 } from "./module.js";

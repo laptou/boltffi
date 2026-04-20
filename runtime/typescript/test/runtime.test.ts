@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AsyncFutureManager, BoltFFIModule } from "../src/module.js";
+import {
+  AsyncFutureManager,
+  BoltFFIModule,
+  __boltffi_takePendingEnv,
+} from "../src/module.js";
 import { WireReader, WireWriter, wireErr, wireOk } from "../src/wire.js";
 
 type ExportFunction = (...args: number[]) => number | void;
@@ -245,6 +249,12 @@ describe("WireWriter result encoding", () => {
         }
       )
     ).toThrow("Ambiguous Result object");
+  });
+});
+
+describe("wasm-bindgen host hooks", () => {
+  it("rejects takePendingEnv when env was not prepared", () => {
+    expect(() => __boltffi_takePendingEnv()).toThrow(/wasm-bindgen env not prepared/);
   });
 });
 
