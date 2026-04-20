@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use boltffi_bindgen::render::typescript::{
     TypeScriptEmitter, TypeScriptLowerError, TypeScriptLowerer,
 };
@@ -34,7 +36,7 @@ impl LanguageGenerator for TypeScriptGenerator {
             Some(request.config().wasm_scan_cfg_context()),
         )?;
 
-        let type_script_module = TypeScriptLowerer::new(
+        let mut type_script_module = TypeScriptLowerer::new(
             &lowered_crate.ffi_contract,
             &lowered_crate.abi_contract,
             request.source_crate().crate_name().to_string(),
@@ -50,6 +52,11 @@ impl LanguageGenerator for TypeScriptGenerator {
                 }
             }
         })?;
+        if let Some(glue) =
+            read_wasm_bindgen_glue_marker(&output_directory, &module_name)
+        {
+            type_script_module.wasm_bindgen_glue = Some(glue);
+        }
         let runtime_package = request.config().wasm_runtime_package();
         let emits_node_bundle = request
             .config()
@@ -82,4 +89,14 @@ impl LanguageGenerator for TypeScriptGenerator {
 
         Ok(())
     }
+}
+
+/// `boltffi pack wasm` writes `{module}.boltffi.json` when wasm-bindgen glue is present.
+fn read_wasm_bindgen_glue_marker(output_dir: &Path, module_name: &str) -> Option<String> {
+    let path = output_dir.join(format!("{module_name}.boltffi.json"));
+    let data = std::fs::read(path).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&data).ok()?;
+    v.get("wasm_bindgen_glue")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
