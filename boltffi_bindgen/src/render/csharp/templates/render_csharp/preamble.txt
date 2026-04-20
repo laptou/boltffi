@@ -4,6 +4,13 @@
 
 using System;
 using System.Runtime.InteropServices;
+{%- if module.needs_wire_reader() || module.needs_wire_writer() %}
+using System.Buffers;
+using System.Buffers.Binary;
+{%- endif %}
+{%- if module.needs_system_text() %}
+using System.Text;
+{%- endif %}
 
 namespace {{ module.namespace }}
 {

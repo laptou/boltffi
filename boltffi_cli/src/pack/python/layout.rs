@@ -92,6 +92,17 @@ impl PythonPackageLayout {
             });
         }
 
+        if self.wheel_directory.starts_with(&self.package_directory) {
+            return Err(CliError::CommandFailed {
+                command: format!(
+                    "targets.python.wheel.output '{}' must not be inside the generated Python package directory '{}'",
+                    self.wheel_directory.display(),
+                    self.package_directory.display()
+                ),
+                status: None,
+            });
+        }
+
         Ok(())
     }
 
@@ -233,6 +244,25 @@ mod tests {
             error,
             crate::cli::CliError::CommandFailed { command, status: None }
                 if command.contains("generated Python package directory")
+        ));
+    }
+
+    #[test]
+    fn rejects_wheel_directory_nested_inside_package_directory() {
+        let layout = PythonPackageLayout::with_wheel_directory(
+            "dist/python",
+            "dist/python/demo_lib/wheelhouse",
+            "demo_lib",
+        );
+
+        let error = layout
+            .validate_wheel_directory_safety()
+            .expect_err("expected nested package wheel directory rejection");
+
+        assert!(matches!(
+            error,
+            crate::cli::CliError::CommandFailed { command, status: None }
+                if command.contains("must not be inside the generated Python package directory")
         ));
     }
 

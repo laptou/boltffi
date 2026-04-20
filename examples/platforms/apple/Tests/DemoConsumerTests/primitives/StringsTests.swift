@@ -8,6 +8,6 @@ final class StringsTests: XCTestCase {
         XCTAssertEqual(stringLength(v: "café"), 5)
         XCTAssertEqual(stringIsEmpty(v: ""), true)
         XCTAssertEqual(repeatString(v: "ab", count: 3), "ababab")
+        XCTAssertEqual(generateString(size: 4), "xxxx")
     }
 }
-

@@ -30,8 +30,9 @@ impl LanguageGenerator for CSharpGenerator {
             &lowered_crate.abi_contract,
             &CSharpOptions::default(),
         );
-        let output_path = output_directory.join(format!("{}.cs", output.class_name));
 
-        request.write_output(&output_path, output.source)
+        output.files.iter().try_for_each(|file| {
+            request.write_output(&output_directory.join(&file.file_name), &file.source)
+        })
     }
 }

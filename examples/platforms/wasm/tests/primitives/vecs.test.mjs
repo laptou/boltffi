@@ -19,4 +19,5 @@ export async function run() {
   assertArrayEqual(demo.vecStringLengths(["hi", "café"]), [2, 5]);
   assertArrayEqual(demo.makeRange(0, 5), [0, 1, 2, 3, 4]);
   assertArrayEqual(demo.reverseVecI32([1, 2, 3]), [3, 2, 1]);
+  assert.equal(demo.incU64(BigUint64Array.from([1n, 2n])), undefined);
 }

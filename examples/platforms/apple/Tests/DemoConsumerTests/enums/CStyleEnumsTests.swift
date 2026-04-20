@@ -19,6 +19,12 @@ final class CStyleEnumsTests: XCTestCase {
         XCTAssertEqual(Direction.west.label(), "W")
         XCTAssertEqual(echoDirection(d: .east), .east)
         XCTAssertEqual(oppositeDirection(d: .east), .west)
+        XCTAssertEqual(directionToDegrees(direction: .west), 270)
+        XCTAssertEqual(generateDirections(count: 5), [.north, .east, .south, .west, .north])
+        XCTAssertEqual(countNorth(directions: [.north, .east, .north]), 2)
+        XCTAssertEqual(findDirection(id: 2), .south)
+        XCTAssertNil(findDirection(id: 9))
+        XCTAssertEqual(findDirections(count: 3), [.north, .east, .south])
+        XCTAssertNil(findDirections(count: 0))
     }
 }
-

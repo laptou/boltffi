@@ -15,13 +15,19 @@ pub(super) fn pack_all(
 ) -> Result<()> {
     super::ensure_java_no_build_supported(
         config,
-        options.no_build,
+        options.execution.no_build,
         options.experimental,
         "pack all",
     )?;
     let prepared_java_packaging = config
         .should_process(Target::Java, options.experimental)
-        .then(|| prepare_java_packaging(config, options.release, &options.cargo_args))
+        .then(|| {
+            prepare_java_packaging(
+                config,
+                options.execution.release,
+                &options.execution.cargo_args,
+            )
+        })
         .transpose()?;
 
     let mut packed_any = false;
@@ -30,14 +36,11 @@ pub(super) fn pack_all(
         pack_apple(
             config,
             PackAppleOptions {
-                release: options.release,
+                execution: options.execution.clone(),
                 version: None,
-                regenerate: options.regenerate,
-                no_build: options.no_build,
                 spm_only: false,
                 xcframework_only: false,
                 layout: None,
-                cargo_args: options.cargo_args.clone(),
             },
             reporter,
         )?;
@@ -48,10 +51,7 @@ pub(super) fn pack_all(
         pack_android(
             config,
             PackAndroidOptions {
-                release: options.release,
-                regenerate: options.regenerate,
-                no_build: options.no_build,
-                cargo_args: options.cargo_args.clone(),
+                execution: options.execution.clone(),
             },
             reporter,
         )?;
@@ -62,10 +62,7 @@ pub(super) fn pack_all(
         pack_wasm(
             config,
             PackWasmOptions {
-                release: options.release,
-                regenerate: options.regenerate,
-                no_build: options.no_build,
-                cargo_args: options.cargo_args.clone(),
+                execution: options.execution.clone(),
             },
             reporter,
         )?;
@@ -76,11 +73,8 @@ pub(super) fn pack_all(
         pack_java(
             config,
             PackJavaOptions {
-                release: options.release,
-                regenerate: options.regenerate,
-                no_build: options.no_build,
+                execution: options.execution.clone(),
                 experimental: options.experimental,
-                cargo_args: options.cargo_args.clone(),
             },
             prepared_java_packaging,
             reporter,
@@ -92,12 +86,9 @@ pub(super) fn pack_all(
         pack_python(
             config,
             PackPythonOptions {
-                release: options.release,
-                regenerate: options.regenerate,
-                no_build: options.no_build,
+                execution: options.execution.clone(),
                 experimental: options.experimental,
                 python_interpreters: options.python_interpreters.clone(),
-                cargo_args: options.cargo_args.clone(),
             },
             reporter,
         )?;

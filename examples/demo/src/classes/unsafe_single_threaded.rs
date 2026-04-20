@@ -84,3 +84,51 @@ impl StateHolder {
         self.items.len() as u32
     }
 }
+
+#[derive(Default)]
+pub struct CounterSingleThreaded {
+    value: i32,
+}
+
+#[export(single_threaded)]
+impl CounterSingleThreaded {
+    pub fn new() -> Self {
+        Self { value: 0 }
+    }
+
+    pub fn set(&mut self, value: i32) {
+        self.value = value;
+    }
+
+    pub fn increment(&mut self) {
+        self.value += 1;
+    }
+
+    pub fn get(&self) -> i32 {
+        self.value
+    }
+}
+
+#[derive(Default)]
+pub struct AccumulatorSingleThreaded {
+    value: i64,
+}
+
+#[export(single_threaded)]
+impl AccumulatorSingleThreaded {
+    pub fn new() -> Self {
+        Self { value: 0 }
+    }
+
+    pub fn add(&mut self, amount: i64) {
+        self.value += amount;
+    }
+
+    pub fn get(&self) -> i64 {
+        self.value
+    }
+
+    pub fn reset(&mut self) {
+        self.value = 0;
+    }
+}

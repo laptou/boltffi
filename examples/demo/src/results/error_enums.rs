@@ -1,5 +1,7 @@
 use boltffi::*;
 
+use crate::records::blittable::DataPoint;
+
 /// Errors that can happen during math operations.
 #[error]
 #[derive(Clone, Debug, PartialEq)]
@@ -125,4 +127,97 @@ pub fn validate_username(name: String) -> Result<String, ValidationError> {
     } else {
         Ok(name)
     }
+}
+
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(i32)]
+pub enum ApiResult {
+    Success = 0,
+    ErrorCode(i32) = 1,
+    ErrorWithData { code: i32, detail: i32 } = 2,
+}
+
+#[error]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(i32)]
+pub enum ComputeError {
+    InvalidInput(i32) = 0,
+    Overflow { value: i32, limit: i32 } = 1,
+}
+
+impl std::fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(value) => write!(f, "invalid input: {}", value),
+            Self::Overflow { value, limit } => {
+                write!(f, "overflow: value {} exceeds limit {}", value, limit)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ComputeError {}
+
+#[data]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BenchmarkResponse {
+    pub request_id: i64,
+    pub result: Result<DataPoint, ComputeError>,
+}
+
+#[export]
+pub fn process_value(value: i32) -> ApiResult {
+    if value > 0 {
+        ApiResult::Success
+    } else if value == 0 {
+        ApiResult::ErrorCode(-1)
+    } else {
+        ApiResult::ErrorWithData {
+            code: value,
+            detail: value * 2,
+        }
+    }
+}
+
+#[export]
+pub fn api_result_is_success(result: ApiResult) -> bool {
+    matches!(result, ApiResult::Success)
+}
+
+#[export]
+pub fn try_compute(value: i32) -> Result<i32, ComputeError> {
+    if value > 0 {
+        Ok(value * 2)
+    } else if value == 0 {
+        Err(ComputeError::InvalidInput(-999))
+    } else {
+        Err(ComputeError::Overflow { value, limit: 0 })
+    }
+}
+
+#[export]
+pub fn create_success_response(request_id: i64, point: DataPoint) -> BenchmarkResponse {
+    BenchmarkResponse {
+        request_id,
+        result: Ok(point),
+    }
+}
+
+#[export]
+pub fn create_error_response(request_id: i64, error: ComputeError) -> BenchmarkResponse {
+    BenchmarkResponse {
+        request_id,
+        result: Err(error),
+    }
+}
+
+#[export]
+pub fn is_response_success(response: BenchmarkResponse) -> bool {
+    response.result.is_ok()
+}
+
+#[export]
+pub fn get_response_value(response: BenchmarkResponse) -> Option<DataPoint> {
+    response.result.ok()
 }

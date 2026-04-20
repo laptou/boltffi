@@ -1,11 +1,11 @@
 [package]
 name = "boltffi_ffi_rules"
-version = "0.23.1"
-edition = "2024"
-authors = ["Ali A. Hilal <me@alihilal.com>"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "FFI type rules and transport encoding for BoltFFI"
-repository = "https://github.com/boltffi/boltffi"
 keywords = ["ffi", "encoding", "transport", "bindings"]
 categories = ["development-tools::ffi"]
 
@@ -13,10 +13,10 @@ categories = ["development-tools::ffi"]
 serde = ["dep:serde"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-rstest = "0.25"
+rstest.workspace = true
 
 [lints]
 workspace = true

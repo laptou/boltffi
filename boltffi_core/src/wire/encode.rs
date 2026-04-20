@@ -338,6 +338,30 @@ impl<T: WireEncode> WireEncode for Option<T> {
     }
 }
 
+impl<T: WireEncode> WireEncode for Box<T> {
+    const ENCODING_KIND: WireEncodingKind = T::ENCODING_KIND;
+
+    #[inline]
+    fn is_fixed_size() -> bool {
+        T::is_fixed_size()
+    }
+
+    #[inline]
+    fn fixed_size() -> Option<usize> {
+        T::fixed_size()
+    }
+
+    #[inline]
+    fn wire_size(&self) -> usize {
+        (**self).wire_size()
+    }
+
+    #[inline]
+    fn encode_to(&self, buffer: &mut [u8]) -> usize {
+        (**self).encode_to(buffer)
+    }
+}
+
 impl<T: WireEncode> WireEncode for Vec<T> {
     #[inline]
     fn wire_size(&self) -> usize {
@@ -810,6 +834,112 @@ mod tests {
             s.encode_to(&mut buf);
 
             assert_eq!(&buf[4..], s.as_bytes());
+        }
+    }
+
+    mod unit_type {
+        use super::*;
+
+        #[test]
+        fn unit_wire_size_is_zero() {
+            assert_eq!(().wire_size(), 0);
+        }
+
+        #[test]
+        fn unit_is_fixed_size() {
+            assert!(<()>::is_fixed_size());
+            assert_eq!(<()>::fixed_size(), Some(0));
+        }
+
+        #[test]
+        fn unit_encode_writes_nothing() {
+            let mut buf = [0xFFu8; 4];
+            let written = ().encode_to(&mut buf);
+            assert_eq!(written, 0);
+            assert_eq!(buf, [0xFF; 4]); // buffer untouched
+        }
+
+        #[test]
+        fn result_ok_unit_wire_size() {
+            let val: Result<(), String> = Ok(());
+            assert_eq!(val.wire_size(), 1); // tag only, no payload
+        }
+
+        #[test]
+        fn result_ok_unit_encode() {
+            let mut buf = [0u8; 16];
+            let val: Result<(), i32> = Ok(());
+            let written = val.encode_to(&mut buf);
+            assert_eq!(written, 1);
+            assert_eq!(buf[0], 0); // Ok tag
+        }
+    }
+
+    #[allow(unused_allocation)]
+    mod box_type {
+        use super::*;
+
+        #[test]
+        fn box_i32_wire_size() {
+            let val = Box::new(42i32);
+            assert_eq!(val.wire_size(), 4);
+        }
+
+        #[test]
+        fn box_i32_is_fixed_size() {
+            assert!(<Box<i32>>::is_fixed_size());
+            assert_eq!(<Box<i32>>::fixed_size(), Some(4));
+        }
+
+        #[test]
+        fn box_i32_encoding_kind_is_blittable() {
+            assert_eq!(<Box<i32>>::ENCODING_KIND, WireEncodingKind::Blittable);
+        }
+
+        #[test]
+        fn box_string_encoding_kind_is_general() {
+            assert_eq!(<Box<String>>::ENCODING_KIND, WireEncodingKind::General);
+        }
+
+        #[test]
+        fn box_string_not_fixed_size() {
+            assert!(!<Box<String>>::is_fixed_size());
+            assert_eq!(<Box<String>>::fixed_size(), None);
+        }
+
+        #[test]
+        fn box_i32_encode_matches_bare() {
+            let mut buf_boxed = [0u8; 4];
+            let mut buf_bare = [0u8; 4];
+
+            Box::new(42i32).encode_to(&mut buf_boxed);
+            42i32.encode_to(&mut buf_bare);
+
+            assert_eq!(buf_boxed, buf_bare);
+        }
+
+        #[test]
+        fn box_string_encode_matches_bare() {
+            let s = "hello".to_string();
+            let mut buf_boxed = vec![0u8; s.wire_size()];
+            let mut buf_bare = vec![0u8; s.wire_size()];
+
+            Box::new(s.clone()).encode_to(&mut buf_boxed);
+            s.encode_to(&mut buf_bare);
+
+            assert_eq!(buf_boxed, buf_bare);
+        }
+
+        #[test]
+        fn box_vec_encode_matches_bare() {
+            let v: Vec<i32> = vec![1, 2, 3];
+            let mut buf_boxed = vec![0u8; v.wire_size()];
+            let mut buf_bare = vec![0u8; v.wire_size()];
+
+            Box::new(v.clone()).encode_to(&mut buf_boxed);
+            v.encode_to(&mut buf_bare);
+
+            assert_eq!(buf_boxed, buf_bare);
         }
     }
 

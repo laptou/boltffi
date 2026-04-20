@@ -42,5 +42,34 @@ final class ErrorEnumsResultsTests: XCTestCase {
                 AppError(code: 500, message: "Division by zero")
             )
         }
+
+        XCTAssertEqual(processValue(value: 3), .success)
+        XCTAssertEqual(processValue(value: 0), .errorCode(-1))
+        XCTAssertEqual(processValue(value: -2), .errorWithData(code: -2, detail: -4))
+        XCTAssertTrue(apiResultIsSuccess(result: .success))
+        XCTAssertFalse(apiResultIsSuccess(result: .errorCode(-1)))
+
+        XCTAssertEqual(try tryCompute(value: 3), 6)
+        XCTAssertThrowsError(try tryCompute(value: -1)) { error in
+            XCTAssertEqual(error as? ComputeError, .overflow(value: -1, limit: 0))
+        }
+
+        let point = DataPoint(x: 1, y: 2, timestamp: 3)
+        let okResponse = createSuccessResponse(requestId: 7, point: point)
+        XCTAssertEqual(
+            okResponse,
+            BenchmarkResponse(requestId: 7, result: .success(point))
+        )
+
+        let errorResponse = createErrorResponse(requestId: 8, error: .invalidInput(-9))
+        XCTAssertEqual(
+            errorResponse,
+            BenchmarkResponse(requestId: 8, result: .failure(.invalidInput(-9)))
+        )
+
+        XCTAssertTrue(isResponseSuccess(response: okResponse))
+        XCTAssertFalse(isResponseSuccess(response: errorResponse))
+        XCTAssertEqual(getResponseValue(response: okResponse), point)
+        XCTAssertNil(getResponseValue(response: errorResponse))
     }
 }

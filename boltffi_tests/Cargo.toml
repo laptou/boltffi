@@ -1,15 +1,15 @@
 [package]
 name = "boltffi_tests"
-version = "0.23.1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [dependencies]
-boltffi = { path = "../boltffi" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros"] }
+boltffi.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }
 
 [dev-dependencies]
-boltffi_core = { path = "../boltffi_core" }
+boltffi_core.workspace = true
 
 [lints]
 workspace = true

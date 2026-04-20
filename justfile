@@ -26,9 +26,9 @@ setup: setup-targets setup-tools
 install:
     cargo install --path boltffi_cli --force
 
-# Run boltffi pack in benchmarks/rust-boltffi
+# Run boltffi pack for the benchmark overlay
 pack *args:
-    cd benchmarks/rust-boltffi && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- pack {{args}}
+    cd examples/demo && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- --overlay boltffi.benchmark.toml pack {{args}}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build
@@ -104,30 +104,42 @@ check: fmt-check lint test
 # Benchmarks
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Audit benchmark harness names against the shared catalog
+bench-audit:
+    python3 benchmarks/scripts/audit_benchmark_catalog.py
+
+# Audit benchmark coverage against the callable exports in examples/demo
+bench-demo-audit:
+    python3 benchmarks/scripts/audit_demo_export_coverage.py
+
+# Render the machine-readable demo benchmark family plan
+bench-demo-plan:
+    python3 benchmarks/scripts/render_demo_benchmark_policy.py
+
 # Swift benchmark (macOS CLI) - builds xcframework and runs benchmark
 bench-swift:
     #!/usr/bin/env bash
     set -e
     tmpfile=$(mktemp /tmp/boltffi_bench_swift_XXXXXX.txt)
     trap "rm -f $tmpfile" EXIT
-    cd benchmarks/rust-boltffi
+    cd benchmarks/generated/boltffi
     ./build.sh --platform apple --release 2>&1 | tee "$tmpfile"
     echo ""
     echo "=== Summary ==="
-    python3 ../swift-macos-bench/format_bench.py < "$tmpfile"
+    python3 ../harnesses/swift-macos-bench/format_bench.py < "$tmpfile"
 
 # Kotlin benchmark (JVM via JMH) - builds JNI libs, runs JMH, generates report
 bench-kotlin:
     #!/usr/bin/env bash
     set -e
     echo "=== Building BoltFFI for Android (Kotlin bindings + JNI glue) ==="
-    cd benchmarks/rust-boltffi && ./build.sh --platform android --release --skip-bench
+    cd benchmarks/generated/boltffi && ./build.sh --platform android --release --skip-bench
     
     echo "=== Building UniFFI Kotlin baseline ==="
-    cd ../rust-uniffi && ./build-kotlin.sh
+    cd ../adapters/uniffi && ./build-kotlin.sh
     
     echo "=== Building desktop JNI library ==="
-    cd ../kotlin-jvm-bench && ./build-jni.sh
+    cd ../harnesses/kotlin-jvm-bench && ./build-jni.sh
     
     echo "=== Running JMH benchmarks ==="
     ./gradlew jmh --rerun
@@ -142,44 +154,56 @@ bench-java:
     #!/usr/bin/env bash
     set -e
     echo "=== Building UniFFI Java FFM bindings ==="
-    cd benchmarks/rust-uniffi && ./build-java.sh
+    cd benchmarks/adapters/uniffi && ./build-java.sh
 
     echo "=== Running JMH benchmarks ==="
-    cd ../java-jvm-bench && ./gradlew jmh --rerun
+    cd ../harnesses/java-jvm-bench && ./gradlew jmh --rerun
 
     echo ""
     echo "Report: $(pwd)/build/results/jmh/results.json"
 
+# C# benchmark (.NET via BenchmarkDotNet) - builds cdylib, generates bindings, runs benchmarks.
+# Pass extra args after --, e.g. `just bench-csharp -- --filter '*String*'`.
+bench-csharp *args:
+    #!/usr/bin/env bash
+    set -e
+    cd benchmarks/harnesses/dotnet-bench
+    if [ -n "{{ args }}" ]; then
+        ./run-bench.sh {{ args }}
+    else
+        ./run-bench.sh
+    fi
+
 # Build xcframework only (for iOS development in Xcode)
 bench-build-ios:
-    cd benchmarks/rust-boltffi && ./build.sh --platform apple --release --skip-bench
+    cd benchmarks/generated/boltffi && ./build.sh --platform apple --release --skip-bench
     @echo ""
-    @echo "xcframework ready. Open benchmarks/ios-app/ in Xcode."
+    @echo "xcframework ready. Open benchmarks/harnesses/ios-app/ in Xcode."
 
 # Build jniLibs only (for Android development in Android Studio)
 bench-build-android:
-    cd benchmarks/rust-boltffi && ./build.sh --platform android --release --skip-bench
+    cd benchmarks/generated/boltffi && ./build.sh --platform android --release --skip-bench
     @echo ""
-    @echo "jniLibs ready. Open benchmarks/android-app/ in Android Studio."
+    @echo "jniLibs ready. Open benchmarks/harnesses/android-app/ in Android Studio."
 
 # WASM benchmark (Node.js) - builds wasm, runs benchmark
 bench-wasm:
     #!/usr/bin/env bash
     set -e
     echo "=== Building BoltFFI WASM ==="
-    cd benchmarks/rust-boltffi && cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- pack wasm --release --regenerate
+    cd examples/demo && CARGO_TARGET_DIR=../../benchmarks/generated/boltffi/target cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- --overlay boltffi.benchmark.toml pack wasm --release --regenerate
     
     echo "=== Building wasm-bindgen baseline ==="
-    cd ../rust-wasm-bindgen && cargo build --target wasm32-unknown-unknown --release
-    wasm-bindgen --target experimental-nodejs-module --out-dir dist target/wasm32-unknown-unknown/release/bench_wasm_bindgen.wasm
+    cd ../../examples/demo && CARGO_TARGET_DIR=../../benchmarks/generated/wasm-bindgen/target cargo build --target wasm32-unknown-unknown --release --features wasm-bench
+    wasm-bindgen --target experimental-nodejs-module --out-dir ../../benchmarks/generated/wasm-bindgen/dist ../../benchmarks/generated/wasm-bindgen/target/wasm32-unknown-unknown/release/demo.wasm
     
     echo "=== Copying to benchmark runner ==="
-    mkdir -p ../wasm-bench/boltffi ../wasm-bench/wasmbindgen
-    cp -r ../rust-boltffi/dist/wasm/pkg/* ../wasm-bench/boltffi/
-    cp -r dist/* ../wasm-bench/wasmbindgen/
+    mkdir -p ../harnesses/wasm-bench/build/generated/boltffi ../harnesses/wasm-bench/build/generated/wasmbindgen
+    cp -r ../generated/boltffi/dist/wasm/pkg/* ../harnesses/wasm-bench/build/generated/boltffi/
+    cp -r ../generated/wasm-bindgen/dist/* ../harnesses/wasm-bench/build/generated/wasmbindgen/
     
     echo "=== Running benchmarks ==="
-    cd ../wasm-bench && npm ci --silent && node bench.mjs
+    cd ../harnesses/wasm-bench && npm ci --silent && node bench.mjs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean
@@ -191,18 +215,32 @@ clean:
 
 # Clean benchmark build artifacts
 clean-benchmarks:
-    rm -rf benchmarks/rust-boltffi/target
-    rm -rf benchmarks/rust-boltffi/dist
-    rm -rf benchmarks/rust-uniffi/target
-    rm -rf benchmarks/rust-uniffi/dist
-    rm -rf benchmarks/rust-wasm-bindgen/target
-    rm -rf benchmarks/rust-wasm-bindgen/dist
-    rm -rf benchmarks/swift-macos-bench/.build
-    rm -rf benchmarks/kotlin-jvm-bench/build
-    rm -rf benchmarks/java-jvm-bench/build
-    rm -rf benchmarks/wasm-bench/boltffi
-    rm -rf benchmarks/wasm-bench/wasmbindgen
-    rm -rf benchmarks/wasm-bench/node_modules
+    rm -rf benchmarks/generated/boltffi/target
+    rm -rf benchmarks/generated/boltffi/dist
+    rm -rf benchmarks/adapters/uniffi/target
+    rm -rf benchmarks/adapters/uniffi/dist
+    rm -rf benchmarks/generated/wasm-bindgen/target
+    rm -rf benchmarks/generated/wasm-bindgen/dist
+    rm -rf benchmarks/harnesses/swift-macos-bench/.build
+    rm -rf benchmarks/harnesses/swift-macos-bench/.swiftpm
+    rm -rf benchmarks/harnesses/swift-macos-bench/build
+    rm -rf benchmarks/harnesses/kotlin-jvm-bench/build
+    rm -rf benchmarks/harnesses/kotlin-jvm-bench/.gradle
+    rm -rf benchmarks/harnesses/kotlin-jvm-bench/.kotlin
+    rm -rf benchmarks/harnesses/kotlin-jvm-bench/hs_err_pid*.log
+    rm -rf benchmarks/harnesses/java-jvm-bench/build
+    rm -rf benchmarks/harnesses/java-jvm-bench/.gradle
+    rm -rf benchmarks/harnesses/dotnet-bench/bin
+    rm -rf benchmarks/harnesses/dotnet-bench/obj
+    rm -rf benchmarks/harnesses/dotnet-bench/BenchmarkDotNet.Artifacts
+    rm -rf benchmarks/harnesses/dotnet-bench/build
+    rm -rf benchmarks/harnesses/wasm-bench/build
+    rm -rf benchmarks/harnesses/wasm-bench/node_modules
+    rm -rf benchmarks/harnesses/android-app/.gradle
+    rm -rf benchmarks/harnesses/android-app/.kotlin
+    rm -rf benchmarks/harnesses/android-app/build
+    rm -rf benchmarks/harnesses/android-app/app/build
+    rm -rf benchmarks/harnesses/ios-app/.build
 
 # Clean everything
 clean-all: clean clean-benchmarks

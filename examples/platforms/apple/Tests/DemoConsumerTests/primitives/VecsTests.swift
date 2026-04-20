@@ -22,5 +22,13 @@ final class VecsTests: XCTestCase {
         XCTAssertEqual(sumVecI32(v: [10, 20, 30]), 60)
         XCTAssertEqual(makeRange(start: 0, end: 5), [0, 1, 2, 3, 4])
         XCTAssertEqual(reverseVecI32(v: [1, 2, 3]), [3, 2, 1])
+        XCTAssertEqual(generateI32Vec(count: 4), [0, 1, 2, 3])
+        XCTAssertEqual(sumI32Vec(values: [1, 2, 3]), 6)
+        XCTAssertEqual(generateF64Vec(count: 3).count, 3)
+        XCTAssertEqual(sumF64Vec(values: [0.5, 1.5, 2.0]), 4.0, accuracy: 1e-9)
+        var incrementedValues: [UInt64] = [1, 2]
+        incU64(values: &incrementedValues)
+        XCTAssertEqual(incrementedValues, [2, 2])
+        XCTAssertEqual(incU64Value(value: 9), 10)
     }
 }

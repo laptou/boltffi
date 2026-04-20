@@ -3,6 +3,7 @@ import {
   assertThrowsWithCode,
   demo,
 } from "../support/index.mjs";
+import { wireErr, wireOk } from "@boltffi/runtime";
 
 export async function run() {
   assert.equal(demo.checkedDivide(10, 2), 5);
@@ -41,4 +42,44 @@ export async function run() {
 
   assert.equal(demo.mayFail(true), "Success!");
   assert.equal(demo.divideApp(10, 2), 5);
+  assert.deepEqual(demo.processValue(3), { tag: "Success" });
+  assert.deepEqual(demo.processValue(0), { tag: "ErrorCode", value0: -1 });
+  assert.equal(demo.apiResultIsSuccess({ tag: "Success" }), true);
+  assert.equal(demo.apiResultIsSuccess({ tag: "ErrorCode", value0: -1 }), false);
+  assert.equal(demo.tryCompute(3), 6);
+  try {
+    demo.tryCompute(-1);
+    assert.fail("expected tryCompute(-1) to throw");
+  } catch (error) {
+    assert.ok(error instanceof demo.ComputeErrorException);
+    assert.deepEqual(error.value, { tag: "Overflow", value: -1, limit: 0 });
+  }
+
+  const okResponse = demo.createSuccessResponse(7n, { x: 1, y: 2, timestamp: 3n });
+  assert.deepEqual(okResponse, {
+    requestId: 7n,
+    result: { x: 1, y: 2, timestamp: 3n },
+  });
+
+  try {
+    demo.createErrorResponse(8n, { tag: "InvalidInput", value0: -9 });
+    assert.fail("expected createErrorResponse to throw");
+  } catch (error) {
+    assert.ok(error instanceof demo.ComputeErrorException);
+    assert.deepEqual(error.value, { tag: "InvalidInput", value0: -9 });
+  }
+
+  const successEnvelope = {
+    requestId: 11n,
+    result: wireOk({ x: 4, y: 5, timestamp: 6n }),
+  };
+  const errorEnvelope = {
+    requestId: 12n,
+    result: wireErr({ tag: "InvalidInput", value0: -2 }),
+  };
+
+  assert.equal(demo.isResponseSuccess(successEnvelope), true);
+  assert.equal(demo.isResponseSuccess(errorEnvelope), false);
+  assert.deepEqual(demo.getResponseValue(successEnvelope), { x: 4, y: 5, timestamp: 6n });
+  assert.equal(demo.getResponseValue(errorEnvelope), null);
 }

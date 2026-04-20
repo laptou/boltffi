@@ -53,8 +53,11 @@ impl LanguageGenerator for PythonGenerator {
         )
         .lower()
         .map_err(|error| match error {
-            PythonLowerError::TopLevelFunctionNameCollision { .. }
-            | PythonLowerError::ParameterNameCollision { .. } => CliError::CommandFailed {
+            PythonLowerError::TopLevelNameCollision { .. }
+            | PythonLowerError::ParameterNameCollision { .. }
+            | PythonLowerError::EnumMemberNameCollision { .. }
+            | PythonLowerError::EnumCallableNameCollision { .. }
+            | PythonLowerError::NativeModuleNameCollision { .. } => CliError::CommandFailed {
                 command: format!("generate python: {error}"),
                 status: None,
             },

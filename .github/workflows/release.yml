@@ -43,7 +43,10 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -112,9 +115,11 @@ jobs:
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          # caching handled by Swatinem/rust-cache below
+          cache: false
+          target: ${{ matrix.target }}
 
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -177,7 +182,10 @@ jobs:
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish crates

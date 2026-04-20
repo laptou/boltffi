@@ -33,5 +33,13 @@ final class DataEnumTests: XCTestCase {
         XCTAssertEqual(animalName(a: Animal.fish(count: 5)), "5 fish")
         XCTAssertEqual(animalName(a: Animal.cat(name: "Milo", indoor: true)), "Milo")
     }
-}
 
+    func testTaskStatusFns() {
+        XCTAssertEqual(getStatusProgress(status: .pending), 0)
+        XCTAssertEqual(getStatusProgress(status: .inProgress(progress: 7)), 7)
+        XCTAssertEqual(getStatusProgress(status: .completed(result: 9)), 9)
+        XCTAssertEqual(getStatusProgress(status: .failed(errorCode: -5, retryCount: 2)), -5)
+        XCTAssertFalse(isStatusComplete(status: .pending))
+        XCTAssertTrue(isStatusComplete(status: .completed(result: 1)))
+    }
+}

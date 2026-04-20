@@ -1,11 +1,11 @@
 [package]
 name = "boltffi_core"
-version = "0.23.1"
-edition = "2024"
-authors = ["Ali A. Hilal <me@alihilal.com>"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Core runtime types for BoltFFI - high-performance FFI bindings generator"
-repository = "https://github.com/boltffi/boltffi"
 keywords = ["ffi", "runtime", "bindings", "interop"]
 categories = ["development-tools::ffi"]
 
@@ -20,7 +20,7 @@ chrono = ["dep:chrono"]
 url = ["dep:url"]
 
 [dependencies]
-boltffi_macros = { version = "0.23.1", path = "../boltffi_macros" }
+boltffi_macros.workspace = true
 mimalloc = { version = "0.1", default-features = false, optional = true }
 uuid = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }

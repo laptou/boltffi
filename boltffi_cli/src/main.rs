@@ -19,8 +19,8 @@ use commands::doctor::{ConfigSummary, DoctorOptions};
 use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use commands::init::InitOptions;
 use commands::pack::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackExecutionOptions,
+    PackJavaOptions, PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -485,12 +485,14 @@ fn execute_command(
                     experimental,
                     python_interpreters,
                 } => PackCommand::All(PackAllOptions {
-                    release,
-                    regenerate,
-                    no_build,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     experimental,
                     python_interpreters,
-                    cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Apple {
                     release,
@@ -501,10 +503,13 @@ fn execute_command(
                     xcframework_only,
                     layout,
                 } => PackCommand::Apple(PackAppleOptions {
-                    release,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     version,
-                    regenerate,
-                    no_build,
                     spm_only,
                     xcframework_only,
                     layout: layout.map(|l| match l {
@@ -512,38 +517,43 @@ fn execute_command(
                         PackLayoutArg::Split => crate::config::SpmLayout::Split,
                         PackLayoutArg::FfiOnly => crate::config::SpmLayout::FfiOnly,
                     }),
-                    cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Android {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Android(PackAndroidOptions {
-                    release,
-                    regenerate,
-                    no_build,
-                    cargo_args: cargo_args.clone(),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                 }),
                 PackTargetArg::Wasm {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Wasm(PackWasmOptions {
-                    release,
-                    regenerate,
-                    no_build,
-                    cargo_args: cargo_args.clone(),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                 }),
                 PackTargetArg::Java {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Java(PackJavaOptions {
-                    release,
-                    regenerate,
-                    no_build,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     experimental: false,
-                    cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Python {
                     release,
@@ -552,12 +562,14 @@ fn execute_command(
                     experimental,
                     python_interpreters,
                 } => PackCommand::Python(PackPythonOptions {
-                    release,
-                    regenerate,
-                    no_build,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     experimental,
                     python_interpreters,
-                    cargo_args: cargo_args.clone(),
                 }),
             };
             run_pack(&config, command, reporter)
@@ -576,6 +588,20 @@ fn execute_command(
                 }
             })
         }
+    }
+}
+
+fn pack_execution_options(
+    release: bool,
+    regenerate: bool,
+    no_build: bool,
+    cargo_args: Vec<String>,
+) -> PackExecutionOptions {
+    PackExecutionOptions {
+        release,
+        regenerate,
+        no_build,
+        cargo_args,
     }
 }
 
@@ -789,83 +815,59 @@ fn release_pack_commands(
         Some(BuildPlatformArg::Apple) => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
         }
         Some(BuildPlatformArg::Android) => {
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
         }
         Some(BuildPlatformArg::Wasm) => {
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
         }
         Some(BuildPlatformArg::All) | None => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
             if config.should_process(Target::Python, false) {
                 commands.push(PackCommand::Python(PackPythonOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: false,
+                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
                     experimental: false,
                     python_interpreters: Vec::new(),
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
-                    release: true,
-                    regenerate: true,
-                    no_build: false,
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
                     experimental: false,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
         }
@@ -1064,22 +1066,22 @@ enabled = true
         assert_eq!(commands.len(), 4);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[1],
-            PackCommand::Android(options) if options.no_build
+            PackCommand::Android(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[2],
-            PackCommand::Wasm(options) if options.no_build
+            PackCommand::Wasm(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[3],
             PackCommand::Java(options)
-                if !options.no_build
-                    && options.release
-                    && options.regenerate
+                if !options.execution.no_build
+                    && options.execution.release
+                    && options.execution.regenerate
                     && !options.experimental
         ));
     }
@@ -1104,7 +1106,7 @@ enabled = true
         assert_eq!(commands.len(), 1);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
     }
 
@@ -1152,9 +1154,9 @@ enabled = true
         assert!(commands.iter().any(|command| matches!(
             command,
             PackCommand::Python(options)
-                if options.release
-                    && !options.regenerate
-                    && !options.no_build
+                if options.execution.release
+                    && !options.execution.regenerate
+                    && !options.execution.no_build
                     && !options.experimental
         )));
     }

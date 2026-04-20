@@ -1,186 +1,197 @@
 # BoltFFI Benchmarks
 
-Performance comparison across platforms:
-- **Swift/Kotlin**: BoltFFI vs UniFFI
-- **Java (JVM)**: BoltFFI vs [uniffi-bindgen-java](https://github.com/IronCoreLabs/uniffi-bindgen-java) (FFM) vs UniFFI (Kotlin/JNA)
-- **WASM**: BoltFFI vs wasm-bindgen
+Cross-language FFI performance suite. BoltFFI is compared against:
 
-All libraries wrap the exact same Rust code with identical public APIs, so the only variable is FFI overhead.
+- **Swift / Kotlin (iOS, Android, macOS)**: UniFFI
+- **Java (JVM)**: [uniffi-bindgen-java](https://github.com/IronCoreLabs/uniffi-bindgen-java) (FFM) and UniFFI (Kotlin/JNA)
+- **WASM (Node.js)**: wasm-bindgen
+- **C# (.NET)**: UniFFI (via [uniffi-bindgen-cs](https://github.com/NordSecurity/uniffi-bindgen-cs))
 
-## Prerequisites
+Every backend wraps the **same Rust code** with identical public APIs, so the only variable is FFI overhead.
+
+## How the new system works
+
+There used to be separate `rust-boltffi` / `rust-uniffi` / `rust-wasm-bindgen` crates, each re-implementing the same types and functions. That is gone. The Rust source of truth is now **[`examples/demo`](../examples/demo)** — the same crate used by the platform demos and integration tests. Benchmarks are just another consumer of its public surface.
+
+Three pieces make this work:
+
+1. **`#[benchmark_candidate]` macro** ([`examples/demo/bench_macros`](../examples/demo/bench_macros)). Annotate an item with the kinds of backends it should be exported to:
+
+   ```rust
+   #[benchmark_candidate(function, uniffi, wasm_bindgen)]
+   pub fn echo_i32(value: i32) -> i32 { value }
+
+   #[benchmark_candidate(record, uniffi, wasm_bindgen)]
+   pub struct Location { /* ... */ }
+
+   #[benchmark_candidate(object, uniffi)]
+   pub struct Counter { /* ... */ }
+   ```
+
+   The macro expands to `#[cfg_attr(feature = "uniffi", uniffi::export)]` (and the wasm-bindgen equivalent) so the item is picked up by each backend only when its feature is enabled. BoltFFI itself discovers items through the regular `#[export]` / derive attributes already on the demo types — the macro is only about the *other* backends.
+
+2. **Benchmark overlay** [`examples/demo/boltffi.benchmark.toml`](../examples/demo/boltffi.benchmark.toml). Same demo crate, different output paths. It redirects every BoltFFI artifact (xcframework, jniLibs, WASM pkg, Java/C# dist) into `benchmarks/generated/boltffi/…`, so benchmark builds never collide with the regular demo outputs. The CLI picks it up with `--overlay`.
+
+3. **UniFFI / wasm-bindgen adapters** under [`benchmarks/adapters/uniffi`](./adapters/uniffi) and [`benchmarks/generated/wasm-bindgen`](./generated/wasm-bindgen). These don't contain Rust source — they are build scripts that compile `examples/demo` with `--features uniffi` or `--features wasm-bench` and run the respective binding generators. The produced libraries and bindings are consumed by the harnesses.
+
+Layout:
+
+```
+benchmarks/
+├── adapters/uniffi/       # UniFFI build glue (no src; compiles examples/demo --features uniffi)
+├── generated/
+│   ├── boltffi/           # BoltFFI outputs produced from the benchmark overlay
+│   └── wasm-bindgen/      # wasm-bindgen outputs from examples/demo --features wasm-bench
+├── harnesses/             # Runnable benchmark suites (one per platform)
+│   ├── swift-macos-bench/
+│   ├── ios-app/
+│   ├── android-app/
+│   ├── kotlin-jvm-bench/
+│   ├── java-jvm-bench/
+│   ├── wasm-bench/
+│   └── dotnet-bench/
+└── scripts/               # Catalog, inventory, audit, normalization, publishing
+```
+
+## Where to see the results
+
+Published runs live in the dashboard repo: **https://github.com/boltffi/benchmarks-dashboard**. Every tagged release of BoltFFI runs [`/.github/workflows/benchmark-release.yml`](../.github/workflows/benchmark-release.yml), which executes the full harness suite on macOS CI and commits the normalized JSON under `public/data/` in the dashboard repo. The dashboard UI reads from there.
+
+Locally, each harness writes a raw report plus a normalized `benchmark_run.json` under its `build/results/…` directory:
+
+| Harness        | Raw report                                            | Normalized document                                   |
+|----------------|-------------------------------------------------------|-------------------------------------------------------|
+| Swift          | `harnesses/swift-macos-bench/build/results/swift-benchmark/` | `.../benchmark_run.json` |
+| Kotlin JMH     | `harnesses/kotlin-jvm-bench/build/results/jmh/report.txt`    | `.../benchmark_run.json` |
+| Java JMH       | `harnesses/java-jvm-bench/build/results/jmh/results.json`    | `.../benchmark_run.json` |
+| WASM           | `harnesses/wasm-bench/build/results/benchmarkjs/`            | `.../benchmark_run.json` |
+| .NET           | `harnesses/dotnet-bench/build/results/dotnet/results.json`   | `.../benchmark_run.json` |
+
+To push local runs into a dashboard clone, point `BENCHMARK_ARCHIVE_REPO` at your checkout and run [`benchmarks/scripts/publish-benchmark-runs.sh`](./scripts/publish-benchmark-runs.sh). CI does the same via [`publish_benchmark_archive.py`](./scripts/publish_benchmark_archive.py).
+
+## Running benchmarks
+
+Prereqs:
 
 ```bash
-just setup-targets
+just setup-targets            # rustup targets for the platforms you want
+# Android: export ANDROID_NDK_HOME
+# Java FFM: JDK 22+ and uniffi-bindgen-java on PATH (or UNIFFI_BINDGEN_JAVA)
+# .NET:    dotnet SDK that supports net10.0
 ```
 
-For Android, set `ANDROID_NDK_HOME`.
+### All harnesses (what CI does)
 
-## Why This Matters
-
-FFI has inherent costs: crossing the language boundary, converting types, copying memory. UniFFI uses a runtime approach with serialization similar to JSON. BoltFFI generates specialized code at compile time that avoids most of this overhead.
-
-These benchmarks isolate the FFI layer by using trivial Rust implementations (just constructing data or summing numbers).
-
-## Test Data Structures
-
-We test several struct types with increasing complexity:
-
-**Location** (34 bytes, 6 fields)
-```rust
-struct Location {
-    id: i64, lat: f64, lng: f64, rating: f64, review_count: i32, is_open: bool
-}
-```
-Basic struct with only primitive fields.
-
-**Trade** (65 bytes, 9 fields)
-```rust
-struct Trade {
-    id: i64, symbol_id: i32, price: f64, quantity: i64,
-    bid: f64, ask: f64, volume: i64, timestamp: i64, is_buy: bool
-}
-```
-Larger struct representing financial data. Still only primitives.
-
-**Particle** (81 bytes, 10 fields)
-```rust
-struct Particle {
-    id: i64, x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64,
-    mass: f64, charge: f64, active: bool
-}
-```
-Physics simulation data. Many f64 fields.
-
-**SensorReading** (61 bytes, 9 fields)
-```rust
-struct SensorReading {
-    sensor_id: i64, timestamp: i64, temperature: f64, humidity: f64,
-    pressure: f64, light: f64, battery: f64, signal_strength: i32, is_valid: bool
-}
-```
-IoT telemetry data.
-
-**UserProfile** (variable size, 9 fields with heap data)
-```rust
-struct UserProfile {
-    id: i64, name: String, email: String, bio: String, age: i32, score: f64,
-    tags: Vec<String>, scores: Vec<i32>, is_active: bool
-}
-```
-Contains three String fields, a `Vec<String>`, and a `Vec<i32>`. String handling and nested collections are where FFI's serialization overhead becomes most apparent.
-
-## Benchmark Categories
-
-### Call Overhead
-- `noop`: Empty function. Pure FFI call cost with zero data transfer.
-
-### Primitives
-- `echo_i32`, `echo_f64`: Round-trip a single number.
-- `add`, `multiply`: Arithmetic with two inputs and one output.
-- `inc_u64`: Mutate a value through a mutable slice.
-
-### Strings
-- `echo_string_small`: 5-character string round-trip.
-- `echo_string_1k`: 1,000-character string round-trip.
-
-Strings require UTF-8 validation, length calculation, and memory allocation. The overhead gap narrows with size because memcpy eventually dominates.
-
-### Struct Generation (Rust → Swift/Kotlin)
-- `generate_locations_1k`, `generate_locations_10k`
-- `generate_trades_1k`, `generate_trades_10k`
-- `generate_particles_1k`, `generate_particles_10k`
-- `generate_sensors_1k`, `generate_sensors_10k`
-- `generate_user_profiles_100`, `generate_user_profiles_1k`
-
-Rust creates vectors of structs and returns them. This measures serialization cost. UserProfile is particularly expensive because each item contains multiple heap-allocated strings.
-
-### Struct Consumption (Swift/Kotlin → Rust)
-- `sum_ratings`, `process_locations`: Pass Location vectors to Rust.
-- `sum_trade_volumes`: Pass Trade vectors to Rust.
-- `sum_particle_masses`: Pass Particle vectors to Rust.
-- `avg_sensor_temp`: Pass SensorReading vectors to Rust.
-- `sum_user_scores`, `count_active_users`: Pass UserProfile vectors to Rust.
-
-This measures deserialization cost.
-
-### Primitive Vectors
-- `generate_i32_vec_10k`, `generate_i32_vec_100k`: Create Vec<i32>.
-- `sum_i32_vec_10k`, `sum_i32_vec_100k`: Consume Vec<i32>.
-- `generate_f64_vec_10k`, `sum_f64_vec_10k`: Same for f64.
-- `generate_bytes_64k`: Raw byte array (64KB).
-
-### Classes (Stateful Objects)
-- `counter_increment`: Create a Counter object in Rust, call increment() 1,000 times from Swift/Kotlin, then call get().
-- `datastore_add`: Create a DataStore, add 1,000 DataPoint structs.
-- `accumulator`: Create an Accumulator, call add() 1,000 times, get(), reset().
-
-These measure the cost of holding a Rust object handle and making repeated method calls across the FFI boundary.
-
-### Enums
-- `simple_enum`: C-style enum (Direction: North/South/East/West).
-- `data_enum_input`: Enum with associated data (Status::InProgress(i32), Status::Completed(i32)).
-- `find_even`: Returns Option<i32>. Tests nullable type handling.
-
-### Async Functions
-- `async_add`: Simple async function that adds two integers.
-
-Measures async function call overhead including task spawning and completion handling.
-
-### Callbacks (Foreign Traits)
-- `callback_100`, `callback_1k`: Create a DataConsumer in Rust, set a DataProvider implemented in Swift/Kotlin, call computeSum() which iterates through all items.
-
-Measures the cost of Rust calling back into Swift/Kotlin. Each iteration involves:
-1. Call provider.getCount() from Rust → Swift/Kotlin
-2. Loop calling provider.getItem(i) for each item (100 or 1000 calls)
-3. Deserialize each DataPoint struct returned from Swift/Kotlin
-
-## Running the Benchmarks
-
-### Swift (macOS)
+The release workflow calls the `run-*.sh` scripts directly; you can do the same locally:
 
 ```bash
-just bench-swift
+./benchmarks/harnesses/swift-macos-bench/run-bench.sh
+./benchmarks/harnesses/kotlin-jvm-bench/run-jmh.sh
+./benchmarks/harnesses/java-jvm-bench/run-jmh.sh
+./benchmarks/harnesses/wasm-bench/run-bench.sh
+./benchmarks/harnesses/dotnet-bench/run-bench.sh
 ```
 
-### Kotlin (JVM via JMH)
+### Individual harnesses (day-to-day)
+
+| Target              | Command                     | Notes                                                 |
+|---------------------|-----------------------------|-------------------------------------------------------|
+| Swift (macOS CLI)   | `just bench-swift`          | Builds xcframework, runs Swift Package bench          |
+| Kotlin JMH (JVM)    | `just bench-kotlin`         | Builds Android-arch JNI libs, runs JMH                |
+| Java FFM JMH (JVM)  | `just bench-java`           | Builds uniffi-bindgen-java bindings, runs JMH         |
+| WASM (Node.js)      | `just bench-wasm`           | Builds both BoltFFI and wasm-bindgen wasm outputs     |
+| C# (.NET)           | `just bench-csharp`         | BenchmarkDotNet; pass filters after `--`              |
+| iOS                 | `just bench-build-ios`      | Produces xcframework; open the Xcode project to run   |
+| Android             | `just bench-build-android`  | Produces jniLibs; open Android Studio to run          |
+
+Filter examples:
 
 ```bash
-just bench-kotlin
+just bench-csharp -- --filter '*String*'
+# JMH (Kotlin / Java) accepts standard JMH arguments via Gradle:
+#   cd benchmarks/harnesses/kotlin-jvm-bench && ./gradlew jmh -Pjmh.include='.*echo.*'
 ```
 
-Report: `kotlin-jvm-bench/build/results/jmh/report.txt`
+Clean artifacts: `just clean-benchmarks`.
 
-### Java FFM (JVM via JMH)
+## Adding a benchmark
 
-Requires JDK 22+ and `uniffi-bindgen-java` on PATH (or set `UNIFFI_BINDGEN_JAVA`).
+Benchmarks are defined in Rust in `examples/demo`. You do **not** touch separate bench crates anymore.
+
+1. **Write (or pick) the Rust item** in `examples/demo/src/…` where it logically belongs (`primitives/`, `records/`, `classes/`, etc.).
+2. **Annotate it** with `#[benchmark_candidate]`, declaring which comparison backends should export it:
+
+   ```rust
+   use demo_bench_macros::benchmark_candidate;
+
+   #[benchmark_candidate(function, uniffi, wasm_bindgen)]
+   pub fn sum_my_thing(xs: Vec<i32>) -> i64 { xs.iter().map(|x| *x as i64).sum() }
+   ```
+
+   Kinds: `function`, `record`, `enum`, `object`, `impl` (optionally `constructor = "new"`), `callback_interface`. Targets: `uniffi`, `wasm_bindgen`. BoltFFI export comes from the normal `#[export]` / derive attributes that already sit on the item.
+3. **Register it in the catalog** ([`benchmarks/scripts/benchmark_catalog.py`](./scripts/benchmark_catalog.py)). Add a `_case(...)` entry with a canonical name, group, category, and parameters. The catalog is the shared vocabulary that every harness normalizes into — without an entry, the harness output will not map cleanly into `benchmark_run.json`.
+4. **Call it from each harness** that should time it. This is still hand-written, but the code is now thin (just call the bound function or construct the bound object). Harness sources:
+   - Swift: [`harnesses/swift-macos-bench/Sources/{BoltFFI,Uniffi,AsyncRunner}/main.swift`](./harnesses/swift-macos-bench/Sources)
+   - Kotlin (JNI + JNA/UniFFI): [`harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt`](./harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt)
+   - Java FFM: [`harnesses/java-jvm-bench/src/main/java/com/example/bench_compare/{BoltffiJavaBench,UniffiJavaBench}.java`](./harnesses/java-jvm-bench/src/main/java/com/example/bench_compare)
+   - WASM: [`harnesses/wasm-bench/bench.mjs`](./harnesses/wasm-bench/bench.mjs)
+   - .NET: [`harnesses/dotnet-bench/WireReaderBenchmarks.cs`](./harnesses/dotnet-bench/WireReaderBenchmarks.cs)
+   - iOS / Android: the harness apps under [`harnesses/ios-app`](./harnesses/ios-app) and [`harnesses/android-app`](./harnesses/android-app)
+5. **Verify discovery and coverage**:
+
+   ```bash
+   just bench-audit        # harness names must match the catalog
+   just bench-demo-audit   # how much of the demo export surface is benchmarked
+   just bench-demo-plan    # machine-readable benchmark family policy
+   ```
+6. **Run the harness locally**, confirm the new case appears in both the raw report and `benchmark_run.json`, then ship it.
+
+## Removing a benchmark
+
+Reverse of the above, in this order (so audits stay green at every step):
+
+1. Delete the harness calls in every `harnesses/*/…` file that references the case.
+2. Remove the entry from [`benchmarks/scripts/benchmark_catalog.py`](./scripts/benchmark_catalog.py).
+3. If the Rust item exists **only** for benchmarking, remove it from `examples/demo/…` (and drop the `#[benchmark_candidate]` attribute if the item stays but should no longer be re-exported via UniFFI / wasm-bindgen).
+4. Run `just bench-audit && just bench-demo-audit` — both should be clean.
+5. If the case shows up in the dashboard, rename-safe handling is built into `publish_benchmark_archive.py`; historical data for the removed case stays in the archive under its old name.
+
+## Tracking a new benchmark on the dashboard
+
+Nothing extra is needed as long as the case is in the catalog and the harness emits it. The release workflow will pick it up on the next tag: it runs the harnesses, normalizes their outputs with the `*_to_run.py` scripts, and commits into `boltffi/benchmarks-dashboard`. For a dry run before a tag:
 
 ```bash
-just bench-java
+# run any subset of harnesses locally, then:
+BENCHMARK_ARCHIVE_REPO=/path/to/benchmarks-dashboard \
+  ./benchmarks/scripts/publish-benchmark-runs.sh
 ```
 
-Report: `java-jvm-bench/build/results/jmh/results.json`
+Inspect `public/data/` in the dashboard checkout — that is exactly what the hosted site will render.
 
-### iOS
+## Why this matters
 
-```bash
-just bench-build-ios
-# Then open ios-app/ in Xcode
-```
+FFI has inherent costs: crossing the language boundary, converting types, copying memory. UniFFI uses a runtime approach with serialization similar to JSON. BoltFFI generates specialized code at compile time that avoids most of this overhead. These benchmarks isolate the FFI layer by using trivial Rust implementations (just constructing data or summing numbers).
 
-### Android
+## Benchmark surface (summary)
 
-```bash
-just bench-build-android
-# Then open android-app/ in Android Studio
-```
+- **Call overhead**: `noop`.
+- **Primitives**: `echo_i32`, `echo_f64`, `add`, `multiply`, `inc_u64`.
+- **Strings**: `echo_string_small`, `echo_string_1k`.
+- **Struct generation (Rust → host)**: `generate_{locations,trades,particles,sensors,user_profiles}_{100,1k,10k}`.
+- **Struct consumption (host → Rust)**: `sum_ratings`, `process_locations`, `sum_trade_volumes`, `sum_particle_masses`, `avg_sensor_temp`, `sum_user_scores`, `count_active_users`.
+- **Primitive vectors**: `generate_i32_vec_*`, `sum_i32_vec_*`, `generate_f64_vec_*`, `sum_f64_vec_*`, `generate_bytes_64k`.
+- **Classes / stateful objects**: `counter_increment`, `datastore_add`, `accumulator`.
+- **Enums**: `simple_enum`, `data_enum_input`, `find_even`.
+- **Async**: `async_add`.
+- **Callbacks (foreign traits)**: `callback_100`, `callback_1k`.
 
-### WASM (Node.js)
+The authoritative list at any commit is what [`demo_export_inventory.py`](./scripts/demo_export_inventory.py) reports intersected with the catalog; `just bench-demo-plan` prints the structured form.
 
-```bash
-just bench-wasm
-```
+---
 
 ## Results
+
+**Live results live on the dashboard: https://github.com/boltffi/benchmarks-dashboard.** The tables below are a static snapshot from v0.24.0 on Apple M3 / M4 Max and are kept here for quick reference only — the dashboard is the source of truth.
 
 ### JVM (JMH on Apple M4 Max)
 
@@ -289,11 +300,8 @@ Results from `just bench-wasm` on Apple M3:
 #### So who wins?
 
 1. For pure primitives (integers, floats, scalars), both tie at ~2ns.
-
 2. For strings, BoltFFI is 1.6-3.6x faster.
-
 3. For structured data (records, arrays of structs), BoltFFI is **110-453x faster**.
-
 4. For primitive vectors (`Vec<i32>`, `Vec<u8>`), both tie.
 
-BoltFFI wins for real world mixed data, and ties or a bit slower with wasm-bindgen on scalar types.
+BoltFFI wins for real-world mixed data, and ties or is slightly slower than wasm-bindgen on scalar types.
