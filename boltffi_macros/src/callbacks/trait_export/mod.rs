@@ -403,7 +403,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
 
     // sync methods are expanded per-method (async trait items are skipped); `Passable` for
     // `Box<dyn Trait>` still requires all methods sync — see `box_dyn_passable_impl` below.
-    let local_handle_impl = if is_object_safe {
+    let local_handle_impl = if is_object_safe && !has_async_methods {
         LocalHandleExpander::new(
             &item_trait,
             trait_name,
