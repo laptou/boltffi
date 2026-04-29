@@ -870,7 +870,8 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
             ..
         } => {
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-                return "Array(reader.readBytes())".into();
+                // vec<u8> maps to Swift `Data`; readBytes() already returns Data
+                return "reader.readBytes()".into();
             }
             match layout {
                 VecLayout::Blittable { .. } => format!(

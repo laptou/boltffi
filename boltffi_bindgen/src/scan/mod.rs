@@ -2,11 +2,11 @@ use boltffi_ffi_rules::naming;
 use indexmap::IndexMap;
 use quote::ToTokens;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use syn::{
-    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait,
+    Attribute, Fields, FnArg, ImplItem, Item, ItemEnum, ItemImpl, ItemMod, ItemStruct, ItemTrait,
     TraitItemFn, Type,
 };
 use walkdir::WalkDir;
@@ -447,6 +447,166 @@ impl AliasResolver {
     }
 }
 
+// tracks file + inline mod chain so out-of-line `mod child;` resolution matches rustc
+#[derive(Clone)]
+struct ModScanContext {
+    /// canonical path to the .rs file being scanned for child modules
+    file: PathBuf,
+    /// inline module names from crate root to the current item list
+    inline_stack: Vec<String>,
+}
+
+impl ModScanContext {
+    fn new(file: PathBuf) -> Self {
+        Self {
+            file,
+            inline_stack: Vec::new(),
+        }
+    }
+
+    /// directory rustc searches for `mod name;` at this nesting level
+    fn module_children_base_dir(&self) -> PathBuf {
+        let path = &self.file;
+        let parent = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let mut base = if matches!(stem, "lib" | "main") {
+            parent
+        } else if stem == "mod" {
+            parent
+        } else {
+            parent.join(stem)
+        };
+        for seg in &self.inline_stack {
+            base = base.join(seg);
+        }
+        base
+    }
+}
+
+fn mod_path_attribute(item_mod: &ItemMod) -> Option<String> {
+    item_mod.attrs.iter().find_map(|attr| {
+        if !attr.path().is_ident("path") {
+            return None;
+        }
+        let syn::Meta::NameValue(nv) = &attr.meta else {
+            return None;
+        };
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        }) = &nv.value
+        else {
+            return None;
+        };
+        Some(s.value())
+    })
+}
+
+fn visit_module_declarations_for_cfg(
+    items: &[Item],
+    ctx: &ModScanContext,
+    cfg: &CfgContext,
+    discovered: &mut HashSet<PathBuf>,
+    queue: &mut VecDeque<PathBuf>,
+) -> Result<(), String> {
+    for item in items {
+        let Item::Mod(m) = item else {
+            continue;
+        };
+
+        if let Some((_, inner_items)) = &m.content {
+            if cfg.is_active(&m.attrs) {
+                let mut inner_ctx = ctx.clone();
+                inner_ctx.inline_stack.push(m.ident.to_string());
+                visit_module_declarations_for_cfg(inner_items, &inner_ctx, cfg, discovered, queue)?;
+            }
+            continue;
+        }
+
+        if !cfg.is_active(&m.attrs) {
+            continue;
+        }
+
+        let base = ctx.module_children_base_dir();
+        let child_path = if let Some(rel) = mod_path_attribute(m) {
+            let p = base.join(rel);
+            if p.is_file() {
+                p
+            } else {
+                continue;
+            }
+        } else {
+            let name = m.ident.to_string();
+            let p1 = base.join(format!("{}.rs", name));
+            let p2 = base.join(&name).join("mod.rs");
+            if p1.is_file() {
+                p1
+            } else if p2.is_file() {
+                p2
+            } else {
+                continue;
+            }
+        };
+
+        let canon = child_path.canonicalize().map_err(|e| {
+            format!(
+                "Failed to canonicalize module file {}: {}",
+                child_path.display(),
+                e
+            )
+        })?;
+        if discovered.insert(canon.clone()) {
+            queue.push_back(canon);
+        }
+    }
+    Ok(())
+}
+
+/// module graph reachable from lib.rs/main.rs when cfg-aware scanning is enabled
+fn collect_active_rust_files_for_scan(src_dir: &Path, cfg: &CfgContext) -> Result<Vec<PathBuf>, String> {
+    let mut discovered = HashSet::<PathBuf>::new();
+    let mut queue = VecDeque::<PathBuf>::new();
+
+    for name in ["lib.rs", "main.rs"] {
+        let p = src_dir.join(name);
+        if !p.is_file() {
+            continue;
+        }
+        let canon = p.canonicalize().map_err(|e| {
+            format!(
+                "Failed to canonicalize {}: {}",
+                p.display(),
+                e
+            )
+        })?;
+        if discovered.insert(canon.clone()) {
+            queue.push_back(canon);
+        }
+    }
+
+    let mut ordered = Vec::<PathBuf>::new();
+    while let Some(path) = queue.pop_front() {
+        ordered.push(path.clone());
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let syntax = syn::parse_file(&content)
+            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+        let ctx = ModScanContext::new(path);
+        visit_module_declarations_for_cfg(
+            &syntax.items,
+            &ctx,
+            cfg,
+            &mut discovered,
+            &mut queue,
+        )?;
+    }
+
+    Ok(ordered)
+}
+
 pub struct SourceScanner {
     module_name: String,
     type_registry: TypeRegistry,
@@ -498,18 +658,50 @@ impl SourceScanner {
     }
 
     pub fn scan_directory(&mut self, crate_path: &Path, dir: &Path) -> Result<(), String> {
-        let mut files: Vec<_> = WalkDir::new(dir)
+        let source_root = dir.canonicalize().map_err(|e| {
+            format!(
+                "Failed to canonicalize src directory {}: {}",
+                dir.display(),
+                e
+            )
+        })?;
+
+        let all_files_raw: Vec<_> = WalkDir::new(&source_root)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
             .map(|e| e.path().to_path_buf())
             .collect();
-        files.sort();
 
-        self.source_root = Some(dir.to_path_buf());
+        let mut all_files = Vec::<PathBuf>::new();
+        for p in all_files_raw {
+            all_files.push(
+                p.canonicalize()
+                    .map_err(|e| format!("Failed to canonicalize {}: {}", p.display(), e))?,
+            );
+        }
+        all_files.sort();
+        all_files.dedup();
+
+        let files = if self.cfg_context.scan_all {
+            all_files
+        } else {
+            let active = collect_active_rust_files_for_scan(&source_root, &self.cfg_context)?;
+            if active.is_empty() {
+                all_files
+            } else {
+                active
+            }
+        };
+
+        let src_root_for_module_paths = source_root.clone();
+        self.source_root = Some(source_root);
         self.global_aliases = Self::collect_global_aliases(&files)?;
-        self.integer_constants =
-            collect_integer_constants_from_files(dir, &files, self.target_pointer_width_bits)?;
+        self.integer_constants = collect_integer_constants_from_files(
+            &src_root_for_module_paths,
+            &files,
+            self.target_pointer_width_bits,
+        )?;
         let compiler_targets =
             Self::collect_compiler_type_targets(&files, &self.global_aliases, &self.cfg_context)?;
         self.compiler_canonical_types =
@@ -566,6 +758,9 @@ impl SourceScanner {
     ) {
         match item {
             Item::Struct(item_struct) => {
+                if !cfg_context.is_active(&item_struct.attrs) {
+                    return;
+                }
                 let is_record = has_attribute(&item_struct.attrs, "ffi_record")
                     || has_attribute(&item_struct.attrs, "data")
                     || has_attribute(&item_struct.attrs, "error")
@@ -579,6 +774,9 @@ impl SourceScanner {
                 }
             }
             Item::Enum(item_enum) => {
+                if !cfg_context.is_active(&item_enum.attrs) {
+                    return;
+                }
                 let is_error = has_attribute(&item_enum.attrs, "error");
                 let is_data_enum = has_repr_int(&item_enum.attrs)
                     || has_attribute(&item_enum.attrs, "data")
@@ -594,6 +792,9 @@ impl SourceScanner {
                 }
             }
             Item::Impl(item_impl) => {
+                if !cfg_context.is_active(&item_impl.attrs) {
+                    return;
+                }
                 let is_exported = has_attribute(&item_impl.attrs, "ffi_class")
                     || has_attribute(&item_impl.attrs, "export")
                     || has_data_impl_attribute(&item_impl.attrs);
@@ -636,6 +837,9 @@ impl SourceScanner {
                 }
             }
             Item::Trait(item_trait) => {
+                if !cfg_context.is_active(&item_trait.attrs) {
+                    return;
+                }
                 let is_exported = has_attribute(&item_trait.attrs, "ffi_trait")
                     || has_attribute(&item_trait.attrs, "export");
                 if is_exported {
@@ -876,6 +1080,9 @@ impl SourceScanner {
                 _ => None,
             })
             .try_for_each(|item_macro| {
+                if !self.cfg_context.is_active(&item_macro.attrs) {
+                    return Ok(());
+                }
                 self.collect_custom_type_macro(item_macro, &alias_resolver)
             })?;
         syntax
@@ -887,7 +1094,12 @@ impl SourceScanner {
                 }
                 _ => None,
             })
-            .try_for_each(|item_impl| self.collect_custom_type(item_impl, &alias_resolver))
+            .try_for_each(|item_impl| {
+                if !self.cfg_context.is_active(&item_impl.attrs) {
+                    return Ok(());
+                }
+                self.collect_custom_type(item_impl, &alias_resolver)
+            })
     }
 
     fn collect_custom_type_macro(
@@ -1003,6 +1215,9 @@ impl SourceScanner {
                         || (has_attribute(&item_struct.attrs, "derive")
                             && has_ffi_type_derive(&item_struct.attrs)) =>
                 {
+                    if !self.cfg_context.is_active(&item_struct.attrs) {
+                        continue;
+                    }
                     self.type_registry.register(
                         item_struct.ident.to_string(),
                         TypeMeta {
@@ -1016,6 +1231,9 @@ impl SourceScanner {
                         || has_attribute(&item_enum.attrs, "data")
                         || has_attribute(&item_enum.attrs, "error") =>
                 {
+                    if !self.cfg_context.is_active(&item_enum.attrs) {
+                        continue;
+                    }
                     self.type_registry.register(
                         item_enum.ident.to_string(),
                         TypeMeta {
@@ -1025,6 +1243,9 @@ impl SourceScanner {
                     );
                 }
                 Item::Impl(item_impl) => {
+                    if !self.cfg_context.is_active(&item_impl.attrs) {
+                        continue;
+                    }
                     if (has_attribute(&item_impl.attrs, "ffi_class")
                         || has_attribute(&item_impl.attrs, "export"))
                         && !has_data_impl_attribute(&item_impl.attrs)
@@ -2890,6 +3111,7 @@ pub fn scan_crate_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     #[test]
@@ -3603,6 +3825,37 @@ mod tests {
         module
     }
 
+    fn scan_temp_crate_multi_with_config(
+        files: &[(&str, &str)],
+        pointer_width: Option<u8>,
+        cfg: CfgContext,
+    ) -> Module {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "boltffi_scan_cfg_modules_{}_{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let src_dir = temp_root.join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+
+        files.iter().for_each(|(name, content)| {
+            let path = src_dir.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create file parent dirs");
+            }
+            fs::write(path, content).expect("write file");
+        });
+
+        let module = scan_crate_with_config(&temp_root, "testlib", pointer_width, Some(cfg))
+            .expect("scan failed");
+        fs::remove_dir_all(&temp_root).expect("cleanup");
+        module
+    }
+
     fn scan_temp_crate_with_config(
         source: &str,
         pointer_width: Option<u8>,
@@ -3694,6 +3947,127 @@ mod tests {
         assert_eq!(enumeration.variants[0].discriminant, Some(0));
         assert_eq!(enumeration.variants[1].name, "C");
         assert_eq!(enumeration.variants[1].discriminant, Some(2));
+    }
+
+    #[test]
+    fn cfg_context_excludes_inactive_out_of_line_module_tree() {
+        let apple = CfgContext {
+            features: HashSet::new(),
+            target_arch: Some("aarch64".to_string()),
+            scan_all: false,
+        };
+        let module = scan_temp_crate_multi_with_config(
+            &[
+                (
+                    "lib.rs",
+                    r#"
+                    #[boltffi::data]
+                    pub struct SharedPoint {
+                        pub x: f64,
+                        pub y: f64,
+                    }
+
+                    #[cfg(target_arch = "wasm32")]
+                    pub mod idb_store;
+                "#,
+                ),
+                (
+                    "idb_store/mod.rs",
+                    r#"
+                    mod ffi;
+
+                    pub fn _dummy() {}
+                "#,
+                ),
+                (
+                    "idb_store/ffi.rs",
+                    r#"
+                    #[boltffi::data]
+                    pub struct KvEntry {
+                        pub key: String,
+                        pub data: Vec<u8>,
+                    }
+                "#,
+                ),
+            ],
+            None,
+            apple,
+        );
+        assert!(module.find_record("SharedPoint").is_some());
+        assert!(module.find_record("KvEntry").is_none());
+
+        let wasm = CfgContext {
+            features: HashSet::new(),
+            target_arch: Some("wasm32".to_string()),
+            scan_all: false,
+        };
+        let wasm_module = scan_temp_crate_multi_with_config(
+            &[
+                (
+                    "lib.rs",
+                    r#"
+                    #[boltffi::data]
+                    pub struct SharedPoint {
+                        pub x: f64,
+                        pub y: f64,
+                    }
+
+                    #[cfg(target_arch = "wasm32")]
+                    pub mod idb_store;
+                "#,
+                ),
+                (
+                    "idb_store/mod.rs",
+                    r#"
+                    mod ffi;
+
+                    pub fn _dummy() {}
+                "#,
+                ),
+                (
+                    "idb_store/ffi.rs",
+                    r#"
+                    #[boltffi::data]
+                    pub struct KvEntry {
+                        pub key: String,
+                        pub data: Vec<u8>,
+                    }
+                "#,
+                ),
+            ],
+            None,
+            wasm,
+        );
+        assert!(wasm_module.find_record("KvEntry").is_some());
+    }
+
+    #[test]
+    fn cfg_context_excludes_inactive_type_names() {
+        let module = scan_temp_crate_multi_with_config(
+            &[(
+                "lib.rs",
+                r#"
+                #[cfg(target_arch = "wasm32")]
+                #[boltffi::data]
+                pub struct WasmOnly {
+                    pub n: i32,
+                }
+
+                #[boltffi::data]
+                pub struct HostOk {
+                    pub n: i32,
+                }
+            "#,
+            )],
+            None,
+            CfgContext {
+                features: HashSet::new(),
+                target_arch: Some("aarch64".to_string()),
+                scan_all: false,
+            },
+        );
+        assert!(module.find_record("HostOk").is_some());
+        assert!(module.find_record("WasmOnly").is_none());
     }
 
     #[test]

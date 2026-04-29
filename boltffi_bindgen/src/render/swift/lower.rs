@@ -158,7 +158,14 @@ impl<'a> SwiftLowerer<'a> {
         match type_expr {
             TypeExpr::Custom(id) => self.swift_named_custom_type(id.as_str()),
             TypeExpr::Option(inner) => format!("{}?", self.resolve_swift_type(inner)),
-            TypeExpr::Vec(inner) => format!("[{}]", self.resolve_swift_type(inner)),
+            TypeExpr::Vec(inner) => {
+                // must match `swift_type` / wire decode (`readBytes` → Data)
+                if matches!(inner.as_ref(), TypeExpr::Primitive(PrimitiveType::U8)) {
+                    "Data".to_string()
+                } else {
+                    format!("[{}]", self.resolve_swift_type(inner))
+                }
+            }
             TypeExpr::Result { ok, err } => self.swift_result_type(ok, err),
             _ => emit::swift_type(type_expr),
         }
@@ -2662,6 +2669,66 @@ mod tests {
         assert!(
             !record.is_blittable,
             "Scores should NOT be blittable (has Vec)"
+        );
+    }
+
+    #[test]
+    // vec<u8> maps to swift Data and wire decode uses readBytes() -> Data (not [u8])
+    fn vec_u8_field_maps_to_data_wire_codec() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("Blob"),
+            fields: vec![FieldDef {
+                name: FieldName::new("data"),
+                type_expr: TypeExpr::Vec(Box::new(TypeExpr::Primitive(PrimitiveType::U8))),
+                doc: None,
+                default: None,
+            }],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let record = &module.records[0];
+        assert_eq!(record.fields[0].swift_type, "Data");
+        assert_eq!(record.fields[0].wire_reader_decode(), "reader.readBytes()");
+        assert_eq!(
+            record.fields[0].wire_writer_encode(),
+            "writer.writeBytes(self.data)"
+        );
+    }
+
+    #[test]
+    fn optional_vec_u8_maps_to_optional_data_wire_codec() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("MaybeBlob"),
+            fields: vec![FieldDef {
+                name: FieldName::new("payload"),
+                type_expr: TypeExpr::Option(Box::new(TypeExpr::Vec(Box::new(
+                    TypeExpr::Primitive(PrimitiveType::U8),
+                )))),
+                doc: None,
+                default: None,
+            }],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let record = &module.records[0];
+        assert_eq!(record.fields[0].swift_type, "Data?");
+        assert_eq!(
+            record.fields[0].wire_reader_decode(),
+            "reader.readOptional { reader in reader.readBytes() }"
         );
     }
 
