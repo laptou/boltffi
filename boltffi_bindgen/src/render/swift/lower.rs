@@ -3,8 +3,8 @@ use boltffi_ffi_rules::naming::{
     self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
 };
 use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform,
-    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
+    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy,
+    ValueReturnMethod, ValueReturnStrategy,
 };
 use heck::ToLowerCamelCase;
 
@@ -13,12 +13,12 @@ use std::collections::{HashMap, HashSet};
 use super::emit;
 use super::plan::{
     AsyncEncodedErrInfo, CompositeFieldMapping, DirectBufferCompositeMapping, SwiftAsyncConversion,
-    SwiftAsyncResult, SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam, SwiftClass,
-    SwiftClosureTrampoline, SwiftClosureTrampolineParam, SwiftConstructor, SwiftConversion,
-    SwiftCustomType, SwiftEnum, SwiftEnumStyle, SwiftField, SwiftFunction, SwiftMethod,
-    SwiftModule, SwiftNativeConversion, SwiftNativeMapping, SwiftParam, SwiftRecord, SwiftReturn,
-    SwiftStream, SwiftStreamItemDelivery, SwiftStreamMode, SwiftVariant, SwiftVariantPayload,
-    ValueSelfParam,
+    SwiftAsyncResult, SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam,
+    SwiftClass, SwiftClosureTrampoline, SwiftClosureTrampolineParam, SwiftConstructor,
+    SwiftConversion, SwiftCustomType, SwiftEnum, SwiftEnumStyle, SwiftField, SwiftFunction,
+    SwiftMethod, SwiftModule, SwiftNativeConversion, SwiftNativeMapping, SwiftParam, SwiftRecord,
+    SwiftReturn, SwiftStream, SwiftStreamItemDelivery, SwiftStreamMode, SwiftVariant,
+    SwiftVariantPayload, ValueSelfParam,
 };
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
@@ -364,11 +364,7 @@ impl<'a> SwiftLowerer<'a> {
                     def.id.as_str()
                 ))
             })?;
-            methods.push(self.lower_value_type_method(
-                method,
-                call,
-                &abi_record.encode_ops,
-            ));
+            methods.push(self.lower_value_type_method(method, call, &abi_record.encode_ops));
         }
 
         Ok(SwiftRecord {
@@ -481,7 +477,9 @@ impl<'a> SwiftLowerer<'a> {
         ctor: &ConstructorDef,
     ) -> ReturnDef {
         if ctor.is_optional() {
-            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(class.id.clone()))))
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(
+                class.id.clone(),
+            ))))
         } else if ctor.is_fallible() {
             ReturnDef::Result {
                 ok: TypeExpr::Handle(class.id.clone()),
@@ -645,11 +643,7 @@ impl<'a> SwiftLowerer<'a> {
                     def.id.as_str()
                 ))
             })?;
-            methods.push(self.lower_value_type_method(
-                method,
-                call,
-                &abi_enum.encode_ops,
-            ));
+            methods.push(self.lower_value_type_method(method, call, &abi_enum.encode_ops));
         }
 
         Ok(SwiftEnum {
@@ -684,10 +678,7 @@ impl<'a> SwiftLowerer<'a> {
                         } else {
                             lowered.swift_name.clone()
                         };
-                        let encode = remap_root_in_seq(
-                            &lowered.encode,
-                            ValueExpr::Var(binding),
-                        );
+                        let encode = remap_root_in_seq(&lowered.encode, ValueExpr::Var(binding));
                         SwiftField { encode, ..lowered }
                     })
                     .collect(),
@@ -705,14 +696,11 @@ impl<'a> SwiftLowerer<'a> {
                             } else {
                                 lowered.swift_name.clone()
                             };
-                            let encode = remap_root_in_seq(
-                                &lowered.encode,
-                                ValueExpr::Var(binding),
-                            );
+                            let encode =
+                                remap_root_in_seq(&lowered.encode, ValueExpr::Var(binding));
                             SwiftField { encode, ..lowered }
                         } else {
-                            let encode =
-                                remap_enum_encode_bindings_in_write_seq(&lowered.encode);
+                            let encode = remap_enum_encode_bindings_in_write_seq(&lowered.encode);
                             SwiftField { encode, ..lowered }
                         }
                     })
@@ -1173,9 +1161,7 @@ impl<'a> SwiftLowerer<'a> {
                         "let {label} = {raw_name}.handle == 0 ? nil : {protocol}Bridge.wrap({raw_name})"
                     ))
                 } else {
-                    Some(format!(
-                        "let {label} = {protocol}Bridge.wrap({raw_name})"
-                    ))
+                    Some(format!("let {label} = {protocol}Bridge.wrap({raw_name})"))
                 };
                 let proxy_cb = if *nullable {
                     format!(
@@ -1258,10 +1244,8 @@ impl<'a> SwiftLowerer<'a> {
         semantic_params: &[ParamDef],
         call: &AbiCall,
     ) -> Vec<SwiftParam> {
-        let semantic_names: HashSet<&str> = semantic_params
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
+        let semantic_names: HashSet<&str> =
+            semantic_params.iter().map(|p| p.name.as_str()).collect();
         let mut out = Vec::new();
         for abi in &call.params {
             if abi.name.as_str() == "self" {
@@ -1651,7 +1635,8 @@ impl<'a> SwiftLowerer<'a> {
                 decode_ops,
                 encode_ops,
             } => {
-                let direct_ok_carrier = matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. });
+                let direct_ok_carrier =
+                    matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. });
                 let result_decode = return_shape.decode_ops.clone().unwrap_or_else(|| ReadSeq {
                     size: SizeExpr::Fixed(0),
                     ops: vec![],
@@ -2407,7 +2392,7 @@ impl<'a> SwiftLowerer<'a> {
                     },
                     typed_async_err,
                 }
-            },
+            }
             Some(Transport::Callback {
                 callback_id,
                 nullable,

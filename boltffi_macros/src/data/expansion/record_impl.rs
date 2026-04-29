@@ -13,11 +13,9 @@ use crate::index::CrateIndex;
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types;
 use crate::lowering::params::{FfiParams, transform_method_params};
-use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::classify::option_inner_type;
-use crate::lowering::returns::model::{
-    ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy,
-};
+use crate::lowering::returns::lower::encoded_return_body;
+use crate::lowering::returns::model::{ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy};
 
 enum RecordMethodKind {
     Constructor,

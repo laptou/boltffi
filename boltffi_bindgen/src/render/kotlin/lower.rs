@@ -2015,9 +2015,7 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => {
-                "Long".to_string()
-            }
+            | ValueReturnStrategy::CallbackHandle => "Long".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "ByteArray".to_string()
             }
@@ -2078,9 +2076,7 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => {
-                "Handle".to_string()
-            }
+            | ValueReturnStrategy::CallbackHandle => "Handle".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "Wire".to_string()
             }
@@ -2674,9 +2670,7 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => {
-                "Long".to_string()
-            }
+            | ValueReturnStrategy::CallbackHandle => "Long".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "ByteArray?".to_string()
             }

@@ -7,10 +7,10 @@ use quote::{format_ident, quote};
 use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
-use crate::lowering::returns::callback_return::resolve_sync_callback_return;
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::custom_types::{contains_custom_types, from_wire_expr_owned, wire_type_for};
+use crate::lowering::returns::callback_return::resolve_sync_callback_return;
 use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
 use crate::lowering::returns::model::{
@@ -667,9 +667,16 @@ impl<'a> LocalHandleMethodExpander<'a> {
             )
     }
 
-    fn lower_param(&self, param_name: &syn::Ident, param_type: &syn::Type) -> syn::Result<LocalHandleParam> {
+    fn lower_param(
+        &self,
+        param_name: &syn::Ident,
+        param_type: &syn::Type,
+    ) -> syn::Result<LocalHandleParam> {
         let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
-        let value_strategy = self.return_lowering.lower_type(param_type)?.value_return_strategy();
+        let value_strategy = self
+            .return_lowering
+            .lower_type(param_type)?
+            .value_return_strategy();
         if matches!(value_strategy, ValueReturnStrategy::Scalar(_)) {
             return Ok(LocalHandleParam {
                 ffi_params: vec![quote! { #param_name: #direct_ffi_type }],

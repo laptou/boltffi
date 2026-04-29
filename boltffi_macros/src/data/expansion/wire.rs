@@ -710,11 +710,11 @@ impl<'a> EnumWireExpansion<'a> {
 
     fn render_wire_size_impl(&self, variants: &[&syn::Variant]) -> TokenStream {
         let all_unit = variants.iter().all(|variant| variant.fields.is_empty());
-        let wire_size_arms =
-            variants.iter().map(|variant| {
-                let cfg_attrs = cfg_attrs_filtered(&variant.attrs);
-                let variant_name = &variant.ident;
-                let arm = match &variant.fields {
+        let wire_size_arms = variants.iter().map(|variant| {
+            let cfg_attrs = cfg_attrs_filtered(&variant.attrs);
+            let variant_name = &variant.ident;
+            let arm =
+                match &variant.fields {
                     Fields::Unit => quote! { Self::#variant_name => 4 },
                     Fields::Unnamed(fields) => {
                         let field_types = fields
@@ -761,11 +761,11 @@ impl<'a> EnumWireExpansion<'a> {
                         }
                     }
                 };
-                quote! {
-                    #(#cfg_attrs)*
-                    #arm
-                }
-            });
+            quote! {
+                #(#cfg_attrs)*
+                #arm
+            }
+        });
 
         if all_unit {
             quote! {

@@ -342,8 +342,7 @@ impl SwiftModule {
         self.functions.iter().any(|f| f.mode.is_async())
             || self.classes.iter().any(|c| {
                 c.methods.iter().any(|m| m.mode.is_async())
-                    || c
-                        .constructors
+                    || c.constructors
                         .iter()
                         .any(|ctor| ctor.is_async_constructor())
             })
@@ -720,9 +719,9 @@ impl SwiftConstructor {
 
     pub fn constructor_mode(&self) -> Option<&SwiftCallMode> {
         match self {
-            Self::Designated { mode, .. } | Self::Convenience { mode, .. } | Self::Factory { mode, .. } => {
-                Some(mode)
-            }
+            Self::Designated { mode, .. }
+            | Self::Convenience { mode, .. }
+            | Self::Factory { mode, .. } => Some(mode),
         }
     }
 
@@ -1181,8 +1180,7 @@ impl SwiftCallbackMethod {
             }
             SwiftReturn::Direct { swift_type } => format!("var result: {swift_type} = 0"),
             SwiftReturn::FromDirectBuffer {
-                element_swift_type,
-                ..
+                element_swift_type, ..
             } => format!("var result: {element_swift_type} = {element_swift_type}()"),
             _ => self
                 .proxy_out_ffi_type()
@@ -1859,7 +1857,9 @@ impl SwiftReturn {
     pub fn is_wire_encoded(&self) -> bool {
         match self {
             SwiftReturn::FromWireBuffer { .. } => true,
-            SwiftReturn::Throws { ok, result_decode, .. } => {
+            SwiftReturn::Throws {
+                ok, result_decode, ..
+            } => {
                 if !result_decode.ops.is_empty() {
                     return true;
                 }

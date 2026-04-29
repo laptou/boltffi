@@ -171,8 +171,9 @@ pub(crate) fn wasm_complete_export_for_async(
         return_abi.value_return_strategy(),
         ValueReturnStrategy::NullableObjectHandle
     ) {
-        let inner_ty = crate::lowering::returns::classify::option_inner_type(return_abi.rust_type())
-            .expect("NullableObjectHandle async return must be Option<ExportedClass>");
+        let inner_ty =
+            crate::lowering::returns::classify::option_inner_type(return_abi.rust_type())
+                .expect("NullableObjectHandle async return must be Option<ExportedClass>");
         AsyncWasmCompleteExport {
             params: quote! { handle: ::boltffi::__private::RustFutureHandle },
             return_type: quote! { -> <#inner_ty as ::boltffi::__private::Passable>::Out },

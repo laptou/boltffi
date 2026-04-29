@@ -52,9 +52,7 @@ impl LanguageGenerator for TypeScriptGenerator {
                 }
             }
         })?;
-        if let Some(glue) =
-            read_wasm_bindgen_glue_marker(&output_directory, &module_name)
-        {
+        if let Some(glue) = read_wasm_bindgen_glue_marker(&output_directory, &module_name) {
             type_script_module.wasm_bindgen_glue = Some(glue);
         }
         let runtime_package = request.config().wasm_runtime_package();

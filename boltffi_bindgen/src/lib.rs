@@ -20,7 +20,7 @@ pub use render::{
     LowerError, Renderer, TypeConversion, TypeMapping, TypeMappings, swift::SwiftLowerer,
 };
 pub use scan::{
-    scan_crate, scan_crate_with_config, scan_crate_with_pointer_width, CfgContext, SourceScanner,
+    CfgContext, SourceScanner, scan_crate, scan_crate_with_config, scan_crate_with_pointer_width,
 };
 
 #[cfg(test)]

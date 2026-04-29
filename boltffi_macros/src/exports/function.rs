@@ -6,11 +6,11 @@ use quote::quote;
 use syn::ItemFn;
 
 use crate::exports::async_export::{
-    wasm_complete_export_for_async, AsyncExportNames, AsyncRuntimeExports,
+    AsyncExportNames, AsyncRuntimeExports, wasm_complete_export_for_async,
 };
 use crate::exports::callable::FunctionCallable;
-use crate::exports::common::fallible_direct_ok_export_body;
 use crate::exports::callback_return::resolve_sync_callback_return;
+use crate::exports::common::fallible_direct_ok_export_body;
 use crate::exports::extern_export::{
     DirectBufferCarrier, DualPlatformExternExport, ExportBody, ExportCondition, ExportSafety,
     ExternExport, ReceiverParameter,
@@ -18,8 +18,8 @@ use crate::exports::extern_export::{
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::{CrateIndex, custom_types};
 use crate::lowering::params::{FfiParams, transform_params, transform_params_async};
-use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::classify::option_inner_type;
+use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
     ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
     ValueReturnStrategy, WasmOptionScalarEncoding,

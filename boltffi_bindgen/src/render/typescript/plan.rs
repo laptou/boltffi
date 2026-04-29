@@ -285,14 +285,8 @@ pub enum TsCallbackImportReturn {
 /// how to convert a ts return value into the wasm scalar the rust import expects.
 #[derive(Debug, Clone)]
 pub enum TsCallbackImportOutboundWrap {
-    TakeHandle {
-        class_name: String,
-        nullable: bool,
-    },
-    RegisterCallback {
-        register_fn: String,
-        nullable: bool,
-    },
+    TakeHandle { class_name: String, nullable: bool },
+    RegisterCallback { register_fn: String, nullable: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -681,10 +675,7 @@ impl TsParam {
                     self.name, self.name, self.name
                 )
             } else {
-                format!(
-                    "const {}_handle = {}.takeHandle();",
-                    self.name, self.name
-                )
+                format!("const {}_handle = {}.takeHandle();", self.name, self.name)
             }),
             TsInputRoute::StructValue { codec_name } => {
                 let writer_name = format!("{}_writer", self.name);
@@ -1159,16 +1150,21 @@ impl TsOutputRoute {
     }
 
     pub fn is_async_fallible_handle_carrier(&self) -> bool {
-        matches!(self.return_carrier, TsReturnCarrier::AsyncFallibleHandle { .. })
+        matches!(
+            self.return_carrier,
+            TsReturnCarrier::AsyncFallibleHandle { .. }
+        )
     }
 
     pub fn direct_ok_ok_handle_class_name(&self) -> Option<&str> {
         match &self.return_carrier {
             TsReturnCarrier::SyncDirectOk {
-                ok_handle_class_name, ..
+                ok_handle_class_name,
+                ..
             }
             | TsReturnCarrier::AsyncFallibleHandle {
-                ok_handle_class_name, ..
+                ok_handle_class_name,
+                ..
             } => Some(ok_handle_class_name.as_str()),
             TsReturnCarrier::None => None,
         }
@@ -1188,10 +1184,12 @@ impl TsOutputRoute {
     pub fn carrier_ok_handle_class_name(&self) -> &str {
         match &self.return_carrier {
             TsReturnCarrier::SyncDirectOk {
-                ok_handle_class_name, ..
+                ok_handle_class_name,
+                ..
             }
             | TsReturnCarrier::AsyncFallibleHandle {
-                ok_handle_class_name, ..
+                ok_handle_class_name,
+                ..
             } => ok_handle_class_name.as_str(),
             TsReturnCarrier::None => "",
         }

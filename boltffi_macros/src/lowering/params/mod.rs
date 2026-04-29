@@ -417,8 +417,8 @@ pub fn transform_method_params_async(
 
 #[cfg(test)]
 mod tests {
-    use super::transform_params_async;
     use super::AsyncParamLowerer;
+    use super::transform_params_async;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
     use crate::index::data_types::DataTypeRegistry;
