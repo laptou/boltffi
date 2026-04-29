@@ -201,6 +201,36 @@ impl AsyncMultiMethod for &AsyncMultiImpl {
     }
 }
 
+struct FallibleFutureFetcherImpl;
+
+impl FallibleFutureReturnFetcher for FallibleFutureFetcherImpl {
+    fn fetch(
+        &self,
+        key: u32,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, FixtureError>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            if key == 0 {
+                Err(FixtureError::InvalidInput)
+            } else {
+                Ok(vec![1, 2, key as u8])
+            }
+        })
+    }
+}
+
+impl FallibleFutureReturnFetcher for &FallibleFutureFetcherImpl {
+    fn fetch(
+        &self,
+        key: u32,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, FixtureError>> + Send + '_>,
+    > {
+        FallibleFutureReturnFetcher::fetch(*self, key)
+    }
+}
+
 mod foreign_type_generation {
     use super::*;
 
@@ -259,6 +289,11 @@ mod foreign_type_generation {
     #[test]
     fn future_return_fetcher_generates_foreign_type() {
         assert_type_exists::<ForeignFutureReturnFetcher>();
+    }
+
+    #[test]
+    fn fallible_future_return_fetcher_generates_foreign_type() {
+        assert_type_exists::<ForeignFallibleFutureReturnFetcher>();
     }
 }
 
@@ -616,6 +651,24 @@ mod async_multi_method {
         let cb = AsyncMultiImpl { base: 10 };
         let result = invoke_async_multi_impl(&cb, 5, 3, 4).await;
         assert_eq!(result, (5 + 10) + (3 * 4 + 10));
+    }
+}
+
+mod fallible_future_return_fetcher {
+    use super::*;
+
+    #[tokio::test]
+    async fn impl_returns_ok_bytes() {
+        let fetcher = FallibleFutureFetcherImpl;
+        let result = invoke_fallible_future_return_impl(&fetcher, 7).await;
+        assert_eq!(result, Ok(vec![1, 2, 7]));
+    }
+
+    #[tokio::test]
+    async fn impl_returns_error() {
+        let fetcher = FallibleFutureFetcherImpl;
+        let result = invoke_fallible_future_return_impl(&fetcher, 0).await;
+        assert_eq!(result, Err(FixtureError::InvalidInput));
     }
 }
 

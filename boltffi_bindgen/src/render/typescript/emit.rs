@@ -2,7 +2,9 @@ use boltffi_ffi_rules::naming::snake_to_camel as camel_case;
 
 use crate::ir::codec::VecLayout;
 use crate::ir::ids::BuiltinId;
-use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WireSizeOwner, WriteOp, WriteSeq};
+use crate::ir::ops::{
+    ReadOp, ReadSeq, SizeExpr, ValueExpr, WireSizeOwner, WriteOp, WriteSeq, remap_root_in_seq,
+};
 use crate::ir::plan::CompositeLayout;
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
@@ -360,7 +362,8 @@ fn emit_writer_write_op(op: &WriteOp, w: &str, root_value: &str) -> String {
             }
         }
         WriteOp::Option { value, some } => {
-            let inner = emit_writer_write(some, w, root_value);
+            let some = remap_root_in_seq(some, ValueExpr::Var("v".into()));
+            let inner = emit_writer_write(&some, w, "v");
             format!(
                 "{w}.writeOptional({}, (v) => {{ {inner} }})",
                 render_value(value, root_value),
@@ -376,7 +379,8 @@ fn emit_writer_write_op(op: &WriteOp, w: &str, root_value: &str) -> String {
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
                 return format!("{w}.writeBytes({val})");
             }
-            let inner = emit_writer_write(element, w, "item");
+            let element = remap_root_in_seq(element, ValueExpr::Var("item".into()));
+            let inner = emit_writer_write(&element, w, "item");
             format!("{w}.writeArray({val}, (item) => {{ {inner} }})")
         }
         WriteOp::Record { id, value, .. } => {
@@ -464,7 +468,8 @@ pub fn emit_size_expr(size: &SizeExpr, root_value: &str) -> String {
                     format!("(4 + {val}.length * {element_size})")
                 }
                 VecLayout::Encoded => {
-                    let inner_size = emit_size_expr(inner, "item");
+                    let inner = remap_size_root(inner, ValueExpr::Var("item".into()));
+                    let inner_size = emit_size_expr(&inner, "item");
                     format!("(4 + {val}.reduce((acc, item) => acc + {inner_size}, 0))")
                 }
             }

@@ -2,6 +2,7 @@
 //! (`boltffi_macros`) and the code generator (`boltffi_bindgen`) depend on to
 //! agree across the FFI boundary.
 
+pub mod boxed_future;
 pub mod callable;
 pub mod primitive;
 

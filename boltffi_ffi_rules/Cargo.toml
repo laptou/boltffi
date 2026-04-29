@@ -14,6 +14,7 @@ serde = ["dep:serde"]
 
 [dependencies]
 serde = { workspace = true, optional = true }
+syn = { workspace = true }
 
 [dev-dependencies]
 rstest.workspace = true

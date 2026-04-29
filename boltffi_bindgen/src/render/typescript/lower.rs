@@ -19,6 +19,7 @@ use crate::ir::definitions::{
 use crate::ir::ids::{CallbackId, EnumId, FieldName, RecordId};
 use crate::ir::ops::{
     FieldWriteOp, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    remap_root_in_seq,
 };
 use crate::ir::plan::{AbiType, ScalarOrigin, SpanContent, Transport};
 use crate::ir::types::{PrimitiveType, TypeExpr};
@@ -29,6 +30,16 @@ use boltffi_ffi_rules::naming::ffi_prefix;
 
 fn result_err_is_string(returns: &ReturnDef) -> bool {
     matches!(returns, ReturnDef::Result { err, .. } if matches!(err, TypeExpr::String))
+}
+
+/// ok limb of `WriteOp::Result`, roots remapped from `okVal` to `result` for async Promise fulfillment.
+fn result_ok_write_seq(seq: &WriteSeq) -> Option<WriteSeq> {
+    match seq.ops.as_slice() {
+        [WriteOp::Result { ok, .. }] => {
+            Some(remap_root_in_seq(ok, ValueExpr::Var("result".into())))
+        }
+        _ => None,
+    }
 }
 
 struct AbiIndex {
@@ -1124,7 +1135,10 @@ impl<'a> TypeScriptLowerer<'a> {
                             )
                         }
                         ReturnShape {
-                            transport: Some(Transport::Handle { class_id, nullable, .. }),
+                            transport:
+                                Some(Transport::Handle {
+                                    class_id, nullable, ..
+                                }),
                             ..
                         } => {
                             let class_name = naming::to_upper_camel_case(class_id.as_str());
@@ -1145,7 +1159,12 @@ impl<'a> TypeScriptLowerer<'a> {
                             )
                         }
                         ReturnShape {
-                            transport: Some(Transport::Callback { callback_id, nullable, .. }),
+                            transport:
+                                Some(Transport::Callback {
+                                    callback_id,
+                                    nullable,
+                                    ..
+                                }),
                             ..
                         } => {
                             let if_name = naming::to_upper_camel_case(callback_id.as_str());
@@ -1311,13 +1330,19 @@ impl<'a> TypeScriptLowerer<'a> {
                         encode_ops: Some(encode_ops),
                         ..
                     } => {
-                        let ts_type = match &method_def.returns {
-                            ReturnDef::Value(ty) => emit::ts_type(ty),
-                            ReturnDef::Result { ok, .. } => emit::ts_type(ok),
-                            _ => "unknown".to_string(),
+                        let (ts_type, completion_encode_ops) = match &method_def.returns {
+                            ReturnDef::Value(ty) => (emit::ts_type(ty), encode_ops.clone()),
+                            ReturnDef::Result { ok, .. } => {
+                                let ok_seq = result_ok_write_seq(encode_ops).expect(
+                                    "async callback Result return should lower to WriteOp::Result",
+                                );
+                                (emit::ts_type(ok), ok_seq)
+                            }
+                            ReturnDef::Void => ("unknown".to_string(), encode_ops.clone()),
                         };
-                        let encode_expr = emit::emit_writer_write(encode_ops, "writer", "result");
-                        let size_expr = emit::emit_size_expr(&encode_ops.size, "result");
+                        let encode_expr =
+                            emit::emit_writer_write(&completion_encode_ops, "writer", "result");
+                        let size_expr = emit::emit_size_expr(&completion_encode_ops.size, "result");
                         (
                             Some(ts_type),
                             Some(encode_expr),
@@ -1328,7 +1353,10 @@ impl<'a> TypeScriptLowerer<'a> {
                         )
                     }
                     ReturnShape {
-                        transport: Some(Transport::Handle { class_id, nullable, .. }),
+                        transport:
+                            Some(Transport::Handle {
+                                class_id, nullable, ..
+                            }),
                         ..
                     } => {
                         let class_name = naming::to_upper_camel_case(class_id.as_str());
@@ -2010,10 +2038,9 @@ impl<'a> TypeScriptLowerer<'a> {
         match execution_model {
             TsExecutionModel::Sync => (Some(ts_type), TsOutputRoute::direct(String::new())),
             // wasm `complete` returns the packed handle as a u32; template wraps via `return_handle`.
-            TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
-                Some(ts_type),
-                TsOutputRoute::async_scalar(String::new()),
-            ),
+            TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => {
+                (Some(ts_type), TsOutputRoute::async_scalar(String::new()))
+            }
         }
     }
 
@@ -2247,10 +2274,8 @@ impl<'a> TypeScriptLowerer<'a> {
                             return_wasm_type: None,
                         });
                     } else if return_route.is_async_scalar() {
-                        let rt = self.sync_return_wasm_type_for_route(
-                            &async_call.result,
-                            &return_route,
-                        );
+                        let rt =
+                            self.sync_return_wasm_type_for_route(&async_call.result, &return_route);
                         push_unique(TsWasmImport {
                             ffi_name: complete_name,
                             params: vec![TsWasmParam {
@@ -2395,12 +2420,8 @@ impl<'a> TypeScriptLowerer<'a> {
     fn wasm_params_for_abi_call(&self, call: &AbiCall) -> Vec<TsWasmParam> {
         let mut wasm_params = self.wasm_entry_params_only(call);
 
-        let (_, return_route) = self.select_output_route(
-            &call.returns,
-            &call.error,
-            TsExecutionModel::Sync,
-            false,
-        );
+        let (_, return_route) =
+            self.select_output_route(&call.returns, &call.error, TsExecutionModel::Sync, false);
         if return_route.is_struct_return_slot() {
             wasm_params.insert(
                 0,
@@ -3101,7 +3122,8 @@ mod tests {
         Receiver, RecordDef, ReturnDef, VariantPayload,
     };
     use crate::ir::ids::{
-        CallbackId, ClassId, EnumId, FunctionId, MethodId, ParamName, VariantName,
+        CallbackId, ClassId, EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId,
+        VariantName,
     };
     use boltffi_ffi_rules::callable::ExecutionKind;
     use std::path::PathBuf;
@@ -3256,6 +3278,161 @@ mod tests {
             kind: CallbackKind::Trait,
             doc: None,
         }
+    }
+
+    fn async_fallible_store_harness_contract() -> FfiContract {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("StoreError"));
+        contract.catalog.insert_record(RecordDef {
+            id: RecordId::new("Entry"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("key"),
+                    type_expr: TypeExpr::String,
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("data"),
+                    type_expr: TypeExpr::Vec(Box::new(TypeExpr::Primitive(PrimitiveType::U8))),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        contract.catalog.insert_callback(callback_trait(
+            "StoreHarness",
+            vec![
+                CallbackMethodDef {
+                    id: MethodId::new("get"),
+                    params: vec![
+                        primitive_param("store", PrimitiveType::U32),
+                        ParamDef {
+                            name: ParamName::new("key"),
+                            type_expr: TypeExpr::String,
+                            passing: ParamPassing::Value,
+                            doc: None,
+                        },
+                    ],
+                    returns: ReturnDef::Result {
+                        ok: TypeExpr::Option(Box::new(TypeExpr::Vec(Box::new(
+                            TypeExpr::Primitive(PrimitiveType::U8),
+                        )))),
+                        err: TypeExpr::Enum(EnumId::new("StoreError")),
+                    },
+                    execution_kind: ExecutionKind::Async,
+                    doc: None,
+                },
+                CallbackMethodDef {
+                    id: MethodId::new("list"),
+                    params: vec![],
+                    returns: ReturnDef::Result {
+                        ok: TypeExpr::Vec(Box::new(TypeExpr::Record(RecordId::new("Entry")))),
+                        err: TypeExpr::Enum(EnumId::new("StoreError")),
+                    },
+                    execution_kind: ExecutionKind::Async,
+                    doc: None,
+                },
+            ],
+        ));
+        contract
+    }
+
+    #[test]
+    fn async_fallible_callback_lowering_encodes_ok_payload_only() {
+        let contract = async_fallible_store_harness_contract();
+        let module = lower_contract(&contract);
+        let cb = module
+            .callbacks
+            .iter()
+            .find(|c| c.interface_name == "StoreHarness")
+            .expect("store harness callback");
+
+        let get = cb
+            .async_methods
+            .iter()
+            .find(|m| m.ts_name == "get")
+            .expect("get async method");
+        assert_eq!(get.return_type.as_deref(), Some("Uint8Array | null"));
+        let encode = get.encode_expr.as_ref().expect("get encode expr");
+        assert!(
+            encode.contains("writer.writeOptional(result"),
+            "unexpected encode expr: {encode}"
+        );
+        assert!(
+            encode.contains("writer.writeBytes(v)"),
+            "optional ok payload should encode the unwrapped value: {encode}"
+        );
+        assert!(
+            !encode.contains("writeResult"),
+            "async Result callbacks must encode ok limb only: {encode}"
+        );
+
+        let size = get.size_expr.as_ref().expect("get size expr");
+        assert!(
+            size.contains("result !== null"),
+            "unexpected size expr: {size}"
+        );
+        assert!(!size.contains(r#"tag === "err""#));
+        assert!(!size.contains(r#"tag === "ok""#));
+
+        let list = cb
+            .async_methods
+            .iter()
+            .find(|m| m.ts_name == "list")
+            .expect("list async method");
+        assert_eq!(list.return_type.as_deref(), Some("Entry[]"));
+        let list_enc = list.encode_expr.as_ref().expect("list encode expr");
+        let list_size = list.size_expr.as_ref().expect("list size expr");
+        assert!(
+            list_enc.contains("writer.writeArray(result"),
+            "unexpected encode expr: {list_enc}"
+        );
+        assert!(
+            list_enc.contains("EntryCodec.encode(writer, item)"),
+            "array ok payload should encode each item: {list_enc}"
+        );
+        assert!(
+            list_size.contains("EntryCodec.size(item)"),
+            "array ok payload should size each item: {list_size}"
+        );
+        assert!(!list_enc.contains("writeResult"));
+    }
+
+    #[test]
+    fn async_fallible_callback_template_encodes_fulfilled_value_as_ok_payload() {
+        use crate::render::typescript::templates::CallbackTemplate;
+        use askama::Template;
+
+        let contract = async_fallible_store_harness_contract();
+        let module = lower_contract(&contract);
+        let callback = module
+            .callbacks
+            .iter()
+            .find(|c| c.interface_name == "StoreHarness")
+            .expect("store harness callback");
+        let rendered = CallbackTemplate { callback }.render().unwrap();
+
+        assert!(rendered.contains("get(store: number, key: string): Promise<Uint8Array | null>;"));
+        assert!(
+            rendered.contains("writer.writeOptional(result"),
+            "rendered snippet missing optional-bytes completion encode"
+        );
+        assert!(
+            rendered.contains("writer.writeBytes(v)"),
+            "rendered snippet should encode optional payloads from the v binding"
+        );
+        assert!(
+            rendered.contains("EntryCodec.encode(writer, item)"),
+            "rendered snippet should encode array elements from the item binding"
+        );
+        assert!(!rendered.contains("writer.writeResult(result"));
     }
 
     #[test]
@@ -3490,9 +3667,9 @@ mod tests {
                 "export function makeIncrementingCallback(delta: number): ValueCallback {"
             )
         );
-        assert!(rendered.contains(
-            "const result = _exports.boltffi_make_incrementing_callback(delta);"
-        ));
+        assert!(
+            rendered.contains("const result = _exports.boltffi_make_incrementing_callback(delta);")
+        );
         assert!(rendered.contains("return wrapValueCallback(result);"));
     }
 
@@ -3998,7 +4175,7 @@ mod tests {
                     params: vec![],
                     is_fallible: false,
                     is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+                    execution_kind: ExecutionKind::Sync,
                     doc: None,
                     deprecated: None,
                 },
@@ -4006,7 +4183,7 @@ mod tests {
                     name: MethodId::new("connect"),
                     is_fallible: false,
                     is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+                    execution_kind: ExecutionKind::Sync,
                     doc: None,
                     deprecated: None,
                 },
@@ -4044,7 +4221,7 @@ mod tests {
                     params: vec![],
                     is_fallible: false,
                     is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+                    execution_kind: ExecutionKind::Sync,
                     doc: None,
                     deprecated: None,
                 },
@@ -4052,7 +4229,7 @@ mod tests {
                     name: MethodId::new("new_"),
                     is_fallible: false,
                     is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+                    execution_kind: ExecutionKind::Sync,
                     doc: None,
                     deprecated: None,
                 },
@@ -4099,7 +4276,7 @@ mod tests {
             params: vec![primitive_param("raw", PrimitiveType::I64)],
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         });

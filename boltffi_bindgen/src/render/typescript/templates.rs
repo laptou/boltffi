@@ -679,7 +679,9 @@ mod tests {
             contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
                 ScalarReturnStrategy::PrimitiveValue,
             )),
-            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(PrimitiveType::I32))),
+            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
+                PrimitiveType::I32,
+            ))),
             decode_ops: None,
             encode_ops: None,
         }
@@ -1104,7 +1106,8 @@ mod tests {
                 proxy_params: vec![],
                 poll_sync_ffi_name: "__boltffi_local_async_fetcher_fetch_poll_sync".to_string(),
                 complete_ffi_name: "__boltffi_local_async_fetcher_fetch_complete".to_string(),
-                panic_message_ffi_name: "__boltffi_local_async_fetcher_fetch_panic_message".to_string(),
+                panic_message_ffi_name: "__boltffi_local_async_fetcher_fetch_panic_message"
+                    .to_string(),
                 cancel_ffi_name: "__boltffi_local_async_fetcher_fetch_cancel".to_string(),
                 free_ffi_name: "__boltffi_local_async_fetcher_fetch_free".to_string(),
                 proxy_return_route: TsOutputRoute::packed("reader.readI32()".to_string()),
@@ -1130,6 +1133,98 @@ mod tests {
             closure_fn_type: None,
             doc: None,
         }
+    }
+
+    /// fallible async encoded return (`Result<Option<Vec<u8>>, _>`) — hand-built mirror of what
+    /// lowering emits for indexeddb-style harness callbacks; kept beside [`async_callback_fixture`].
+    fn async_fallible_callback_fixture() -> TsCallback {
+        TsCallback {
+            interface_name: "AsyncFallibleStore".to_string(),
+            trait_name_snake: "async_fallible_store".to_string(),
+            create_handle_fn: "boltffi_create_async_fallible_store_handle".to_string(),
+            local_free_fn: "__boltffi_local_async_fallible_store_free".to_string(),
+            wrap_handle_fn: "wrapAsyncFallibleStore".to_string(),
+            proxy_class_name: "AsyncFallibleStoreProxy".to_string(),
+            is_returned: true,
+            methods: vec![],
+            async_methods: vec![TsAsyncCallbackMethod {
+                ts_name: "get".to_string(),
+                start_import_name: "__boltffi_callback_async_fallible_store_get_start".to_string(),
+                complete_export_name: "boltffi_callback_async_fallible_store_get_complete"
+                    .to_string(),
+                proxy_export_name: "__boltffi_local_async_fallible_store_get".to_string(),
+                proxy_params: vec![
+                    TsParam {
+                        name: "store".to_string(),
+                        ts_type: "number".to_string(),
+                        input_route: TsInputRoute::Direct,
+                    },
+                    TsParam {
+                        name: "key".to_string(),
+                        ts_type: "string".to_string(),
+                        input_route: TsInputRoute::Direct,
+                    },
+                ],
+                poll_sync_ffi_name: "__boltffi_local_async_fallible_store_get_poll_sync"
+                    .to_string(),
+                complete_ffi_name: "__boltffi_local_async_fallible_store_get_complete".to_string(),
+                panic_message_ffi_name: "__boltffi_local_async_fallible_store_get_panic_message"
+                    .to_string(),
+                cancel_ffi_name: "__boltffi_local_async_fallible_store_get_cancel".to_string(),
+                free_ffi_name: "__boltffi_local_async_fallible_store_get_free".to_string(),
+                proxy_return_route: TsOutputRoute::packed(
+                    "reader.readOptional((reader) => reader.readBytes())".to_string(),
+                ),
+                return_handle: None,
+                return_callback: None,
+                params: vec![
+                    TsCallbackParam {
+                        name: "store".to_string(),
+                        ts_type: "number".to_string(),
+                        kind: TsCallbackParamKind::Primitive {
+                            import_ts_type: "number".to_string(),
+                            call_expr: "store".to_string(),
+                        },
+                    },
+                    TsCallbackParam {
+                        name: "key".to_string(),
+                        ts_type: "string".to_string(),
+                        kind: TsCallbackParamKind::Primitive {
+                            import_ts_type: "string".to_string(),
+                            call_expr: "key".to_string(),
+                        },
+                    },
+                ],
+                return_type: Some("Uint8Array | null".to_string()),
+                encode_expr: Some(
+                    "writer.writeOptional(result, (v) => { writer.writeBytes(v) })".to_string(),
+                ),
+                size_expr: Some(
+                    "(result !== null ? 1 + (4 + (4 + result.byteLength)) : 1)".to_string(),
+                ),
+                direct_write_method: None,
+                direct_write_value_expr: None,
+                direct_size: None,
+                proxy_wasm_imports: vec![],
+                doc: None,
+            }],
+            closure_fn_type: None,
+            doc: None,
+        }
+    }
+
+    #[test]
+    fn async_fallible_callback_encodes_fulfilled_value_as_ok_payload() {
+        let callback = async_fallible_callback_fixture();
+        let rendered = CallbackTemplate {
+            callback: &callback,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("get(store: number, key: string): Promise<Uint8Array | null>;"));
+        assert!(rendered.contains("writer.writeOptional(result, (v) => { writer.writeBytes(v) })"));
+        assert!(!rendered.contains("writer.writeResult(result"));
     }
 
     #[test]
@@ -1313,9 +1408,7 @@ mod tests {
         assert!(rendered.contains("let completeCompleted = false;"));
         assert!(rendered.contains("_module.freeBuf(outPtr);"));
         assert!(rendered.contains("_module.freeBufDescriptor(outPtr);"));
-        assert!(rendered.contains(
-            "_exports.boltffi_counter_next_value_free(awaitedHandle);"
-        ));
+        assert!(rendered.contains("_exports.boltffi_counter_next_value_free(awaitedHandle);"));
     }
 
     #[test]
@@ -1725,7 +1818,8 @@ mod tests {
             methods: vec![TsCallbackMethod {
                 ts_name: "onTransferStarted".to_string(),
                 import_name: "__boltffi_callback_sender_callbacks_on_transfer_started".to_string(),
-                proxy_export_name: "__boltffi_local_sender_callbacks_on_transfer_started".to_string(),
+                proxy_export_name: "__boltffi_local_sender_callbacks_on_transfer_started"
+                    .to_string(),
                 params: vec![TsCallbackParam {
                     name: "transfer".to_string(),
                     ts_type: "Transfer".to_string(),
@@ -1750,7 +1844,9 @@ mod tests {
             closure_fn_type: None,
             doc: None,
         };
-        let template = CallbackTemplate { callback: &callback };
+        let template = CallbackTemplate {
+            callback: &callback,
+        };
         insta::assert_snapshot!(template.render().unwrap());
     }
 
@@ -1759,7 +1855,9 @@ mod tests {
     fn snapshot_callback_not_returned_omits_proxy() {
         let mut callback = sync_callback_fixture();
         callback.is_returned = false;
-        let template = CallbackTemplate { callback: &callback };
+        let template = CallbackTemplate {
+            callback: &callback,
+        };
         insta::assert_snapshot!(template.render().unwrap());
     }
 
@@ -1802,7 +1900,9 @@ mod tests {
             closure_fn_type: None,
             doc: None,
         };
-        let template = CallbackTemplate { callback: &callback };
+        let template = CallbackTemplate {
+            callback: &callback,
+        };
         insta::assert_snapshot!(template.render().unwrap());
     }
 
@@ -1815,7 +1915,9 @@ mod tests {
             contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
                 ScalarReturnStrategy::PrimitiveValue,
             )),
-            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(PrimitiveType::U64))),
+            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
+                PrimitiveType::U64,
+            ))),
             decode_ops: None,
             encode_ops: None,
         }
@@ -1853,7 +1955,9 @@ mod tests {
             closure_fn_type: None,
             doc: None,
         };
-        let template = CallbackTemplate { callback: &callback };
+        let template = CallbackTemplate {
+            callback: &callback,
+        };
         insta::assert_snapshot!(template.render().unwrap());
     }
 
@@ -1882,7 +1986,8 @@ mod tests {
                 mode: TsClassMethodMode::Async(TsClassAsyncMethod {
                     poll_sync_ffi_name: "boltffi_received_transfer_stream_poll_sync".to_string(),
                     complete_ffi_name: "boltffi_received_transfer_stream_complete".to_string(),
-                    panic_message_ffi_name: "boltffi_received_transfer_stream_panic_message".to_string(),
+                    panic_message_ffi_name: "boltffi_received_transfer_stream_panic_message"
+                        .to_string(),
                     cancel_ffi_name: "boltffi_received_transfer_stream_cancel".to_string(),
                     free_ffi_name: "boltffi_received_transfer_stream_free".to_string(),
                     return_route: TsOutputRoute::async_scalar(String::new()),

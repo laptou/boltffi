@@ -3,8 +3,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 
-use super::future;
 use super::CallbackReturnType;
+use super::future;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
 use crate::index::custom_types;
@@ -107,12 +107,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         let receiver_cb = format_ident!("__boltffi_cb");
         let recv = quote! { #receiver_cb };
         let impl_inner = if future::is_unit_future_output(inner) {
-            self.async_void_impl_body(
-                &method_name_snake,
-                call_args,
-                prelude_stmts,
-                &recv,
-            )
+            self.async_void_impl_body(&method_name_snake, call_args, prelude_stmts, &recv)
         } else {
             self.async_returning_impl_body(
                 inner,
@@ -204,12 +199,9 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 prelude_stmts,
                 &recv_self,
             ),
-            None => self.async_void_impl_body(
-                &method_name_snake,
-                call_args,
-                prelude_stmts,
-                &recv_self,
-            ),
+            None => {
+                self.async_void_impl_body(&method_name_snake, call_args, prelude_stmts, &recv_self)
+            }
         };
 
         Ok(quote! {

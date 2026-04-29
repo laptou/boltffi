@@ -68,14 +68,20 @@ pub fn classify_value_return_strategy(
             if ReturnTypeDescriptor::parse(ok).is_primitive()
                 && ReturnTypeDescriptor::parse(err).is_primitive()
             {
-                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar))
+                Ok(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::ResultScalar,
+                ))
             } else {
-                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
+                Ok(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                ))
             }
         }
         RustTypeShape::StandardContainer(StandardContainer::Option(inner_type)) => {
             if ReturnTypeDescriptor::parse(inner_type).is_primitive() {
-                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar))
+                Ok(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::OptionScalar,
+                ))
             } else if return_lowering
                 .exported_classes()
                 .is_exported_class_type(inner_type)
@@ -87,7 +93,9 @@ pub fn classify_value_return_strategy(
             {
                 Ok(ValueReturnStrategy::NullableObjectHandle)
             } else {
-                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded))
+                Ok(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                ))
             }
         }
         RustTypeShape::NamedNominal | RustTypeShape::GenericNominal | RustTypeShape::Other => {
@@ -126,7 +134,9 @@ pub fn classify_value_return_strategy(
                         Some(DataTypeCategory::Scalar) => Ok(ValueReturnStrategy::Scalar(
                             ScalarReturnStrategy::CStyleEnumTag,
                         )),
-                        Some(DataTypeCategory::Blittable) => Ok(ValueReturnStrategy::CompositeValue),
+                        Some(DataTypeCategory::Blittable) => {
+                            Ok(ValueReturnStrategy::CompositeValue)
+                        }
                         Some(DataTypeCategory::WireEncoded) | None => unreachable!(
                             "passable return transport requires scalar or blittable data type"
                         ),
