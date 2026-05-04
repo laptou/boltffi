@@ -1330,27 +1330,39 @@ impl<'a> TypeScriptLowerer<'a> {
                         encode_ops: Some(encode_ops),
                         ..
                     } => {
-                        let (ts_type, completion_encode_ops) = match &method_def.returns {
-                            ReturnDef::Value(ty) => (emit::ts_type(ty), encode_ops.clone()),
-                            ReturnDef::Result { ok, .. } => {
-                                let ok_seq = result_ok_write_seq(encode_ops).expect(
-                                    "async callback Result return should lower to WriteOp::Result",
-                                );
-                                (emit::ts_type(ok), ok_seq)
-                            }
-                            ReturnDef::Void => ("unknown".to_string(), encode_ops.clone()),
-                        };
-                        let encode_expr =
-                            emit::emit_writer_write(&completion_encode_ops, "writer", "result");
-                        let size_expr = emit::emit_size_expr(&completion_encode_ops.size, "result");
-                        (
-                            Some(ts_type),
-                            Some(encode_expr),
-                            Some(size_expr),
-                            None,
-                            None,
-                            None,
-                        )
+                        // Result<(), E> lowers with encode_ops but the ok type is void — no
+                        // payload to serialize. use the empty completion path so the template
+                        // emits `complete(requestId, 0, 0, 0, 0)` instead of `writer.writeU8(result)`.
+                        if matches!(&method_def.returns, ReturnDef::Result { ok, .. } if *ok == TypeExpr::Void)
+                        {
+                            (None, None, None, None, None, None)
+                        } else {
+                            let (ts_type, completion_encode_ops) = match &method_def.returns {
+                                ReturnDef::Value(ty) => (emit::ts_type(ty), encode_ops.clone()),
+                                ReturnDef::Result { ok, .. } => {
+                                    let ok_seq = result_ok_write_seq(encode_ops).expect(
+                                        "async callback Result return should lower to WriteOp::Result",
+                                    );
+                                    (emit::ts_type(ok), ok_seq)
+                                }
+                                ReturnDef::Void => ("unknown".to_string(), encode_ops.clone()),
+                            };
+                            let encode_expr = emit::emit_writer_write(
+                                &completion_encode_ops,
+                                "writer",
+                                "result",
+                            );
+                            let size_expr =
+                                emit::emit_size_expr(&completion_encode_ops.size, "result");
+                            (
+                                Some(ts_type),
+                                Some(encode_expr),
+                                Some(size_expr),
+                                None,
+                                None,
+                                None,
+                            )
+                        }
                     }
                     ReturnShape {
                         transport:
@@ -2365,6 +2377,39 @@ impl<'a> TypeScriptLowerer<'a> {
                 return_wasm_type: None,
             });
 
+            // complete exports are needed for every async method — both is_returned callbacks
+            // (rust returns the handle) and non-returned callbacks (js passes the handle in).
+            // the js glue calls _exports.boltffi_callback_<trait>_<method>_complete regardless.
+            for async_m in &cb.async_methods {
+                push_unique(TsWasmImport {
+                    ffi_name: async_m.complete_export_name.clone(),
+                    params: vec![
+                        TsWasmParam {
+                            name: "requestId".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "status".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "ptr".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "len".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                        TsWasmParam {
+                            name: "capacity".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                    ],
+                    return_wasm_type: None,
+                });
+            }
+
+            // proxy method imports only needed when rust returns the callback handle
             if cb.is_returned {
                 for method in &cb.methods {
                     push_unique(self.wasm_import_for_callback_proxy_method(method));
@@ -2374,32 +2419,6 @@ impl<'a> TypeScriptLowerer<'a> {
                     for imp in &async_m.proxy_wasm_imports {
                         push_unique(imp.clone());
                     }
-                    push_unique(TsWasmImport {
-                        ffi_name: async_m.complete_export_name.clone(),
-                        params: vec![
-                            TsWasmParam {
-                                name: "requestId".to_string(),
-                                wasm_type: "number".to_string(),
-                            },
-                            TsWasmParam {
-                                name: "status".to_string(),
-                                wasm_type: "number".to_string(),
-                            },
-                            TsWasmParam {
-                                name: "ptr".to_string(),
-                                wasm_type: "number".to_string(),
-                            },
-                            TsWasmParam {
-                                name: "len".to_string(),
-                                wasm_type: "number".to_string(),
-                            },
-                            TsWasmParam {
-                                name: "capacity".to_string(),
-                                wasm_type: "number".to_string(),
-                            },
-                        ],
-                        return_wasm_type: None,
-                    });
                 }
             }
         }
@@ -5143,5 +5162,91 @@ mod tests {
         assert_eq!(function.return_type.as_deref(), Some("number"));
         assert!(function.return_route.is_async_scalar());
         assert_eq!(function.return_route.ts_cast(), "");
+    }
+
+    /// non-returned async callbacks (js passes handle in, rust calls back) must still have
+    /// their `boltffi_callback_<trait>_<method>_complete` export in WasmExports — the generated
+    /// glue calls _exports.boltffi_callback_*_complete regardless of is_returned.
+    #[test]
+    fn non_returned_async_callback_complete_export_in_wasm_imports() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("HarnessError"));
+        contract.catalog.insert_callback(callback_trait(
+            "KvStore",
+            vec![CallbackMethodDef {
+                id: MethodId::new("put"),
+                params: vec![primitive_param("key", PrimitiveType::U32)],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Void,
+                    err: TypeExpr::Enum(EnumId::new("HarnessError")),
+                },
+                execution_kind: ExecutionKind::Async,
+                doc: None,
+            }],
+        ));
+        // the contract doesn't return KvStore from any function, so is_returned = false
+        let module = lower_contract(&contract);
+        let cb = module
+            .callbacks
+            .iter()
+            .find(|c| c.interface_name == "KvStore")
+            .expect("KvStore callback should be lowered");
+
+        assert!(
+            !cb.is_returned,
+            "KvStore is not returned by any export, so is_returned should be false"
+        );
+        assert!(
+            module
+                .wasm_imports
+                .iter()
+                .any(|imp| imp.ffi_name == "boltffi_callback_kv_store_put_complete"),
+            "complete export must appear in WasmExports even when is_returned = false"
+        );
+    }
+
+    /// async callback methods returning `Result<(), E>` (Promise<void> in typescript) should use
+    /// the empty completion path — no `writer.writeU8(result)` with a void operand.
+    #[test]
+    fn void_result_async_callback_uses_empty_completion() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(error_enum("HarnessError"));
+        contract.catalog.insert_callback(callback_trait(
+            "KvStore",
+            vec![CallbackMethodDef {
+                id: MethodId::new("put"),
+                params: vec![primitive_param("key", PrimitiveType::U32)],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Void,
+                    err: TypeExpr::Enum(EnumId::new("HarnessError")),
+                },
+                execution_kind: ExecutionKind::Async,
+                doc: None,
+            }],
+        ));
+
+        let module = lower_contract(&contract);
+        let cb = module
+            .callbacks
+            .iter()
+            .find(|c| c.interface_name == "KvStore")
+            .expect("KvStore callback should be lowered");
+        let put = cb
+            .async_methods
+            .iter()
+            .find(|m| m.ts_name == "put")
+            .expect("put async method");
+
+        // void result: no return type, no encode fields — template emits complete(requestId, 0, 0, 0, 0)
+        assert_eq!(
+            put.return_type, None,
+            "Result<(), E> async callback should have no return_type (void completion)"
+        );
+        assert!(put.encode_expr.is_none(), "no encode_expr for void result");
+        assert!(put.size_expr.is_none(), "no size_expr for void result");
+        assert!(
+            put.direct_write_method.is_none(),
+            "no direct_write_method for void result"
+        );
     }
 }
