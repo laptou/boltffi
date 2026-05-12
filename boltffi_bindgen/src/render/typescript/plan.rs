@@ -4,11 +4,19 @@ use crate::ir::plan::AbiType;
 use crate::render::typescript::emit;
 
 #[derive(Debug, Clone)]
+pub struct TsCustomType {
+    pub name: String,
+    pub target_type: String,
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TsModule {
     pub module_name: String,
     pub abi_version: u32,
     /// when set, emit wasm-bindgen glue import + `wasmBindgen` hooks (see `{module}.boltffi.json` from pack)
     pub wasm_bindgen_glue: Option<String>,
+    pub custom_types: Vec<TsCustomType>,
     pub records: Vec<TsRecord>,
     pub enums: Vec<TsEnum>,
     pub error_exceptions: Vec<TsErrorException>,

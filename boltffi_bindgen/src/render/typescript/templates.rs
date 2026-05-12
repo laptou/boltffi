@@ -21,6 +21,14 @@ pub fn ts_doc_block(doc: &Option<String>, indent: &str) -> String {
 }
 
 #[derive(Template)]
+#[template(path = "render_typescript/custom_type.txt", escape = "none")]
+pub struct CustomTypeTemplate<'a> {
+    pub name: &'a str,
+    pub target_type: &'a str,
+    pub doc: &'a Option<String>,
+}
+
+#[derive(Template)]
 #[template(path = "render_typescript/preamble_header.txt", escape = "none")]
 pub struct PreambleHeaderTemplate {
     pub abi_version: u32,
@@ -222,6 +230,22 @@ impl TypeScriptEmitter {
             .unwrap(),
         );
         output.push('\n');
+
+        for ct in &module.custom_types {
+            output.push_str(
+                &CustomTypeTemplate {
+                    name: &ct.name,
+                    target_type: &ct.target_type,
+                    doc: &ct.doc,
+                }
+                .render()
+                .unwrap(),
+            );
+            output.push('\n');
+        }
+        if !module.custom_types.is_empty() {
+            output.push('\n');
+        }
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
@@ -443,6 +467,22 @@ impl TypeScriptEmitter {
             .unwrap(),
         );
         output.push_str("\n\n");
+
+        for ct in &module.custom_types {
+            output.push_str(
+                &CustomTypeTemplate {
+                    name: &ct.name,
+                    target_type: &ct.target_type,
+                    doc: &ct.doc,
+                }
+                .render()
+                .unwrap(),
+            );
+            output.push('\n');
+        }
+        if !module.custom_types.is_empty() {
+            output.push('\n');
+        }
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());

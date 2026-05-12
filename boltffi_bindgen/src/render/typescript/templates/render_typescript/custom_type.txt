@@ -1,0 +1,1 @@
+{{ self::ts_doc_block(doc, "") }}export type {{ name }} = {{ target_type }};

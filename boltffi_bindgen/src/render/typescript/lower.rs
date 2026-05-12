@@ -218,9 +218,23 @@ impl<'a> TypeScriptLowerer<'a> {
         }
     }
 
+    fn lower_custom_types(&self) -> Vec<TsCustomType> {
+        self.contract
+            .catalog
+            .all_custom_types()
+            .map(|def| TsCustomType {
+                name: naming::to_upper_camel_case(def.id.as_str()),
+                target_type: emit::ts_type(&def.repr),
+                doc: def.doc.clone(),
+            })
+            .collect()
+    }
+
     pub fn lower(&self) -> Result<TsModule, TypeScriptLowerError> {
         let index = AbiIndex::new(self.abi);
         self.validate_top_level_function_names()?;
+
+        let custom_types = self.lower_custom_types();
 
         let records = self
             .contract
@@ -272,6 +286,7 @@ impl<'a> TypeScriptLowerer<'a> {
             module_name: self.module_name.clone(),
             abi_version: 1,
             wasm_bindgen_glue: None,
+            custom_types,
             records,
             enums,
             error_exceptions,
