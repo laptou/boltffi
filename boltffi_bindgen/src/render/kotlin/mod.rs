@@ -41,5 +41,7 @@ pub struct KotlinOptions {
     pub api_style: KotlinApiStyle,
     pub module_object_name: Option<String>,
     pub library_name: Option<Name<LibraryName>>,
+    pub desktop_jni_library_name: Option<Name<LibraryName>>,
+    pub desktop_fallback_library_name: Option<Name<LibraryName>>,
     pub desktop_loader: KotlinDesktopLoader,
 }

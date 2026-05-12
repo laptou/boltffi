@@ -16,7 +16,7 @@ use crate::toolchain::NativeHostToolchain;
 
 use super::link::{
     build_jvm_native_library, compile_jni_library, resolve_jni_include_directories,
-    validate_desktop_jni_symbol_stripping,
+    validate_desktop_jni_symbol_stripping_for,
 };
 use super::outputs::{
     remove_stale_flat_jvm_outputs_if_current_host_unrequested,
@@ -192,6 +192,7 @@ pub(crate) fn prepare_java_packaging(
         release,
         build_profile,
         &java_host_targets,
+        config.java_jvm_strip_symbols(),
     )?;
     if config.java_jvm_debug_symbols_enabled() {
         ensure_debug_symbols_profile_has_debuginfo(
@@ -209,6 +210,36 @@ pub(crate) fn prepare_java_packaging(
         java_host_targets,
         packaging_targets,
     })
+}
+
+pub(crate) fn prepare_current_host_jvm_packaging(
+    config: &Config,
+    release: bool,
+    cargo_args: &[String],
+) -> Result<JvmPackagingTarget> {
+    let build_cargo_args = resolve_build_cargo_args(config, cargo_args);
+    ensure_java_pack_cargo_args_supported(&build_cargo_args)?;
+    let build_profile = crate::build::resolve_build_profile(release, &build_cargo_args);
+    let current_host = JavaHostTarget::current().ok_or_else(|| CliError::CommandFailed {
+        command:
+            "JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64 hosts".to_string(),
+        status: None,
+    })?;
+    let mut packaging_targets = resolve_jvm_packaging_targets(
+        config,
+        &build_cargo_args,
+        release,
+        build_profile,
+        &[current_host],
+        false,
+    )?;
+
+    packaging_targets
+        .pop()
+        .ok_or_else(|| CliError::CommandFailed {
+            command: "could not resolve current JVM host packaging target".to_string(),
+            status: None,
+        })
 }
 
 pub(crate) fn ensure_java_no_build_supported(
@@ -273,14 +304,27 @@ pub(crate) fn generate_java_header(
     source_directory: &Path,
     crate_name: &str,
 ) -> Result<()> {
+    generate_jvm_header(
+        source_directory,
+        crate_name,
+        &config.java_jvm_output().join("jni"),
+        crate_name,
+    )
+}
+
+pub(crate) fn generate_jvm_header(
+    source_directory: &Path,
+    crate_name: &str,
+    output_directory: &Path,
+    header_name: &str,
+) -> Result<()> {
     use boltffi_bindgen::{CHeaderLowerer, ir, scan_crate_with_pointer_width};
 
-    let output_directory = config.java_jvm_output().join("jni");
-    let output_path = output_directory.join(format!("{crate_name}.h"));
+    let output_path = output_directory.join(format!("{header_name}.h"));
 
-    std::fs::create_dir_all(&output_directory).map_err(|source| {
+    std::fs::create_dir_all(output_directory).map_err(|source| {
         CliError::CreateDirectoryFailed {
-            path: output_directory.clone(),
+            path: output_directory.to_path_buf(),
             source,
         }
     })?;
@@ -401,6 +445,7 @@ fn resolve_jvm_packaging_targets(
     release: bool,
     build_profile: CargoBuildProfile,
     host_targets: &[JavaHostTarget],
+    strip_symbols: bool,
 ) -> Result<Vec<JvmPackagingTarget>> {
     let current_host = JavaHostTarget::current().ok_or_else(|| CliError::CommandFailed {
         command:
@@ -429,7 +474,7 @@ fn resolve_jvm_packaging_targets(
         .iter()
         .copied()
         .map(|host_target| {
-            validate_desktop_jni_symbol_stripping(config, host_target)?;
+            validate_desktop_jni_symbol_stripping_for(strip_symbols, host_target)?;
             let toolchain = NativeHostToolchain::discover(
                 toolchain_selector.as_deref(),
                 &cargo_command_args,
@@ -568,6 +613,7 @@ mod tests {
             false,
             CargoBuildProfile::Named("dist".to_string()),
             &[JavaHostTarget::WindowsX86_64],
+            true,
         ) {
             Ok(_) => panic!("expected unsupported windows strip config to fail during preflight"),
             Err(error) => error,

@@ -392,7 +392,8 @@ pub struct KotlinCallbackReturn {
 #[derive(Clone)]
 pub struct KotlinNative {
     pub android_lib_name: Name<LibraryName>,
-    pub desktop_lib_name: Name<LibraryName>,
+    pub desktop_jni_lib_name: Name<LibraryName>,
+    pub desktop_fallback_lib_name: Name<LibraryName>,
     pub desktop_loader_bundled: bool,
     pub desktop_loader_system: bool,
     pub prefix: String,

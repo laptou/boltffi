@@ -61,7 +61,8 @@ pub struct PreambleTemplate<'a> {
 #[template(path = "render_kotlin/native.txt", escape = "none")]
 pub struct NativeTemplate<'a> {
     pub android_lib_name: &'a str,
-    pub desktop_lib_name: &'a str,
+    pub desktop_jni_lib_name: &'a str,
+    pub desktop_fallback_lib_name: &'a str,
     pub desktop_loader_bundled: bool,
     pub desktop_loader_system: bool,
     pub prefix: &'a str,
@@ -477,7 +478,8 @@ impl KotlinEmitter {
 
         let native = NativeTemplate {
             android_lib_name: module.native.android_lib_name.as_str(),
-            desktop_lib_name: module.native.desktop_lib_name.as_str(),
+            desktop_jni_lib_name: module.native.desktop_jni_lib_name.as_str(),
+            desktop_fallback_lib_name: module.native.desktop_fallback_lib_name.as_str(),
             desktop_loader_bundled: module.native.desktop_loader_bundled,
             desktop_loader_system: module.native.desktop_loader_system,
             prefix: &module.native.prefix,
@@ -953,7 +955,8 @@ mod tests {
     fn native_without_async_runtime_omits_future_continuation_callback() {
         let rendered = NativeTemplate {
             android_lib_name: "repro",
-            desktop_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
             desktop_loader_bundled: false,
             desktop_loader_system: false,
             prefix: "boltffi",
@@ -974,7 +977,8 @@ mod tests {
     fn native_template_keeps_android_safe_runtime_branch() {
         let rendered = NativeTemplate {
             android_lib_name: "repro",
-            desktop_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
             desktop_loader_bundled: true,
             desktop_loader_system: false,
             prefix: "boltffi",
@@ -996,7 +1000,8 @@ mod tests {
     fn native_template_keeps_desktop_loader_for_non_android_runtime() {
         let rendered = NativeTemplate {
             android_lib_name: "repro",
-            desktop_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
             desktop_loader_bundled: true,
             desktop_loader_system: false,
             prefix: "boltffi",
@@ -1028,7 +1033,8 @@ mod tests {
     fn native_template_can_use_system_loader_for_desktop_runtime() {
         let rendered = NativeTemplate {
             android_lib_name: "repro",
-            desktop_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
             desktop_loader_bundled: false,
             desktop_loader_system: true,
             prefix: "boltffi",
@@ -1057,7 +1063,8 @@ mod tests {
     fn native_template_can_skip_desktop_loading() {
         let rendered = NativeTemplate {
             android_lib_name: "repro",
-            desktop_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
             desktop_loader_bundled: false,
             desktop_loader_system: false,
             prefix: "boltffi",

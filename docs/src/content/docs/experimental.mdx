@@ -13,6 +13,7 @@ Java and C# bindings are now generally available and no longer require experimen
 |---------|-----|--------|
 | Python target | `python` | In progress |
 | Dart target | `dart` | In progress |
+| Kotlin Multiplatform target | `kotlin_multiplatform` | Initial JVM/Android actuals |
 | TS async streams | `typescript.async_streams` | Functional |
 
 ## Enabling
@@ -31,12 +32,20 @@ boltffi pack all --experimental
 Add the feature key to `experimental` in `boltffi.toml`:
 
 ```toml
-experimental = ["typescript.async_streams"]
+experimental = ["kotlin_multiplatform", "typescript.async_streams"]
 ```
 
 The CLI flag applies to a single command. The config array applies to every build.
 
 ## Feature Details
+
+### Kotlin Multiplatform
+
+**Key:** `kotlin_multiplatform`
+
+Enables `boltffi generate kmp` and includes Kotlin Multiplatform output during `boltffi generate all --experimental`. The generated module contains `commonMain` declarations plus `jvmMain` and `androidMain` actuals that delegate to the existing Kotlin/JNI bindings.
+
+This is an initial target slice. Kotlin/Native `cinterop` actuals for iOS/macOS are not generated yet.
 
 ### TypeScript Async Streams
 

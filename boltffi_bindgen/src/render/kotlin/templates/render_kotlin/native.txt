@@ -2,8 +2,8 @@
 private object Native {
     init {
         val androidLibrary = "{{ android_lib_name }}"
-        val desktopPreferredLibrary = "{{ desktop_lib_name }}_jni"
-        val desktopFallbackLibrary = "{{ desktop_lib_name }}"
+        val desktopPreferredLibrary = "{{ desktop_jni_lib_name }}_jni"
+        val desktopFallbackLibrary = "{{ desktop_fallback_lib_name }}"
         val vmName = System.getProperty("java.vm.name").orEmpty()
         val isAndroidRuntime =
             vmName.contains("dalvik", ignoreCase = true) ||

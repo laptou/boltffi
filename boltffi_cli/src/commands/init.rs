@@ -4,8 +4,8 @@ use crate::cli::Result;
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
     CSharpConfig, CargoConfig, Config, DartConfig, DebugSymbolsConfig, ErrorStyle, FactoryStyle,
-    HeaderConfig, JavaConfig, PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig,
-    XcframeworkConfig,
+    HeaderConfig, JavaConfig, KotlinMultiplatformConfig, PackageConfig, PythonConfig, SpmConfig,
+    TargetsConfig, WasmConfig, XcframeworkConfig,
 };
 
 pub struct InitOptions {
@@ -128,6 +128,7 @@ fn create_default_config(package_name: &str) -> Config {
                 pack: AndroidPackConfig { output: None },
                 debug_symbols: DebugSymbolsConfig::default(),
             },
+            kotlin_multiplatform: KotlinMultiplatformConfig::default(),
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),
             dart: DartConfig::default(),
@@ -181,6 +182,7 @@ mod tests {
         assert!(config_path.exists());
         let content = fs::read_to_string(&config_path).expect("read config");
         assert!(content.contains("name = \"demo_lib\""));
+        assert!(content.contains("[targets.kotlin_multiplatform]"));
         assert!(content.contains("[targets.python]"));
         assert!(content.contains("[targets.python.wheel]"));
 

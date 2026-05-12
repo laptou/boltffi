@@ -2538,18 +2538,28 @@ impl<'a> KotlinLowerer<'a> {
                 },
             )
             .1;
+        let default_desktop_lib_name = self
+            .options
+            .library_name
+            .as_ref()
+            .map(|name| naming::library_name(name.as_str()))
+            .unwrap_or_else(|| naming::library_name(&self.contract.package.name));
         KotlinNative {
             android_lib_name: self
                 .options
                 .library_name
                 .clone()
                 .unwrap_or_else(|| naming::load_library_name(&self.contract.package.name)),
-            desktop_lib_name: self
+            desktop_jni_lib_name: self
                 .options
-                .library_name
-                .as_ref()
-                .map(|name| naming::library_name(name.as_str()))
-                .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
+                .desktop_jni_library_name
+                .clone()
+                .unwrap_or_else(|| default_desktop_lib_name.clone()),
+            desktop_fallback_lib_name: self
+                .options
+                .desktop_fallback_library_name
+                .clone()
+                .unwrap_or(default_desktop_lib_name),
             desktop_loader_bundled: matches!(
                 self.options.desktop_loader,
                 KotlinDesktopLoader::Bundled
@@ -5011,7 +5021,14 @@ mod tests {
         let rendered = KotlinEmitter::emit(&module);
 
         assert_eq!(module.native.android_lib_name.as_str(), "sample-library");
-        assert_eq!(module.native.desktop_lib_name.as_str(), "sample_library");
+        assert_eq!(
+            module.native.desktop_jni_lib_name.as_str(),
+            "sample_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
+            "sample_library"
+        );
         assert!(rendered.contains("val androidLibrary = \"sample-library\""));
         assert!(rendered.contains("val desktopPreferredLibrary = \"sample_library_jni\""));
         assert!(rendered.contains("val desktopFallbackLibrary = \"sample_library\""));
@@ -5047,12 +5064,59 @@ mod tests {
             "configured-library"
         );
         assert_eq!(
-            module.native.desktop_lib_name.as_str(),
+            module.native.desktop_jni_lib_name.as_str(),
+            "configured_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
             "configured_library"
         );
         assert!(rendered.contains("val androidLibrary = \"configured-library\""));
         assert!(rendered.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
         assert!(rendered.contains("val desktopFallbackLibrary = \"configured_library\""));
+    }
+
+    #[test]
+    fn native_library_name_can_split_desktop_jni_and_fallback_names() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions {
+                library_name: Some(naming::load_library_name("configured-library")),
+                desktop_jni_library_name: Some(naming::library_name("configured-library")),
+                desktop_fallback_library_name: Some(naming::library_name("sample-library")),
+                ..KotlinOptions::default()
+            },
+        )
+        .lower();
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(
+            module.native.android_lib_name.as_str(),
+            "configured-library"
+        );
+        assert_eq!(
+            module.native.desktop_jni_lib_name.as_str(),
+            "configured_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
+            "sample_library"
+        );
+        assert!(rendered.contains("val androidLibrary = \"configured-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"sample_library\""));
     }
 
     fn async_string_method_contract() -> FfiContract {

@@ -4,10 +4,11 @@ mod languages;
 
 use std::path::{Path, PathBuf};
 
-use generator::{GenerateRequest, run_generator};
+use boltffi_bindgen::CHeaderLowerer;
+use generator::{GenerateRequest, ScanPointerWidth, run_generator};
 use header::HeaderGenerator;
 use languages::{
-    CSharpGenerator, DartGenerator, JavaGenerator, KotlinGenerator, PythonGenerator,
+    CSharpGenerator, DartGenerator, JavaGenerator, KMPGenerator, KotlinGenerator, PythonGenerator,
     SwiftGenerator, TypeScriptGenerator,
 };
 
@@ -17,6 +18,7 @@ use crate::config::{Config, Target};
 pub enum GenerateTarget {
     Swift,
     Kotlin,
+    KotlinMultiplatform,
     Java,
     Header,
     Typescript,
@@ -38,6 +40,9 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
     match options.target {
         GenerateTarget::Swift => run_generator::<SwiftGenerator>(&request, options.experimental),
         GenerateTarget::Kotlin => run_generator::<KotlinGenerator>(&request, options.experimental),
+        GenerateTarget::KotlinMultiplatform => {
+            run_generator::<KMPGenerator>(&request, options.experimental)
+        }
         GenerateTarget::Java => run_generator::<JavaGenerator>(&request, options.experimental),
         GenerateTarget::Header => run_generator::<HeaderGenerator>(&request, options.experimental),
         GenerateTarget::Typescript => {
@@ -53,6 +58,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
 
             if config.should_process(Target::Kotlin, options.experimental) {
                 run_generator::<KotlinGenerator>(&request, options.experimental)?;
+            }
+
+            if config.should_process(Target::KotlinMultiplatform, options.experimental) {
+                run_generator::<KMPGenerator>(&request, options.experimental)?;
             }
 
             if config.should_process(Target::Java, options.experimental) {
@@ -93,6 +102,48 @@ pub fn run_generate_java_with_output_from_source_dir(
     JavaGenerator::generate_from_source_directory(config, output, source_directory, crate_name)
 }
 
+pub fn run_generate_kmp_with_output_from_source_dir_and_desktop_fallback_library_name(
+    config: &Config,
+    output: Option<PathBuf>,
+    source_directory: &Path,
+    crate_name: &str,
+    desktop_fallback_library_name: &str,
+) -> Result<()> {
+    KMPGenerator::generate_from_source_directory_with_desktop_fallback_library_name(
+        config,
+        output,
+        source_directory,
+        crate_name,
+        Some(desktop_fallback_library_name),
+    )
+}
+
+pub fn run_generate_header_with_output_from_source_dir(
+    config: &Config,
+    output: Option<PathBuf>,
+    source_directory: &Path,
+    crate_name: &str,
+) -> Result<()> {
+    let output_directory = output
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| config.android_header_output());
+    let request = GenerateRequest::new(
+        config,
+        output,
+        generator::SourceCrate::new(source_directory, crate_name),
+    );
+
+    let output_path = output_directory.join(format!("{}.h", config.library_name()));
+
+    request.ensure_output_directory(&output_directory)?;
+    let lowered_crate = request.lowered_crate(ScanPointerWidth::Flexible)?;
+    let header_source =
+        CHeaderLowerer::new(&lowered_crate.ffi_contract, &lowered_crate.abi_contract).generate();
+
+    request.write_output(&output_path, header_source)
+}
+
 pub fn run_generate_python_with_output_from_source_dir(
     config: &Config,
     output: Option<PathBuf>,
@@ -119,7 +170,7 @@ mod tests {
 
     use boltffi_bindgen::render::python::PythonRuntimeVersion;
 
-    use super::languages::PythonGenerator;
+    use super::languages::{KMPGenerator, PythonGenerator};
     use crate::config::Config;
 
     fn parse_config(input: &str) -> Config {
@@ -139,6 +190,45 @@ mod tests {
 
     fn demo_source_directory() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/demo")
+    }
+
+    #[test]
+    fn header_from_source_directory_supports_kmp_only_config() {
+        let output_directory = unique_temp_dir("boltffi-kmp-header-generate-test");
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "demo"
+version = "0.1.0"
+
+[targets.apple]
+enabled = false
+
+[targets.android]
+enabled = false
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        super::run_generate_header_with_output_from_source_dir(
+            &config,
+            Some(output_directory.clone()),
+            &demo_source_directory(),
+            "demo",
+        )
+        .expect("kmp-only header generation should succeed");
+
+        let header_path = output_directory.join("demo.h");
+        let header = fs::read_to_string(&header_path).expect("header should be readable");
+
+        assert!(header.contains("boltffi"));
+        assert!(header.contains("BoltFFICallbackHandle"));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
     }
 
     #[test]
@@ -197,6 +287,134 @@ enabled = true
         assert!(generated_native.contains("boltffi_python_symbol_echo_i32_fn"));
         assert!(generated_native.contains("boltffi_python_initialize_loader"));
         assert!(generated_native.contains("PyInit__native"));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
+
+    #[test]
+    fn kotlin_multiplatform_generate_writes_kmp_sources() {
+        let output_directory = unique_temp_dir("boltffi-kmp-generate-test");
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "demo"
+version = "0.1.0"
+
+[targets.kotlin_multiplatform]
+enabled = true
+package = "com.boltffi.demo"
+
+[targets.android.kotlin.type_mappings]
+Email = { type = "java.net.URI", conversion = "url_string" }
+"#,
+        );
+
+        KMPGenerator::generate_from_source_directory_with_desktop_fallback_library_name(
+            &config,
+            Some(output_directory.clone()),
+            &demo_source_directory(),
+            "demo",
+            None,
+        )
+        .expect("kotlin multiplatform generate should succeed");
+
+        let common_path = output_directory.join("src/commonMain/kotlin/com/boltffi/demo/Demo.kt");
+        let jvm_actual_path =
+            output_directory.join("src/jvmMain/kotlin/com/boltffi/demo/DemoJvmActual.kt");
+        let android_actual_path =
+            output_directory.join("src/androidMain/kotlin/com/boltffi/demo/DemoAndroidActual.kt");
+        let jvm_internal_path =
+            output_directory.join("src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt");
+        let jni_glue_path = output_directory.join("src/jvmMain/c/jni_glue.c");
+        let build_gradle_path = output_directory.join("build.gradle.kts");
+        let settings_gradle_path = output_directory.join("settings.gradle.kts");
+
+        let common = fs::read_to_string(&common_path).expect("common source should be readable");
+        let jvm_actual =
+            fs::read_to_string(&jvm_actual_path).expect("jvm actual should be readable");
+        let android_actual =
+            fs::read_to_string(&android_actual_path).expect("android actual should be readable");
+        let jvm_internal =
+            fs::read_to_string(&jvm_internal_path).expect("jvm source should be readable");
+        let jni_glue = fs::read_to_string(&jni_glue_path).expect("jni glue should be readable");
+        let build_gradle =
+            fs::read_to_string(&build_gradle_path).expect("gradle file should be readable");
+        let settings_gradle =
+            fs::read_to_string(&settings_gradle_path).expect("settings file should be readable");
+
+        assert!(common.contains("package com.boltffi.demo"));
+        assert!(common.contains("typealias Email = String"));
+        assert!(common.contains("data class Point("));
+        assert!(common.contains("enum class LogLevel(val value: Byte)"));
+        assert!(common.contains("expect fun echoBytes"));
+        assert!(common.contains("Unsupported in the initial KMP generator slice"));
+        assert!(jvm_actual.contains("actual fun echoBytes"));
+        assert!(jvm_actual.contains("com.boltffi.demo.jvm.echoBytes"));
+        assert!(jvm_actual.contains("toBoltFfiJvm"));
+        assert_eq!(jvm_actual, android_actual);
+        assert!(jvm_internal.contains("package com.boltffi.demo.jvm"));
+        assert!(jvm_internal.contains("typealias Email = String"));
+        assert!(jvm_internal.contains("@JvmStatic external fun"));
+        assert!(jni_glue.contains("JNIEXPORT"));
+        assert!(build_gradle.contains("kotlin(\"multiplatform\")"));
+        assert!(build_gradle.contains("kotlin(\"multiplatform\") version \"2.3.21\""));
+        assert!(build_gradle.contains("kotlinx-coroutines-core:1.11.0"));
+        assert!(build_gradle.contains("import org.jetbrains.kotlin.gradle.dsl.JvmTarget"));
+        assert!(build_gradle.contains("jvmTarget.set(JvmTarget.JVM_1_8)"));
+        assert!(build_gradle.contains("androidTarget {"));
+        assert!(build_gradle.contains("sourceCompatibility = JavaVersion.VERSION_1_8"));
+        assert!(build_gradle.contains("targetCompatibility = JavaVersion.VERSION_1_8"));
+        assert!(!build_gradle.contains("repositories {"));
+        assert!(settings_gradle.contains("pluginManagement"));
+        assert!(settings_gradle.contains("gradlePluginPortal()"));
+        assert!(settings_gradle.contains("RepositoriesMode.FAIL_ON_PROJECT_REPOS"));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
+
+    #[test]
+    fn kotlin_multiplatform_generate_uses_configured_native_load_name() {
+        let output_directory = unique_temp_dir("boltffi-kmp-generate-load-name-test");
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "my-lib"
+version = "0.1.0"
+
+[targets.android.kotlin]
+library_name = "configured-library"
+
+[targets.kotlin_multiplatform]
+enabled = true
+package = "com.boltffi.demo"
+module_name = "Demo"
+"#,
+        );
+
+        KMPGenerator::generate_from_source_directory_with_desktop_fallback_library_name(
+            &config,
+            Some(output_directory.clone()),
+            &demo_source_directory(),
+            "my-lib",
+            None,
+        )
+        .expect("kotlin multiplatform generate should succeed");
+
+        let jvm_internal_path =
+            output_directory.join("src/jvmMain/kotlin/com/boltffi/demo/jvm/Demo.kt");
+        let jni_glue_path = output_directory.join("src/jvmMain/c/jni_glue.c");
+        let jvm_internal =
+            fs::read_to_string(&jvm_internal_path).expect("jvm source should be readable");
+        let jni_glue = fs::read_to_string(&jni_glue_path).expect("jni glue should be readable");
+
+        assert!(jvm_internal.contains("val androidLibrary = \"configured-library\""));
+        assert!(jvm_internal.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
+        assert!(jvm_internal.contains("val desktopFallbackLibrary = \"my_lib\""));
+        assert!(jni_glue.contains("#include <my-lib.h>"));
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");
     }

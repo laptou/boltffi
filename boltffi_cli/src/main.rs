@@ -20,8 +20,8 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions, PackCommand,
-    PackDartOptions, PackExecutionOptions, PackJavaOptions, PackPythonOptions, PackWasmOptions,
-    check_java_packaging_prereqs,
+    PackDartOptions, PackExecutionOptions, PackJavaOptions, PackKmpOptions, PackPythonOptions,
+    PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -31,7 +31,7 @@ use config::{Config, Target};
 #[command(name = "boltffi")]
 #[command(about = "BoltFFI - Rust FFI toolchain (Apple + Android + WASM)")]
 #[command(
-    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi pack csharp\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*], [targets.java.*], [targets.dart.*], [targets.python.*], and [targets.csharp.*]\n"
+    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi generate kmp --experimental\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi pack csharp\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.kotlin_multiplatform.*], [targets.wasm.*], [targets.java.*], [targets.dart.*], [targets.python.*], and [targets.csharp.*]\n"
 )]
 #[command(version)]
 struct Cli {
@@ -106,7 +106,7 @@ enum Commands {
 
     #[command(
         about = "Generate bindings",
-        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n  boltffi generate python --experimental\n"
+        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate kmp --experimental\n  boltffi generate header\n  boltffi generate python --experimental\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -136,8 +136,8 @@ enum Commands {
     },
 
     #[command(
-        about = "Package platform artifacts (xcframework/SPM/jniLibs/npm/NuGet)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n  boltffi pack csharp\n"
+        about = "Package platform artifacts (xcframework/SPM/jniLibs/KMP/npm/NuGet)",
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack kmp --experimental\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n  boltffi pack csharp\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -165,6 +165,11 @@ enum GenerateTargetArg {
     Swift,
     #[value(help = "Generate Kotlin bindings + JNI glue")]
     Kotlin,
+    #[value(
+        alias = "kotlin-multiplatform",
+        help = "Generate experimental Kotlin Multiplatform sources"
+    )]
+    Kmp,
     #[value(help = "Generate Java bindings + JNI glue")]
     Java,
     #[value(help = "Generate C header")]
@@ -260,6 +265,28 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+    },
+
+    #[command(
+        alias = "kotlin-multiplatform",
+        about = "Build + package Kotlin Multiplatform native resources",
+        long_about = "Build + package Kotlin Multiplatform native resources.\n\nOutputs:\n  - KMP project:           {targets.kotlin_multiplatform.output}\n  - Android jniLibs:       {targets.kotlin_multiplatform.output}/src/androidMain/jniLibs\n  - JVM native resources:  {targets.kotlin_multiplatform.output}/src/jvmMain/resources/native\n"
+    )]
+    Kmp {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
     },
 
     #[command(
@@ -479,6 +506,7 @@ fn execute_command(
                     .map(|t| match t {
                         GenerateTargetArg::Swift => GenerateTarget::Swift,
                         GenerateTargetArg::Kotlin => GenerateTarget::Kotlin,
+                        GenerateTargetArg::Kmp => GenerateTarget::KotlinMultiplatform,
                         GenerateTargetArg::Java => GenerateTarget::Java,
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
@@ -559,6 +587,7 @@ fn execute_command(
                     release,
                     regenerate,
                     no_build,
+                    experimental: _,
                 } => PackCommand::Android(PackAndroidOptions {
                     execution: pack_execution_options(
                         release,
@@ -566,6 +595,20 @@ fn execute_command(
                         no_build,
                         cargo_args.clone(),
                     ),
+                }),
+                PackTargetArg::Kmp {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                } => PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental,
                 }),
                 PackTargetArg::Wasm {
                     release,
@@ -914,6 +957,12 @@ fn release_pack_commands(
                     execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
+            if config.should_process(Target::KotlinMultiplatform, false) {
+                commands.push(PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    experimental: false,
+                }));
+            }
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
                     execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
@@ -1211,6 +1260,53 @@ enabled = true
     }
 
     #[test]
+    fn release_all_includes_kmp_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Kmp(options)
+                if options.execution.release
+                    && options.execution.regenerate
+                    && !options.execution.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
+    fn release_all_does_not_include_kmp_without_experimental_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, PackCommand::Kmp(_)))
+        );
+    }
+
+    #[test]
     fn release_all_includes_python_packaging_when_enabled_and_experimental() {
         let config = parse_config(
             r#"
@@ -1290,6 +1386,21 @@ enabled = true
     }
 
     #[test]
+    fn cli_parses_generate_kmp_target() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "kmp", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Kmp),
+                experimental: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn cli_parses_pack_python_target() {
         let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
             .expect("cli parse should succeed");
@@ -1314,6 +1425,38 @@ enabled = true
             cli.command,
             Commands::Pack {
                 target: PackTargetArg::Csharp { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_android_experimental_flag() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "android", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Android {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_kmp_experimental_flag() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "kmp", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Kmp {
+                    experimental: true,
+                    ..
+                }
             }
         ));
     }

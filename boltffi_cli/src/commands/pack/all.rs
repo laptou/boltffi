@@ -4,8 +4,8 @@ use crate::reporter::Reporter;
 
 use super::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions, PackDartOptions,
-    PackJavaOptions, PackPythonOptions, PackWasmOptions, pack_android, pack_apple, pack_csharp,
-    pack_dart, pack_java, pack_python, pack_wasm, prepare_java_packaging,
+    PackJavaOptions, PackKmpOptions, PackPythonOptions, PackWasmOptions, pack_android, pack_apple,
+    pack_csharp, pack_dart, pack_java, pack_kmp, pack_python, pack_wasm, prepare_java_packaging,
 };
 
 pub(super) fn pack_all(
@@ -14,6 +14,12 @@ pub(super) fn pack_all(
     reporter: &Reporter,
 ) -> Result<()> {
     super::ensure_java_no_build_supported(
+        config,
+        options.execution.no_build,
+        options.experimental,
+        "pack all",
+    )?;
+    super::ensure_kmp_no_build_supported(
         config,
         options.execution.no_build,
         options.experimental,
@@ -52,6 +58,18 @@ pub(super) fn pack_all(
             config,
             PackAndroidOptions {
                 execution: options.execution.clone(),
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::KotlinMultiplatform, options.experimental) {
+        pack_kmp(
+            config,
+            PackKmpOptions {
+                execution: options.execution.clone(),
+                experimental: options.experimental,
             },
             reporter,
         )?;

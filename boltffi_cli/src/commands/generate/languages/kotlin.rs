@@ -30,10 +30,11 @@ impl KotlinGenerator {
                 ConfigKotlinApiStyle::ModuleObject => BindgenKotlinApiStyle::ModuleObject,
             },
             module_object_name: Some(module_name.to_string()),
-            library_name: request
-                .config()
-                .android_kotlin_library_name()
-                .map(boltffi_bindgen::load_library_name),
+            library_name: Some(boltffi_bindgen::load_library_name(
+                &request.config().resolved_android_kotlin_library_name(),
+            )),
+            desktop_jni_library_name: None,
+            desktop_fallback_library_name: None,
             desktop_loader: match request.config().android_kotlin_desktop_loader() {
                 ConfigKotlinDesktopLoader::Bundled => BindgenKotlinDesktopLoader::Bundled,
                 ConfigKotlinDesktopLoader::System => BindgenKotlinDesktopLoader::System,

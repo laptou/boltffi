@@ -4,6 +4,7 @@ pub enum PackCommand {
     All(PackAllOptions),
     Apple(PackAppleOptions),
     Android(PackAndroidOptions),
+    Kmp(PackKmpOptions),
     Wasm(PackWasmOptions),
     Java(PackJavaOptions),
     Python(PackPythonOptions),
@@ -35,6 +36,11 @@ pub struct PackAppleOptions {
 
 pub struct PackAndroidOptions {
     pub execution: PackExecutionOptions,
+}
+
+pub struct PackKmpOptions {
+    pub execution: PackExecutionOptions,
+    pub experimental: bool,
 }
 
 pub struct PackWasmOptions {

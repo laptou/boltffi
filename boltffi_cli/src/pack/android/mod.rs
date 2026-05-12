@@ -19,6 +19,12 @@ use super::{
 
 pub(crate) use self::link::AndroidPackager;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AndroidBindingMode {
+    Kotlin,
+    KotlinMultiplatform,
+}
+
 pub(crate) fn pack_android(
     config: &Config,
     options: PackAndroidOptions,
@@ -114,7 +120,12 @@ pub(crate) fn pack_android(
         )?;
     }
 
-    let packager = AndroidPackager::new(config, android_libraries, build_profile.is_release_like());
+    let packager = AndroidPackager::new(
+        config,
+        android_libraries,
+        build_profile.is_release_like(),
+        AndroidBindingMode::Kotlin,
+    );
     let step = reporter.step("Packaging jniLibs");
     packager.package()?;
     step.finish_success();
@@ -122,7 +133,7 @@ pub(crate) fn pack_android(
     Ok(())
 }
 
-fn build_android_targets(
+pub(crate) fn build_android_targets(
     config: &Config,
     targets: &[crate::target::RustTarget],
     release: bool,

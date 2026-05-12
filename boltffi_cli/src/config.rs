@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     Swift,
     Kotlin,
+    KotlinMultiplatform,
     Java,
     TypeScript,
     Header,
@@ -26,6 +27,7 @@ impl Target {
         match self {
             Target::Swift => "swift",
             Target::Kotlin => "kotlin",
+            Target::KotlinMultiplatform => "kotlin_multiplatform",
             Target::Java => "java",
             Target::TypeScript => "typescript",
             Target::Header => "header",
@@ -50,6 +52,7 @@ impl Experimental {
         },
         Experimental::WholeTarget(Target::Dart),
         Experimental::WholeTarget(Target::Python),
+        Experimental::WholeTarget(Target::KotlinMultiplatform),
     ];
 
     pub fn is_target_experimental(target: Target) -> bool {
@@ -96,6 +99,8 @@ pub struct TargetsConfig {
     pub apple: AppleConfig,
     #[serde(default)]
     pub android: AndroidConfig,
+    #[serde(default)]
+    pub kotlin_multiplatform: KotlinMultiplatformConfig,
     #[serde(default)]
     pub wasm: WasmConfig,
     #[serde(default)]
@@ -167,6 +172,27 @@ pub struct CSharpConfig {
     pub runtime_identifiers: Option<Vec<CSharpRuntimeIdentifier>>,
     #[serde(default)]
     pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KotlinMultiplatformConfig {
+    #[serde(default = "default_kotlin_multiplatform_output")]
+    pub output: PathBuf,
+    #[serde(default)]
+    pub enabled: bool,
+    pub package: Option<String>,
+    pub module_name: Option<String>,
+}
+
+impl Default for KotlinMultiplatformConfig {
+    fn default() -> Self {
+        Self {
+            output: default_kotlin_multiplatform_output(),
+            enabled: false,
+            package: None,
+            module_name: None,
+        }
+    }
 }
 
 impl Default for CSharpConfig {
@@ -645,6 +671,10 @@ fn default_csharp_output() -> PathBuf {
     PathBuf::from("dist/csharp")
 }
 
+fn default_kotlin_multiplatform_output() -> PathBuf {
+    PathBuf::from("dist/kotlin-multiplatform")
+}
+
 fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
     let content = std::fs::read_to_string(path).map_err(|err| ConfigError::Read {
         path: path.to_path_buf(),
@@ -920,6 +950,10 @@ impl Config {
         self.targets.csharp.enabled
     }
 
+    pub fn is_kotlin_multiplatform_enabled(&self) -> bool {
+        self.targets.kotlin_multiplatform.enabled
+    }
+
     pub fn apple_include_macos(&self) -> bool {
         self.targets.apple.include_macos
     }
@@ -1100,6 +1134,16 @@ impl Config {
         self.targets.android.kotlin.library_name.as_deref()
     }
 
+    pub fn resolved_android_kotlin_library_name(&self) -> String {
+        self.android_kotlin_library_name()
+            .unwrap_or_else(|| self.library_name())
+            .to_string()
+    }
+
+    pub fn resolved_android_kotlin_desktop_library_name(&self) -> String {
+        boltffi_bindgen::library_name(&self.resolved_android_kotlin_library_name()).into_string()
+    }
+
     pub fn android_kotlin_desktop_loader(&self) -> KotlinDesktopLoader {
         self.targets.android.kotlin.desktop_loader
     }
@@ -1192,6 +1236,26 @@ impl Config {
         &self.targets.android.kotlin.type_mappings
     }
 
+    pub fn kotlin_multiplatform_output(&self) -> PathBuf {
+        self.targets.kotlin_multiplatform.output.clone()
+    }
+
+    pub fn kotlin_multiplatform_package(&self) -> String {
+        self.targets
+            .kotlin_multiplatform
+            .package
+            .clone()
+            .unwrap_or_else(|| self.android_kotlin_package())
+    }
+
+    pub fn kotlin_multiplatform_module_name(&self) -> String {
+        self.targets
+            .kotlin_multiplatform
+            .module_name
+            .clone()
+            .unwrap_or_else(|| self.android_kotlin_module_name())
+    }
+
     pub fn is_java_jvm_enabled(&self) -> bool {
         self.targets.java.jvm.enabled
     }
@@ -1204,6 +1268,7 @@ impl Config {
         match target {
             Target::Swift => self.is_apple_enabled(),
             Target::Kotlin => self.is_android_enabled(),
+            Target::KotlinMultiplatform => self.is_kotlin_multiplatform_enabled(),
             Target::Java => self.is_java_jvm_enabled(),
             Target::TypeScript => self.is_wasm_enabled(),
             Target::Header => self.is_apple_enabled() || self.is_android_enabled(),
@@ -2468,6 +2533,99 @@ package_name = "OverlayKit"
     #[test]
     fn does_not_mark_csharp_as_experimental_target() {
         assert!(!Experimental::is_target_experimental(Target::CSharp));
+    }
+
+    #[test]
+    fn marks_kotlin_multiplatform_as_experimental_target() {
+        assert!(Experimental::is_target_experimental(
+            Target::KotlinMultiplatform
+        ));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_should_process_requires_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        assert!(!config.should_process(Target::KotlinMultiplatform, false));
+        assert!(config.should_process(Target::KotlinMultiplatform, true));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_should_process_accepts_config_opt_in() {
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        assert!(config.should_process(Target::KotlinMultiplatform, false));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_module_name_defaults_to_android_kotlin_override() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android.kotlin]
+module_name = "AndroidBindings"
+"#,
+        );
+
+        assert_eq!(config.kotlin_multiplatform_module_name(), "AndroidBindings");
+    }
+
+    #[test]
+    fn resolved_android_kotlin_library_name_defaults_to_crate_name() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+"#,
+        );
+
+        assert_eq!(config.resolved_android_kotlin_library_name(), "my-lib");
+        assert_eq!(
+            config.resolved_android_kotlin_desktop_library_name(),
+            "my_lib"
+        );
+    }
+
+    #[test]
+    fn resolved_android_kotlin_library_name_uses_override() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.android.kotlin]
+library_name = "configured-library"
+"#,
+        );
+
+        assert_eq!(
+            config.resolved_android_kotlin_library_name(),
+            "configured-library"
+        );
+        assert_eq!(
+            config.resolved_android_kotlin_desktop_library_name(),
+            "configured_library"
+        );
     }
 
     #[test]

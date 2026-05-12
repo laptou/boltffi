@@ -436,6 +436,24 @@ output = "dist/android/symbols"
 
 For release-like packaging profiles, BoltFFI requires Cargo debuginfo to be enabled before it will emit this archive.
 
+## Kotlin Multiplatform Configuration
+
+The `[targets.kotlin_multiplatform]` section is experimental and controls `boltffi generate kmp --experimental`.
+
+```toml
+experimental = ["kotlin_multiplatform"]
+
+[targets.kotlin_multiplatform]
+enabled = true
+output = "dist/kotlin-multiplatform"
+package = "com.mycompany.mylib"
+module_name = "MyLib"
+```
+
+Generated output is a Kotlin Multiplatform Gradle module with `commonMain` declarations and `jvmMain`/`androidMain` actuals backed by the existing Kotlin/JNI generator. Kotlin/Native `cinterop` actuals for iOS/macOS are not generated yet.
+
+If `package` or `module_name` is omitted, BoltFFI reuses the corresponding Android Kotlin defaults.
+
 ## Java Configuration
 
 The `[targets.java]` section controls Java bindings for both JVM and Android.
