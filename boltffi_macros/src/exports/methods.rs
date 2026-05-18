@@ -627,6 +627,15 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
+        #[cfg(target_arch = "wasm32")]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C-unwind" fn #free_ident(handle: *mut #type_name) {
+            if !handle.is_null() {
+                drop(Box::from_raw(handle));
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(handle: *mut #type_name) {
             if !handle.is_null() {
@@ -712,6 +721,13 @@ fn generate_factory_constructor_export(
 
     if ffi_params.is_empty() {
         Some(quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub extern "C-unwind" fn #export_name() -> *mut #type_name {
+                #body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             pub extern "C" fn #export_name() -> *mut #type_name {
                 #body
@@ -719,6 +735,15 @@ fn generate_factory_constructor_export(
         })
     } else {
         Some(quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C-unwind" fn #export_name(
+                #(#ffi_params),*
+            ) -> *mut #type_name {
+                #body
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn #export_name(
                 #(#ffi_params),*

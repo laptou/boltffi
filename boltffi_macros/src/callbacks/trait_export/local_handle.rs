@@ -149,7 +149,7 @@ impl<'a> LocalHandleExpander<'a> {
 
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C" fn #free_function_name(handle: u32) {
+            pub extern "C-unwind" fn #free_function_name(handle: u32) {
                 if handle == 0 {
                     return;
                 }
@@ -161,7 +161,7 @@ impl<'a> LocalHandleExpander<'a> {
 
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C" fn #clone_function_name(handle: u32) -> u32 {
+            pub extern "C-unwind" fn #clone_function_name(handle: u32) -> u32 {
                 if handle == 0 {
                     return 0;
                 }
@@ -501,7 +501,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             syn::ReturnType::Default => Ok(quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
-                pub extern "C" fn #function_name(
+                pub extern "C-unwind" fn #function_name(
                     handle: u32
                     #(, #ffi_params)*
                 ) {
@@ -577,7 +577,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             return Ok(quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
-                pub extern "C" fn #function_name(
+                pub extern "C-unwind" fn #function_name(
                     handle: u32
                     #(, #ffi_params)*
                 ) -> u64 {
@@ -628,7 +628,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         Ok(quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C" fn #function_name(
+            pub extern "C-unwind" fn #function_name(
                 handle: u32
                 #(, #ffi_params)*
             ) -> #ffi_return_type {

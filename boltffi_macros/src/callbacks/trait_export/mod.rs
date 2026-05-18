@@ -291,7 +291,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
 
         #[cfg(target_arch = "wasm32")]
         #[unsafe(no_mangle)]
-        pub extern "C" fn #wasm_create_fn(js_handle: u32) -> u32 {
+        pub extern "C-unwind" fn #wasm_create_fn(js_handle: u32) -> u32 {
             js_handle
         }
 

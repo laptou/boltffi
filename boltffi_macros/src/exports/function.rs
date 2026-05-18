@@ -289,7 +289,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                 #[cfg(target_arch = "wasm32")]
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 #[unsafe(no_mangle)]
-                #fn_vis extern "C" fn #export_ident() -> #wasm_return_type {
+                #fn_vis extern "C-unwind" fn #export_ident() -> #wasm_return_type {
                     #wasm_body
                 }
 
@@ -307,7 +307,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                 #[cfg(target_arch = "wasm32")]
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 #[unsafe(no_mangle)]
-                #fn_vis unsafe extern "C" fn #export_ident(
+                #fn_vis unsafe extern "C-unwind" fn #export_ident(
                     #(#wasm_ffi_params),*
                 ) -> #wasm_return_type {
                     #wasm_body

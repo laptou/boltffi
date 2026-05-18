@@ -325,7 +325,7 @@ impl<'a> AsyncRuntimeExports<'a> {
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            #visibility unsafe extern "C" fn #complete_ident(
+            #visibility unsafe extern "C-unwind" fn #complete_ident(
                 #params
             ) #return_type {
                 #body
@@ -359,7 +359,7 @@ impl<'a> AsyncRuntimeExports<'a> {
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            #visibility unsafe extern "C" fn #poll_sync_ident(
+            #visibility unsafe extern "C-unwind" fn #poll_sync_ident(
                 handle: ::boltffi::__private::RustFutureHandle,
             ) -> i32 {
                 ::boltffi::__private::rust_future_poll_sync::<#rust_return_type>(handle)
@@ -375,7 +375,7 @@ impl<'a> AsyncRuntimeExports<'a> {
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            #visibility unsafe extern "C" fn #panic_message_ident(
+            #visibility unsafe extern "C-unwind" fn #panic_message_ident(
                 handle: ::boltffi::__private::RustFutureHandle,
             ) -> ::boltffi::__private::FfiBuf {
                 match ::boltffi::__private::rust_future_panic_message::<#rust_return_type>(handle) {
@@ -392,6 +392,13 @@ impl<'a> AsyncRuntimeExports<'a> {
         let rust_return_type = &self.rust_return_type;
 
         quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            #visibility unsafe extern "C-unwind" fn #cancel_ident(handle: ::boltffi::__private::RustFutureHandle) {
+                ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             #visibility unsafe extern "C" fn #cancel_ident(handle: ::boltffi::__private::RustFutureHandle) {
                 ::boltffi::__private::rustfuture::rust_future_cancel::<#rust_return_type>(handle)
@@ -405,6 +412,13 @@ impl<'a> AsyncRuntimeExports<'a> {
         let rust_return_type = &self.rust_return_type;
 
         quote! {
+            #[cfg(target_arch = "wasm32")]
+            #[unsafe(no_mangle)]
+            #visibility unsafe extern "C-unwind" fn #free_ident(handle: ::boltffi::__private::RustFutureHandle) {
+                ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             #visibility unsafe extern "C" fn #free_ident(handle: ::boltffi::__private::RustFutureHandle) {
                 ::boltffi::__private::rustfuture::rust_future_free::<#rust_return_type>(handle)

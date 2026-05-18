@@ -19,6 +19,34 @@ export class BoltFFIPanicError extends Error {
   }
 }
 
+function convertWasmCallError(err: unknown, exportName: string): Error {
+  if (typeof WebAssembly !== "undefined" && err instanceof WebAssembly.Exception) {
+    return new BoltFFIPanicError(`wasm panic in ${exportName} (EH unwind)`);
+  }
+  if (err instanceof WebAssembly.RuntimeError) {
+    return new BoltFFIPanicError(`wasm trap in ${exportName}: ${err.message}`);
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+function wrapExportsForPanicCatch<T extends WebAssembly.Exports>(raw: T): T {
+  return new Proxy(raw, {
+    get(target, prop) {
+      const value = (target as Record<string | symbol, unknown>)[prop as string];
+      if (typeof value !== "function") {
+        return value;
+      }
+      return function panicCatchingExport(this: unknown, ...args: unknown[]) {
+        try {
+          return (value as (...a: unknown[]) => unknown).apply(this, args);
+        } catch (err) {
+          throw convertWasmCallError(err, String(prop));
+        }
+      };
+    },
+  }) as T;
+}
+
 export class BoltFFICancelledError extends Error {
   constructor() {
     super("Future was cancelled");
@@ -176,7 +204,7 @@ export class BoltFFIModule {
   private _returnSlotAddr: number = 0;
 
   constructor(instance: WebAssembly.Instance, asyncManager: AsyncFutureManager) {
-    this.exports = instance.exports as BoltFFIExports;
+    this.exports = wrapExportsForPanicCatch(instance.exports) as BoltFFIExports;
     this._memory = this.exports.memory;
     this._encoder = new TextEncoder();
     this._decoder = new TextDecoder("utf-8");

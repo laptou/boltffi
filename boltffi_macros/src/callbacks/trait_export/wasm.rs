@@ -187,7 +187,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         let complete_export = quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C" fn #complete_export_name(
+            pub unsafe extern "C-unwind" fn #complete_export_name(
                 request_id: u32,
                 completion_code: i32,
                 data_ptr: u32,
@@ -271,7 +271,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         let complete_export = quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C" fn #complete_export_name(
+            pub unsafe extern "C-unwind" fn #complete_export_name(
                 request_id: u32,
                 completion_code: i32,
                 data_ptr: u32,

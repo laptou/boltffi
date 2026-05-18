@@ -693,7 +693,7 @@ fn emit_encoded_ffi_function(
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C" fn #export_name() -> u64 {
+            pub extern "C-unwind" fn #export_name() -> u64 {
                 let __boltffi_buf: ::boltffi::__private::FfiBuf = { #body };
                 __boltffi_buf.into_packed()
             }
@@ -708,7 +708,7 @@ fn emit_encoded_ffi_function(
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C" fn #export_name(
+            pub unsafe extern "C-unwind" fn #export_name(
                 #(#ffi_params),*
             ) -> u64 {
                 let __boltffi_buf: ::boltffi::__private::FfiBuf = { #body };
