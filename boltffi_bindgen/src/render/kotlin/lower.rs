@@ -4790,16 +4790,15 @@ impl JniParamMapping {
 }
 
 mod tests {
-    use super::*;
-    use crate::ir::Lowerer as IrLowerer;
-    use crate::ir::contract::{FfiContract, PackageInfo};
+    
+    
+    
     use crate::ir::definitions::{
-        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, FieldDef, ParamDef, RecordDef,
-        ReturnDef, StreamDef, StreamMode,
+        FieldDef, RecordDef,
     };
-    use crate::ir::ids::{CallbackId, ClassId, FieldName, MethodId, ParamName, RecordId, StreamId};
+    use crate::ir::ids::{FieldName, RecordId};
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    use boltffi_ffi_rules::callable::ExecutionKind;
+    
 
     fn field(name: &str, primitive: PrimitiveType) -> FieldDef {
         FieldDef {

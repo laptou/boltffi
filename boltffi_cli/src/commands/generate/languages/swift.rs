@@ -1,4 +1,3 @@
-use boltffi_bindgen::LowerError;
 use boltffi_bindgen::ffi_prefix;
 use boltffi_bindgen::render::swift::{SwiftEmitter, SwiftLowerer};
 

@@ -435,8 +435,8 @@ impl<'a> SwiftLowerer<'a> {
             },
             ConstructorDef::NamedInit {
                 name,
-                first_param,
-                rest_params,
+                first_param: _,
+                rest_params: _,
                 is_fallible,
                 is_optional,
                 doc,
@@ -793,8 +793,8 @@ impl<'a> SwiftLowerer<'a> {
                             },
                             ConstructorDef::NamedInit {
                                 name,
-                                first_param,
-                                rest_params,
+                                first_param: _,
+                                rest_params: _,
                                 is_fallible,
                                 is_optional,
                                 doc,
