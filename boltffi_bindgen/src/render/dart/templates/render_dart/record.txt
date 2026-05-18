@@ -32,6 +32,11 @@ final class {{ record.name }}{% if record.is_error %} implements Exception{% end
     {{ field.wire_encode_expr("_p$writer")|indent(4)|trim }}
 {%- endfor %}
   }
+
+  int _m$wireEncodedSize() =>
+{%- for field in record.fields %}
+    {{ field.wire_encoded_size_expr() }}{% if !loop.last %} +{% endif %}
+{%- endfor %};
 {% match record.blittable_layout %}
 {% when None %}
 {%- when Some with (layout) %}
@@ -97,5 +102,5 @@ final class {{ record.name }}{% if record.is_error %} implements Exception{% end
     {{ param.ty.dart_type() }} {{ param.name }},
 {%- endfor %}
   ) {}
-{% endfor -%}
+{%- endfor %}
 }

@@ -2,14 +2,14 @@ use askama::Template as _;
 
 use crate::{
     ir::{
-        BuiltinId, EnumLayout, PrimitiveType, ReadOp, ReadSeq, ReturnDef, TypeExpr, ValueExpr,
-        VecLayout, WriteOp, WriteSeq,
+        BuiltinId, EnumLayout, PrimitiveType, ReadOp, ReadSeq, ReturnDef, SizeExpr, TypeExpr,
+        ValueExpr, VecLayout, WriteOp, WriteSeq,
     },
     render::dart::{
         DartLibrary, NamingConvention,
         templates::{
-            BuildHookTemplate, CustomTypesTemplate, NativeFunctionsTemplate, PreludeTemplate,
-            PubspecTemplate, RecordTemplate,
+            BuildHookTemplate, CustomTypesTemplate, EnhancedEnumTemplate, NativeFunctionsTemplate,
+            PreludeTemplate, PubspecTemplate, RecordTemplate, SealedClassEnumTemplate,
         },
     },
 };
@@ -41,6 +41,19 @@ impl DartEmitter {
         for r in &library.records {
             output.push_str("\n\n");
             output.push_str(RecordTemplate { record: r }.render().unwrap().as_str());
+        }
+
+        for e in &library.enums {
+            let source = match &e.kind {
+                super::DartEnumKind::Enhanced => {
+                    EnhancedEnumTemplate { dart_enum: e }.render().unwrap()
+                }
+                super::DartEnumKind::SealedClass => {
+                    SealedClassEnumTemplate { dart_enum: e }.render().unwrap()
+                }
+            };
+            output.push_str("\n\n");
+            output.push_str(source.as_str());
         }
 
         output.push_str("\n\n");
@@ -305,7 +318,7 @@ pub fn primitive_write_method(primitive: PrimitiveType) -> &'static str {
 
 fn emit_write_primitive(primitive: PrimitiveType, writer_name: &str, value: &str) -> String {
     format!(
-        "{}.{}({})",
+        "{}.{}({});",
         writer_name,
         primitive_write_method(primitive),
         value
@@ -399,7 +412,7 @@ pub fn emit_writer_write(seq: &WriteSeq, writer_name: &str, value: &str) -> Stri
             )
         }
         Some(WriteOp::String { .. }) => format!("{writer_name}.writeString({value});"),
-        Some(WriteOp::Bytes { .. }) => format!("{writer_name}.writeUint8List({value});"),
+        Some(WriteOp::Bytes { .. }) => format!("{writer_name}.writeTypedData({value});"),
         Some(WriteOp::Builtin { id, .. }) => emit_write_builtin(id, writer_name, value),
         Some(WriteOp::Record { .. }) => format!("{value}._m$wireEncode({writer_name});",),
         Some(WriteOp::Enum { .. }) => format!("{value}._m$wireEncode({writer_name});"),
@@ -506,7 +519,7 @@ pub fn emit_reader_read(seq: &ReadSeq, reader_name: &str) -> String {
                 ..
             } => {
                 format!(
-                    "{}.fromValue({reader_name}.{}())",
+                    "{}._m$fromValue({reader_name}.{}())",
                     render_type_name(id.as_str()),
                     primitive_read_method(*tag_type),
                 )
@@ -514,7 +527,10 @@ pub fn emit_reader_read(seq: &ReadSeq, reader_name: &str) -> String {
             EnumLayout::CStyle { is_error: true, .. }
             | EnumLayout::Data { .. }
             | EnumLayout::Recursive => {
-                format!("{}.decode({reader_name})", render_type_name(id.as_str()))
+                format!(
+                    "{}._m$wireDecode({reader_name})",
+                    render_type_name(id.as_str())
+                )
             }
         },
         ReadOp::Option { some, .. } => {
@@ -547,5 +563,118 @@ pub fn emit_reader_read(seq: &ReadSeq, reader_name: &str) -> String {
             _ => "reader.readString()".to_string(),
         },
         ReadOp::Custom { underlying, .. } => emit_reader_read(underlying, reader_name),
+    }
+}
+
+fn remap_size_expr_value_expr(expr: &SizeExpr, v: ValueExpr) -> SizeExpr {
+    match expr {
+        SizeExpr::Fixed(value) => SizeExpr::Fixed(*value),
+        SizeExpr::Runtime => SizeExpr::Runtime,
+        SizeExpr::StringLen(..) => SizeExpr::StringLen(v),
+        SizeExpr::BytesLen(..) => SizeExpr::BytesLen(v),
+        SizeExpr::ValueSize(..) => SizeExpr::ValueSize(v),
+        SizeExpr::WireSize { owner, .. } => SizeExpr::WireSize {
+            owner: owner.clone(),
+            value: v,
+        },
+        SizeExpr::BuiltinSize { id, .. } => SizeExpr::BuiltinSize {
+            id: id.clone(),
+            value: v,
+        },
+        SizeExpr::Sum(exprs) => SizeExpr::Sum(
+            exprs
+                .iter()
+                .map(|s| remap_size_expr_value_expr(s, v.clone()))
+                .collect(),
+        ),
+        SizeExpr::OptionSize { inner, .. } => SizeExpr::OptionSize {
+            value: v,
+            inner: inner.clone(),
+        },
+        SizeExpr::VecSize { inner, layout, .. } => SizeExpr::VecSize {
+            value: v,
+            inner: inner.clone(),
+            layout: layout.clone(),
+        },
+        SizeExpr::ResultSize { ok, err, .. } => SizeExpr::ResultSize {
+            value: v,
+            ok: ok.clone(),
+            err: err.clone(),
+        },
+    }
+}
+
+fn emit_vec_size(value: &str, inner: &SizeExpr, layout: &VecLayout) -> String {
+    match layout {
+        VecLayout::Blittable { .. } => {
+            format!("(4 + {}.length * {})", value, emit_size_expr(inner))
+        }
+        VecLayout::Encoded => format!(
+            "{value}.fold<int>(0, (sum, item) => sum + {})",
+            emit_size_expr(&remap_size_expr_value_expr(
+                inner,
+                ValueExpr::Named("item".to_string())
+            ))
+        ),
+    }
+}
+
+fn emit_builtin_size(id: &BuiltinId, value: &str) -> String {
+    if id.as_str() == "Url" {
+        format!("{}.toString().length * 3", value)
+    } else {
+        format!("{}._m$wireEncodedSize()", value)
+    }
+}
+
+pub fn emit_size_expr(size: &SizeExpr) -> String {
+    match size {
+        SizeExpr::Fixed(value) => value.to_string(),
+        SizeExpr::Runtime => "0".to_string(),
+        SizeExpr::StringLen(value) => format!("({}.length * 3)", render_value(value)),
+        SizeExpr::BytesLen(value) => format!("{}.length", render_value(value)),
+        SizeExpr::ValueSize(value) => render_value(value),
+        SizeExpr::WireSize { value, .. } => format!("{}._m$wireEncodedSize()", render_value(value)),
+        SizeExpr::BuiltinSize { id, value } => emit_builtin_size(id, &render_value(value)),
+        SizeExpr::Sum(parts) => {
+            let rendered = parts
+                .iter()
+                .map(emit_size_expr)
+                .reduce(|acc, s| acc + " + " + s.as_str())
+                .unwrap_or_else(|| String::from("0"));
+            format!("({})", rendered)
+        }
+        SizeExpr::OptionSize { value, inner } => {
+            let inner_expr = emit_size_expr(&remap_size_expr_value_expr(
+                inner,
+                ValueExpr::Var(format!("{}!", render_value(value))),
+            ));
+            format!(
+                "(switch ({} == null) {{ true => 1, false => 1 + {} }})",
+                render_value(value),
+                inner_expr
+            )
+        }
+        SizeExpr::VecSize {
+            value,
+            inner,
+            layout,
+        } => emit_vec_size(&render_value(value), inner, layout),
+        SizeExpr::ResultSize { value, ok, err } => {
+            let ok_expr = emit_size_expr(&remap_size_expr_value_expr(
+                ok,
+                ValueExpr::Var("value".to_string()),
+            ));
+            let err_expr = emit_size_expr(&remap_size_expr_value_expr(
+                err,
+                ValueExpr::Var("value".to_string()),
+            ));
+            format!(
+                "1 + (switch ({}) {{ BoltFFIResult$Ok(:final value) => {}, BoltFFIResult$Err(:final value) => {} }})",
+                render_value(value),
+                ok_expr,
+                err_expr
+            )
+        }
     }
 }

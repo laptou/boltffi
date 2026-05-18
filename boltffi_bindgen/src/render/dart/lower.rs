@@ -1,14 +1,15 @@
 use crate::{
     ir::{
-        AbiCall, AbiContract, AbiParam, AbiRecord, AbiType, CallId, ConstructorDef, CustomTypeDef,
-        FfiContract, FieldDef, FieldName, FieldReadOp, FunctionId, MethodDef, OffsetExpr, ParamDef,
-        ReadOp, ReadSeq, RecordDef, RecordId, WriteOp, WriteSeq,
+        AbiCall, AbiContract, AbiEnumField, AbiEnumPayload, AbiEnumVariant, AbiParam, AbiRecord,
+        AbiType, CallId, ConstructorDef, CustomTypeDef, EnumDef, EnumRepr, FfiContract, FieldDef,
+        FieldName, FieldReadOp, FunctionId, MethodDef, OffsetExpr, ParamDef, ReadOp, ReadSeq,
+        RecordDef, RecordId, WriteOp, WriteSeq,
     },
     render::dart::{
         DartBlittableField, DartBlittableLayout, DartConstructor, DartConstructorKind,
-        DartCustomType, DartFunction, DartFunctionParam, DartLibrary, DartNative,
-        DartNativeFunction, DartNativeFunctionParam, DartNativeType, DartRecord, DartRecordField,
-        DartType, NamingConvention,
+        DartCustomType, DartEnum, DartEnumKind, DartEnumVariant, DartFunction, DartFunctionParam,
+        DartLibrary, DartNative, DartNativeFunction, DartNativeFunctionParam, DartNativeType,
+        DartRecord, DartRecordField, DartType, NamingConvention,
     },
 };
 
@@ -245,6 +246,91 @@ impl<'a> DartLowerer<'a> {
         }
     }
 
+    fn lower_enum_field(&self, field: &AbiEnumField) -> super::DartEnumField {
+        let field_name = super::NamingConvention::property_name(field.name.as_str());
+
+        super::DartEnumField {
+            name: field_name,
+            dart_type: DartType::from_type_expr(&field.type_expr),
+            read_seq: field.decode.clone(),
+            write_seq: field.encode.clone(),
+        }
+    }
+
+    fn lower_enum_variant(&self, variant: &AbiEnumVariant, enum_name: &str) -> DartEnumVariant {
+        let variant_name = NamingConvention::property_name(variant.name.as_str());
+        let variant_class_name = format!(
+            "{}${}",
+            enum_name,
+            NamingConvention::class_name(variant.name.as_str())
+        );
+
+        let fields = match &variant.payload {
+            AbiEnumPayload::Unit => Vec::new(),
+            AbiEnumPayload::Tuple(abi_enum_fields) | AbiEnumPayload::Struct(abi_enum_fields) => {
+                abi_enum_fields
+                    .iter()
+                    .map(|f| self.lower_enum_field(f))
+                    .collect()
+            }
+        };
+
+        DartEnumVariant {
+            name: variant_name,
+            class_name: variant_class_name,
+            tag: variant.discriminant,
+            fields,
+        }
+    }
+
+    fn lower_enum(&self, enum_def: &EnumDef) -> DartEnum {
+        let enum_name = NamingConvention::class_name(enum_def.id.as_str());
+
+        let abi_enum = self
+            .abi
+            .enums
+            .iter()
+            .find(|en| en.id == enum_def.id)
+            .unwrap();
+
+        let enum_kind = if abi_enum.is_c_style {
+            DartEnumKind::Enhanced
+        } else {
+            DartEnumKind::SealedClass
+        };
+
+        let tag_type = match &enum_def.repr {
+            EnumRepr::CStyle { tag_type, .. } | EnumRepr::Data { tag_type, .. } => *tag_type,
+        };
+
+        let enum_variants = abi_enum
+            .variants
+            .iter()
+            .map(|v| self.lower_enum_variant(v, &enum_name))
+            .collect();
+
+        let constructors = enum_def
+            .constructor_calls()
+            .map(|(id, ctor_def)| self.lower_constructor(ctor_def, id))
+            .collect();
+
+        let methods = enum_def
+            .method_calls()
+            .map(|(id, meth_def)| self.lower_method(meth_def, id))
+            .collect();
+
+        DartEnum {
+            name: enum_name,
+            kind: enum_kind,
+            tag_type,
+            variants: enum_variants,
+            size_expr: abi_enum.encode_ops.size.clone(),
+            is_error: enum_def.is_error,
+            constructors,
+            methods,
+        }
+    }
+
     pub fn library(&self) -> DartLibrary {
         let custom_types = self
             .ffi
@@ -269,12 +355,20 @@ impl<'a> DartLowerer<'a> {
             })
             .collect();
 
+        let enums = self
+            .ffi
+            .catalog
+            .all_enums()
+            .map(|e| self.lower_enum(e))
+            .collect();
+
         DartLibrary {
             custom_types,
             native: DartNative {
                 functions: native_functions,
             },
             records,
+            enums,
         }
     }
 }
