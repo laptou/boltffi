@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -30,11 +31,9 @@ impl<'a> XcframeworkBuilder<'a> {
     }
 
     pub fn build(self) -> Result<XcframeworkOutput> {
-        std::fs::create_dir_all(&self.output_dir).map_err(|source| {
-            CliError::CreateDirectoryFailed {
-                path: self.output_dir.clone(),
-                source,
-            }
+        fs::create_dir_all(&self.output_dir).map_err(|source| CliError::CreateDirectoryFailed {
+            path: self.output_dir.clone(),
+            source,
         })?;
 
         let device_libs = self.filter_device_libraries();
@@ -107,7 +106,7 @@ impl<'a> XcframeworkBuilder<'a> {
         }
 
         let fat_dir = self.output_dir.join(output_dir_name);
-        std::fs::create_dir_all(&fat_dir).map_err(|source| CliError::CreateDirectoryFailed {
+        fs::create_dir_all(&fat_dir).map_err(|source| CliError::CreateDirectoryFailed {
             path: fat_dir.clone(),
             source,
         })?;
@@ -150,7 +149,7 @@ impl<'a> XcframeworkBuilder<'a> {
             .join(format!("{}.xcframework", xcframework_name));
 
         if xcframework_path.exists() {
-            std::fs::remove_dir_all(&xcframework_path).map_err(|source| {
+            fs::remove_dir_all(&xcframework_path).map_err(|source| {
                 CliError::CreateDirectoryFailed {
                     path: xcframework_path.clone(),
                     source,
@@ -201,6 +200,9 @@ impl<'a> XcframeworkBuilder<'a> {
             });
         }
 
+        HeaderNamespace::for_library(self.config.library_name())
+            .apply_to_xcframework(&xcframework_path)?;
+
         Ok(xcframework_path)
     }
 
@@ -208,7 +210,7 @@ impl<'a> XcframeworkBuilder<'a> {
         let headers_staging = self.output_dir.join("headers_staging");
 
         if headers_staging.exists() {
-            std::fs::remove_dir_all(&headers_staging).map_err(|source| {
+            fs::remove_dir_all(&headers_staging).map_err(|source| {
                 CliError::CreateDirectoryFailed {
                     path: headers_staging.clone(),
                     source,
@@ -216,11 +218,9 @@ impl<'a> XcframeworkBuilder<'a> {
             })?;
         }
 
-        std::fs::create_dir_all(&headers_staging).map_err(|source| {
-            CliError::CreateDirectoryFailed {
-                path: headers_staging.clone(),
-                source,
-            }
+        fs::create_dir_all(&headers_staging).map_err(|source| CliError::CreateDirectoryFailed {
+            path: headers_staging.clone(),
+            source,
         })?;
 
         copy_directory_contents(&self.headers_dir, &headers_staging)?;
@@ -229,14 +229,85 @@ impl<'a> XcframeworkBuilder<'a> {
             generate_modulemap(&self.config.xcframework_name(), self.config.library_name());
         let modulemap_path = headers_staging.join("module.modulemap");
 
-        std::fs::write(&modulemap_path, modulemap_content).map_err(|source| {
-            CliError::WriteFailed {
-                path: modulemap_path,
-                source,
-            }
+        fs::write(&modulemap_path, modulemap_content).map_err(|source| CliError::WriteFailed {
+            path: modulemap_path,
+            source,
         })?;
 
         Ok(headers_staging)
+    }
+}
+
+struct HeaderNamespace {
+    directory_name: String,
+}
+
+impl HeaderNamespace {
+    fn for_library(library_name: impl Into<String>) -> Self {
+        Self {
+            directory_name: library_name.into(),
+        }
+    }
+
+    fn apply_to_xcframework(&self, xcframework_path: &Path) -> Result<()> {
+        fs::read_dir(xcframework_path)
+            .map_err(|source| CliError::ReadFailed {
+                path: xcframework_path.to_path_buf(),
+                source,
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|source| CliError::ReadFailed {
+                path: xcframework_path.to_path_buf(),
+                source,
+            })?
+            .into_iter()
+            .map(|entry| entry.path().join("Headers"))
+            .filter(|headers_path| headers_path.is_dir())
+            .try_for_each(|headers_path| self.apply_to_headers_dir(&headers_path))
+    }
+
+    fn apply_to_headers_dir(&self, headers_path: &Path) -> Result<()> {
+        let namespace_path = headers_path.join(&self.directory_name);
+        let entries = fs::read_dir(headers_path)
+            .map_err(|source| CliError::ReadFailed {
+                path: headers_path.to_path_buf(),
+                source,
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|source| CliError::ReadFailed {
+                path: headers_path.to_path_buf(),
+                source,
+            })?
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|path| path != &namespace_path)
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        fs::create_dir_all(&namespace_path).map_err(|source| CliError::CreateDirectoryFailed {
+            path: namespace_path.clone(),
+            source,
+        })?;
+
+        entries
+            .into_iter()
+            .try_for_each(|source_path| self.move_entry(source_path, &namespace_path))
+    }
+
+    fn move_entry(&self, source_path: PathBuf, namespace_path: &Path) -> Result<()> {
+        let file_name = source_path
+            .file_name()
+            .map(|file_name| file_name.to_owned())
+            .ok_or_else(|| CliError::FileNotFound(source_path.clone()))?;
+        let target_path = namespace_path.join(file_name);
+
+        fs::rename(&source_path, &target_path).map_err(|source| CliError::WriteFailed {
+            path: target_path,
+            source,
+        })
     }
 }
 
@@ -261,15 +332,13 @@ fn copy_directory_contents(from: &Path, to: &Path) -> Result<()> {
             let dest = to.join(relative);
 
             if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|source| {
-                    CliError::CreateDirectoryFailed {
-                        path: parent.to_path_buf(),
-                        source,
-                    }
+                fs::create_dir_all(parent).map_err(|source| CliError::CreateDirectoryFailed {
+                    path: parent.to_path_buf(),
+                    source,
                 })?;
             }
 
-            std::fs::copy(entry.path(), &dest).map_err(|source| CliError::CopyFailed {
+            fs::copy(entry.path(), &dest).map_err(|source| CliError::CopyFailed {
                 from: entry.path().to_path_buf(),
                 to: dest,
                 source,
@@ -280,7 +349,7 @@ fn copy_directory_contents(from: &Path, to: &Path) -> Result<()> {
 }
 
 fn create_zip(source_dir: &Path, zip_path: &Path) -> Result<()> {
-    let file = std::fs::File::create(zip_path).map_err(|source| CliError::WriteFailed {
+    let file = fs::File::create(zip_path).map_err(|source| CliError::WriteFailed {
         path: zip_path.to_path_buf(),
         source,
     })?;
@@ -312,11 +381,10 @@ fn create_zip(source_dir: &Path, zip_path: &Path) -> Result<()> {
                         source: std::io::Error::other("zip start failed"),
                     })?;
 
-                let content =
-                    std::fs::read(entry.path()).map_err(|source| CliError::ReadFailed {
-                        path: entry.path().to_path_buf(),
-                        source,
-                    })?;
+                let content = fs::read(entry.path()).map_err(|source| CliError::ReadFailed {
+                    path: entry.path().to_path_buf(),
+                    source,
+                })?;
 
                 std::io::Write::write_all(&mut zip_writer, &content)
                     .map_err(|source| PackError::ZipFailed { source })?;
@@ -335,11 +403,103 @@ fn create_zip(source_dir: &Path, zip_path: &Path) -> Result<()> {
 pub(crate) fn compute_checksum(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
 
-    let content = std::fs::read(path).map_err(|source| CliError::ReadFailed {
+    let content = fs::read(path).map_err(|source| CliError::ReadFailed {
         path: path.to_path_buf(),
         source,
     })?;
 
     let hash = Sha256::digest(&content);
     Ok(hex::encode(hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::HeaderNamespace;
+
+    struct TemporaryDirectory {
+        path: PathBuf,
+    }
+
+    impl TemporaryDirectory {
+        fn new(prefix: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+            fs::create_dir_all(&path).expect("create temporary directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn namespaces_slice_headers() {
+        let temporary_directory = TemporaryDirectory::new("boltffi-xcframework-headers");
+        let xcframework_path = temporary_directory.path().join("Demo.xcframework");
+        let headers_path = xcframework_path.join("ios-arm64").join("Headers");
+        let private_headers_path = headers_path.join("private");
+
+        fs::create_dir_all(&private_headers_path).expect("create private headers");
+        fs::write(headers_path.join("demo.h"), "").expect("write public header");
+        fs::write(headers_path.join("module.modulemap"), "").expect("write module map");
+        fs::write(private_headers_path.join("detail.h"), "").expect("write private header");
+
+        HeaderNamespace::for_library("demo")
+            .apply_to_xcframework(&xcframework_path)
+            .expect("namespace headers");
+
+        assert!(headers_path.join("demo").join("demo.h").is_file());
+        assert!(headers_path.join("demo").join("module.modulemap").is_file());
+        assert!(
+            headers_path
+                .join("demo")
+                .join("private")
+                .join("detail.h")
+                .is_file()
+        );
+        assert!(!headers_path.join("demo.h").exists());
+        assert!(!headers_path.join("module.modulemap").exists());
+        assert!(!headers_path.join("private").exists());
+    }
+
+    #[test]
+    fn keeps_namespaced_headers_stable() {
+        let temporary_directory = TemporaryDirectory::new("boltffi-xcframework-namespaced-headers");
+        let xcframework_path = temporary_directory.path().join("Demo.xcframework");
+        let headers_path = xcframework_path.join("ios-arm64").join("Headers");
+        let namespaced_headers_path = headers_path.join("demo");
+
+        fs::create_dir_all(&namespaced_headers_path).expect("create namespaced headers");
+        fs::write(namespaced_headers_path.join("demo.h"), "").expect("write public header");
+        fs::write(namespaced_headers_path.join("module.modulemap"), "").expect("write module map");
+
+        HeaderNamespace::for_library("demo")
+            .apply_to_xcframework(&xcframework_path)
+            .expect("namespace headers");
+
+        assert!(namespaced_headers_path.join("demo.h").is_file());
+        assert!(namespaced_headers_path.join("module.modulemap").is_file());
+        assert_eq!(
+            fs::read_dir(&headers_path)
+                .expect("read headers directory")
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .expect("read header entry")
+                .len(),
+            1
+        );
+    }
 }
