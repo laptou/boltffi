@@ -2116,8 +2116,7 @@ fn emit_raw_optional_primitive_read(seq: &ReadSeq) -> Option<String> {
         PrimitiveType::U16 => "unpackOptionU16",
         PrimitiveType::I32 => "unpackOptionI32",
         PrimitiveType::U32 => "unpackOptionU32",
-        PrimitiveType::I64 => "unpackOptionI64",
-        PrimitiveType::U64 => "unpackOptionU64",
+        PrimitiveType::I64 | PrimitiveType::U64 => return None,
         PrimitiveType::F32 => "unpackOptionF32",
         PrimitiveType::F64 => "unpackOptionF64",
         PrimitiveType::ISize => "unpackOptionI32",
@@ -2905,7 +2904,7 @@ mod tests {
     }
 
     #[test]
-    fn option_i64_return_uses_nan_optional_decode() {
+    fn option_i64_return_uses_packed_wire_decode() {
         let mut contract = empty_contract();
         contract.functions.push(function(
             "find_positive_i64",
@@ -2929,16 +2928,16 @@ mod tests {
             .expect("wasm import should exist");
 
         assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
-        assert!(function.return_route.is_nan_boxed_optional());
+        assert!(function.return_route.is_packed());
         assert_eq!(
             function.return_route.decode_expr(),
-            "_module.unpackOptionI64(packed)"
+            "reader.readOptional(() => reader.readI64())"
         );
-        assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+        assert_eq!(import.return_wasm_type.as_deref(), Some("bigint"));
     }
 
     #[test]
-    fn option_u64_return_uses_nan_optional_decode() {
+    fn option_u64_return_uses_packed_wire_decode() {
         let mut contract = empty_contract();
         contract.functions.push(function(
             "find_positive_u64",
@@ -2962,12 +2961,12 @@ mod tests {
             .expect("wasm import should exist");
 
         assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
-        assert!(function.return_route.is_nan_boxed_optional());
+        assert!(function.return_route.is_packed());
         assert_eq!(
             function.return_route.decode_expr(),
-            "_module.unpackOptionU64(packed)"
+            "reader.readOptional(() => reader.readU64())"
         );
-        assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+        assert_eq!(import.return_wasm_type.as_deref(), Some("bigint"));
     }
 
     #[test]
