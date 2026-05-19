@@ -40,7 +40,7 @@ build:
 
 # Build boltffi CLI (release)
 build-release:
-    cargo build -p boltffi_cli --release
+    cargo build -p boltffi_cli --profile release-lto
 
 # Build entire workspace (debug)
 build-all:

@@ -135,12 +135,12 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p boltffi_cli
+        run: cargo build --profile release-lto --target ${{ matrix.target }} -p boltffi_cli
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          cd target/${{ matrix.target }}/release
+          cd target/${{ matrix.target }}/release-lto
           tar -czvf ../../../${{ matrix.artifact }}.tar.gz boltffi
           cd ../../..
           sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
@@ -149,7 +149,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
+          cd target/${{ matrix.target }}/release-lto
           Compress-Archive -Path boltffi.exe -DestinationPath ../../../${{ matrix.artifact }}.zip
           cd ../../..
           (Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.artifact }}.zip" | Out-File -Encoding utf8 ${{ matrix.artifact }}.zip.sha256

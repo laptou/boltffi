@@ -83,7 +83,7 @@ jobs:
           cache-bin: false
           prefix-key: v1-rust
           key: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }} -p boltffi_cli
+      - run: cargo build --profile release-lto --target ${{ matrix.target }} -p boltffi_cli
 
   verify:
     name: Verify
@@ -100,8 +100,8 @@ jobs:
           cache-on-failure: true
           cache-bin: false
           prefix-key: v1-rust
-      - run: cargo build --release -p boltffi_cli
-      - run: ./target/release/boltffi --version
+      - run: cargo build --profile release-lto -p boltffi_cli
+      - run: ./target/release-lto/boltffi --version
 
   docs:
     name: Docs
