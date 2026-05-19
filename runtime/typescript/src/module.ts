@@ -19,34 +19,6 @@ export class BoltFFIPanicError extends Error {
   }
 }
 
-function convertWasmCallError(err: unknown, exportName: string): Error {
-  if (typeof WebAssembly !== "undefined" && err instanceof WebAssembly.Exception) {
-    return new BoltFFIPanicError(`wasm panic in ${exportName} (EH unwind)`);
-  }
-  if (err instanceof WebAssembly.RuntimeError) {
-    return new BoltFFIPanicError(`wasm trap in ${exportName}: ${err.message}`);
-  }
-  return err instanceof Error ? err : new Error(String(err));
-}
-
-function wrapExportsForPanicCatch<T extends WebAssembly.Exports>(raw: T): T {
-  return new Proxy(raw, {
-    get(target, prop) {
-      const value = (target as Record<string | symbol, unknown>)[prop as string];
-      if (typeof value !== "function") {
-        return value;
-      }
-      return function panicCatchingExport(this: unknown, ...args: unknown[]) {
-        try {
-          return (value as (...a: unknown[]) => unknown).apply(this, args);
-        } catch (err) {
-          throw convertWasmCallError(err, String(prop));
-        }
-      };
-    },
-  }) as T;
-}
-
 export class BoltFFICancelledError extends Error {
   constructor() {
     super("Future was cancelled");
@@ -204,7 +176,7 @@ export class BoltFFIModule {
   private _returnSlotAddr: number = 0;
 
   constructor(instance: WebAssembly.Instance, asyncManager: AsyncFutureManager) {
-    this.exports = wrapExportsForPanicCatch(instance.exports) as BoltFFIExports;
+    this.exports = instance.exports as BoltFFIExports;
     this._memory = this.exports.memory;
     this._encoder = new TextEncoder();
     this._decoder = new TextDecoder("utf-8");
@@ -1126,7 +1098,10 @@ export async function instantiateBoltFFI(
   if (imports?.wasmBindgen) {
     prepareWasmBindgenEnv(env);
     const importObject = imports.wasmBindgen.getImports();
-    const { instance, module } = await WebAssembly.instantiate(wasmSource, importObject);
+    const { instance, module } = (await WebAssembly.instantiate(
+      wasmSource,
+      importObject,
+    )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
     imports.wasmBindgen.finalize(instance, module);
     const boltModule = new BoltFFIModule(instance, asyncManager);
 
@@ -1144,7 +1119,10 @@ export async function instantiateBoltFFI(
     env,
   };
 
-  const { instance } = await WebAssembly.instantiate(wasmSource, importObject);
+  const { instance } = (await WebAssembly.instantiate(
+    wasmSource,
+    importObject,
+  )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
   const boltModule = new BoltFFIModule(instance, asyncManager);
 
   const actualVersion = boltModule.exports.boltffi_wasm_abi_version();

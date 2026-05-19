@@ -6,8 +6,7 @@ export {
   wireStringSize,
 } from "./wire.js";
 export type { Duration, WireOk, WireErr, WireResult, WasmWireWriterAllocator, WireCodec } from "./wire.js";
-export {
-  BoltFFIModule,
+export type {
   BoltFFIExports,
   BoltFFIImports,
   BoltFFIWasmBindgenHooks,
@@ -15,6 +14,9 @@ export {
   PrimitiveBufferElementType,
   StringAlloc,
   WriterAlloc,
+} from "./module.js";
+export {
+  BoltFFIModule,
   instantiateBoltFFI,
   instantiateBoltFFISync,
   AsyncFutureManager,
