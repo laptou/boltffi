@@ -31,9 +31,27 @@ impl LanguageGenerator for DartGenerator {
             &request.config().package.name,
         )
         .library();
-        let dart_source = DartEmitter::emit(&dart_library);
-        let output_path = output_directory.join(format!("{}.dart", request.config().package.name));
+        let package = DartEmitter::emit(&dart_library, &request.config().crate_artifact_name());
 
-        request.write_output(&output_path, dart_source)
+        let package_dir = output_directory.join(&request.config().package.name);
+        request.ensure_output_directory(&package_dir)?;
+
+        let package_hook_dir = package_dir.join("hook");
+        request.ensure_output_directory(&package_hook_dir)?;
+
+        let package_lib_dir = package_dir.join("lib");
+        request.ensure_output_directory(&package_lib_dir)?;
+
+        let package_pubspec = package_dir.join("pubspec.yaml");
+        request.write_output(&package_pubspec, &package.pubspec)?;
+
+        let package_build_dart = package_hook_dir.join("build.dart");
+        request.write_output(&package_build_dart, &package.build)?;
+
+        let package_lib_file =
+            package_lib_dir.join(format!("{}.dart", &request.config().package.name));
+        request.write_output(&package_lib_file, &package.lib)?;
+
+        Ok(())
     }
 }

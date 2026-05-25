@@ -103,7 +103,12 @@ impl Transport {
             Self::Span(SpanContent::Scalar(_)) | Self::Span(SpanContent::Composite(_)) => {
                 ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
             }
-            Self::Span(_) => ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded),
+            Self::Span(SpanContent::Utf8) => {
+                ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String)
+            }
+            Self::Span(SpanContent::Encoded(_)) => {
+                ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+            }
             Self::Handle { .. } => ValueReturnStrategy::ObjectHandle,
             Self::Callback { .. } => ValueReturnStrategy::CallbackHandle,
         }

@@ -28,6 +28,7 @@ pub struct PyprojectTemplate;
 pub struct SetupTemplate<'a> {
     pub module: &'a PythonModule,
     pub package_version_literal: &'a str,
+    pub minimum_python_version_requirement_literal: &'a str,
     pub native_extension_name_literal: &'a str,
     pub native_source_path_literal: &'a str,
 }

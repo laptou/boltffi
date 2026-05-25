@@ -13,7 +13,7 @@ use crate::config::{Config, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMiss
 use crate::pack::PackError;
 use crate::reporter::Reporter;
 
-use super::{format_command_for_log, print_cargo_line, resolve_build_cargo_args};
+use super::{print_cargo_line, resolve_build_cargo_args};
 
 use self::npm::{
     generate_wasm_loader_entrypoints, generate_wasm_package_json, generate_wasm_readme,
@@ -286,7 +286,7 @@ fn transpile_typescript_bundle(
         .arg("--outDir")
         .arg(output_dir);
 
-    let command_display = format_command_for_log(&command);
+    let command_display = format_command_for_display(&command);
     let working_directory = std::env::current_dir()
         .map(|dir| dir.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
@@ -299,8 +299,12 @@ fn transpile_typescript_bundle(
     })?;
 
     let module_name = config.wasm_typescript_module_name();
-    let javascript_path = output_dir.join(format!("{}.js", module_name));
-    let declarations_path = output_dir.join(format!("{}.d.ts", module_name));
+    let source_stem = source_file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&module_name);
+    let javascript_path = output_dir.join(format!("{source_stem}.js"));
+    let declarations_path = output_dir.join(format!("{source_stem}.d.ts"));
     let emitted_outputs_exist = javascript_path.exists() && declarations_path.exists();
 
     if output.status.success() || emitted_outputs_exist {
@@ -324,10 +328,28 @@ fn transpile_typescript_bundle(
 
     Err(CliError::CommandFailed {
         command: format!(
-            "tsc failed while transpiling {} into {}\nworking directory: {working_directory}\ncommand: {command_display}\n{details}",
+            "tsc failed while transpiling {} into {}\nworking directory: {working_directory}\ncommand: {command_display}\n{}",
             source_file.display(),
             output_dir.display(),
+            details
         ),
         status: output.status.code(),
     })
+}
+
+fn format_command_for_display(command: &Command) -> String {
+    let mut parts = vec![shell_quote(command.get_program())];
+    parts.extend(command.get_args().map(shell_quote));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &std::ffi::OsStr) -> String {
+    let rendered = value.to_string_lossy();
+    if rendered.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | ',' | '=')
+    }) {
+        rendered.into_owned()
+    } else {
+        format!("'{}'", rendered.replace('\'', r"'\''"))
+    }
 }

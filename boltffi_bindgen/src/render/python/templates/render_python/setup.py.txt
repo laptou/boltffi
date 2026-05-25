@@ -3,6 +3,7 @@ from setuptools import Extension, setup
 setup(
     name={{ module.package_name_literal() }},
     version={{ package_version_literal }},
+    python_requires={{ minimum_python_version_requirement_literal }},
     packages=[{{ module.module_name_literal() }}],
     package_data={ {{ module.module_name_literal() }}: ["py.typed", "*.pyi", "*.dll", "*.dylib", "*.so"] },
     ext_modules=[

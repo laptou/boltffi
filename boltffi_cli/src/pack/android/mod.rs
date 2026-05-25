@@ -1,13 +1,14 @@
 mod link;
 
-use crate::build::{
-    BuildOptions, Builder, OutputCallback, all_successful, failed_target_details, failed_targets,
-};
+use crate::build::{BuildOptions, Builder, OutputCallback, all_successful, failed_target_details, failed_targets};
 use crate::cli::{CliError, Result};
 use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use crate::commands::pack::PackAndroidOptions;
 use crate::config::Config;
 use crate::pack::PackError;
+use crate::pack::symbols::{
+    ensure_debug_symbols_profile_has_debuginfo, ensure_existing_debug_symbol_artifacts_are_usable,
+};
 use crate::reporter::Reporter;
 use crate::target::Platform;
 
@@ -17,6 +18,12 @@ use super::{
 };
 
 pub(crate) use self::link::AndroidPackager;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AndroidBindingMode {
+    Kotlin,
+    KotlinMultiplatform,
+}
 
 pub(crate) fn pack_android(
     config: &Config,
@@ -38,6 +45,17 @@ pub(crate) fn pack_android(
     let android_targets = config.android_targets();
 
     if !options.execution.no_build {
+        if config.android_debug_symbols_enabled() {
+            ensure_debug_symbols_profile_has_debuginfo(
+                &build_cargo_args,
+                &build_profile,
+                "targets.android.debug_symbols",
+                &android_targets
+                    .iter()
+                    .map(|target| target.triple().to_string())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
         let step = reporter.step("Building Android targets");
         build_android_targets(
             config,
@@ -92,7 +110,22 @@ pub(crate) fn pack_android(
         .into());
     }
 
-    let packager = AndroidPackager::new(config, android_libraries, build_profile.is_release_like());
+    if options.execution.no_build && config.android_debug_symbols_enabled() {
+        ensure_existing_debug_symbol_artifacts_are_usable(
+            &android_libraries
+                .iter()
+                .map(|library| library.path.clone())
+                .collect::<Vec<_>>(),
+            "targets.android.debug_symbols",
+        )?;
+    }
+
+    let packager = AndroidPackager::new(
+        config,
+        android_libraries,
+        build_profile.is_release_like(),
+        AndroidBindingMode::Kotlin,
+    );
     let step = reporter.step("Packaging jniLibs");
     packager.package()?;
     step.finish_success();
@@ -100,7 +133,7 @@ pub(crate) fn pack_android(
     Ok(())
 }
 
-fn build_android_targets(
+pub(crate) fn build_android_targets(
     config: &Config,
     targets: &[crate::target::RustTarget],
     release: bool,

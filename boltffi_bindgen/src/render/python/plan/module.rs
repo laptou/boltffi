@@ -2,7 +2,7 @@ use crate::ir::types::PrimitiveType;
 
 use super::{
     PythonCStyleEnum, PythonCallable, PythonFunction, PythonNativeCallable, PythonParameter,
-    PythonSequenceType, PythonType,
+    PythonRecord, PythonSequenceType, PythonType,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +12,7 @@ pub struct PythonModule {
     pub package_version: Option<String>,
     pub library_name: String,
     pub free_buffer_symbol: String,
+    pub records: Vec<PythonRecord>,
     pub enums: Vec<PythonCStyleEnum>,
     pub functions: Vec<PythonFunction>,
 }
@@ -36,6 +37,7 @@ impl PythonModule {
         self.enums
             .iter()
             .map(PythonCStyleEnum::class_name)
+            .chain(self.records.iter().map(PythonRecord::class_name))
             .chain(
                 self.functions
                     .iter()
@@ -48,6 +50,7 @@ impl PythonModule {
         self.functions
             .iter()
             .map(PythonFunction::callable)
+            .chain(self.records.iter().flat_map(PythonRecord::callables))
             .chain(self.enums.iter().flat_map(PythonCStyleEnum::callables))
     }
 
@@ -55,6 +58,7 @@ impl PythonModule {
         self.functions
             .iter()
             .map(PythonFunction::native_callable)
+            .chain(self.records.iter().flat_map(PythonRecord::native_callables))
             .chain(
                 self.enums
                     .iter()
@@ -65,16 +69,30 @@ impl PythonModule {
 
     pub fn has_native_callables(&self) -> bool {
         !self.functions.is_empty()
+            || self.records.iter().any(PythonRecord::has_native_callables)
             || self
                 .enums
                 .iter()
                 .any(PythonCStyleEnum::has_native_callables)
     }
 
+    pub fn uses_records(&self) -> bool {
+        !self.records.is_empty()
+    }
+
+    pub fn uses_registered_types(&self) -> bool {
+        self.uses_records() || self.uses_c_style_enums()
+    }
+
     pub fn used_primitive_types(&self) -> Vec<PrimitiveType> {
-        self.enums
+        self.records
             .iter()
-            .map(|enumeration| enumeration.type_ref.tag_type)
+            .flat_map(|record| record.fields.iter().map(|field| field.primitive))
+            .chain(
+                self.enums
+                    .iter()
+                    .map(|enumeration| enumeration.type_ref.tag_type),
+            )
             .chain(self.callables().flat_map(|callable| {
                 callable
                     .parameters
@@ -119,6 +137,10 @@ impl PythonModule {
 
     pub fn uses_string_returns(&self) -> bool {
         self.callables().any(PythonCallable::returns_string)
+    }
+
+    pub fn uses_record_returns(&self) -> bool {
+        self.callables().any(PythonCallable::returns_record)
     }
 
     pub fn uses_c_style_enum_returns(&self) -> bool {

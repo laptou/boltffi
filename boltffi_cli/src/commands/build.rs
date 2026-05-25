@@ -10,6 +10,7 @@ pub enum BuildPlatform {
     Apple,
     Android,
     Wasm,
+    Dart,
     All,
 }
 
@@ -67,6 +68,13 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
             println!("Building for wasm ({})...", profile);
             builder.build_wasm_with_triple(config.wasm_triple())?
         }
+        BuildPlatform::Dart => {
+            if !config.is_dart_enabled() {
+                return Ok(Vec::new());
+            }
+            println!("Building for dart ({})...", profile);
+            builder.build_targets(&config.dart_targets())?
+        }
         BuildPlatform::All => {
             println!("Building all targets ({})...", profile);
             let mut all_results = Vec::new();
@@ -78,6 +86,9 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
             }
             if config.is_wasm_enabled() {
                 all_results.extend(builder.build_wasm_with_triple(config.wasm_triple())?);
+            }
+            if config.is_dart_enabled() {
+                all_results.extend(builder.build_targets(&config.dart_targets())?);
             }
             all_results
         }

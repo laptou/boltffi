@@ -1,4 +1,5 @@
 use super::*;
+use super::calls::{AbiCallbackParamPlan, AbiCallbackParamStrategy};
 use boltffi_ffi_rules::callable::ExecutionKind;
 
 impl<'c> Lowerer<'c> {
@@ -880,25 +881,78 @@ impl<'c> Lowerer<'c> {
                 (shape, ErrorTransport::None)
             }
             ReturnDef::Result { ok, err } => {
-                let ok_codec = self.build_codec(ok);
-                let err_codec = self.build_codec(err);
-                let result_codec = CodecPlan::Result {
-                    ok: Box::new(ok_codec),
-                    err: Box::new(err_codec.clone()),
-                };
-                let decode_ops = self.expand_decode(&result_codec);
-                let encode_ops = self.expand_encode(&result_codec, ValueExpr::Var("result".into()));
-                let wire_transport = Transport::Span(SpanContent::Encoded(result_codec));
-                (
-                    ReturnShape::from_transport_with_ops(wire_transport, decode_ops, encode_ops)
-                        .with_error_strategy(ErrorReturnStrategy::Encoded),
-                    ErrorTransport::Encoded {
-                        decode_ops: self.expand_decode(&err_codec),
-                        encode_ops: Some(
-                            self.expand_encode(&err_codec, ValueExpr::Var("error".into())),
-                        ),
-                    },
-                )
+                let ok_transport = self.classify_type(ok);
+                match &ok_transport {
+                    Transport::Handle { class_id, .. } => {
+                        let err_codec = self.build_codec(err);
+                        (
+                            ReturnShape {
+                                contract: ReturnContract::new(
+                                    ValueReturnStrategy::ObjectHandle,
+                                    ErrorReturnStrategy::Encoded,
+                                ),
+                                transport: Some(Transport::Handle {
+                                    class_id: class_id.clone(),
+                                    nullable: true,
+                                }),
+                                decode_ops: None,
+                                encode_ops: None,
+                            },
+                            ErrorTransport::Encoded {
+                                decode_ops: self.expand_decode(&err_codec),
+                                encode_ops: None,
+                            },
+                        )
+                    }
+                    Transport::Callback {
+                        callback_id,
+                        style,
+                        nullable: _,
+                    } => {
+                        let err_codec = self.build_codec(err);
+                        (
+                            ReturnShape {
+                                contract: ReturnContract::new(
+                                    ValueReturnStrategy::CallbackHandle,
+                                    ErrorReturnStrategy::Encoded,
+                                ),
+                                transport: Some(Transport::Callback {
+                                    callback_id: callback_id.clone(),
+                                    style: *style,
+                                    nullable: true,
+                                }),
+                                decode_ops: None,
+                                encode_ops: None,
+                            },
+                            ErrorTransport::Encoded {
+                                decode_ops: self.expand_decode(&err_codec),
+                                encode_ops: None,
+                            },
+                        )
+                    }
+                    _ => {
+                        let ok_codec = self.codec_from_transport(&ok_transport);
+                        let err_codec = self.build_codec(err);
+                        let result_codec = CodecPlan::Result {
+                            ok: Box::new(ok_codec),
+                            err: Box::new(err_codec.clone()),
+                        };
+                        let decode_ops = self.expand_decode(&result_codec);
+                        let encode_ops =
+                            self.expand_encode(&result_codec, ValueExpr::Var("result".into()));
+                        let wire_transport = Transport::Span(SpanContent::Encoded(result_codec));
+                        (
+                            ReturnShape::from_transport_with_ops(wire_transport, decode_ops, encode_ops)
+                                .with_error_strategy(ErrorReturnStrategy::Encoded),
+                            ErrorTransport::Encoded {
+                                decode_ops: self.expand_decode(&err_codec),
+                                encode_ops: Some(
+                                    self.expand_encode(&err_codec, ValueExpr::Var("error".into())),
+                                ),
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -931,11 +985,18 @@ impl<'c> Lowerer<'c> {
             },
         };
 
-        let method_params = method
-            .params
-            .iter()
-            .map(|param| self.lower_callback_param(param))
-            .flat_map(|param| self.abi_callback_param_from_plan(param));
+        let method_params = method.params.iter().flat_map(|param| {
+            match self.classify_type(&param.type_expr) {
+                Transport::Handle { .. } | Transport::Callback { .. } => {
+                    let plan = self.lower_param(param);
+                    self.abi_param_from_plan(&plan)
+                }
+                _ => {
+                    let plan = self.lower_callback_param(param);
+                    self.abi_callback_param_from_plan(plan)
+                }
+            }
+        });
 
         let out_params = self.abi_callback_out_params(&method.returns, method.execution_kind());
 
@@ -1074,8 +1135,10 @@ mod return_shape_tests {
     use crate::ir::abi::ErrorTransport;
     use crate::ir::codec::CodecPlan;
     use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
+    use crate::ir::definitions::ReturnDef;
     use crate::ir::ids::ClassId;
     use crate::ir::plan::{ReturnPlan, Transport};
+    use crate::ir::types::{PrimitiveType, TypeExpr};
     use boltffi_ffi_rules::transport::{ErrorReturnStrategy, ValueReturnStrategy};
 
     fn empty_contract() -> FfiContract {
@@ -1111,6 +1174,31 @@ mod return_shape_tests {
         );
         assert!(shape.encode_ops.is_none());
         assert!(shape.decode_ops.is_none());
+        assert!(matches!(
+            &shape.transport,
+            Some(Transport::Handle { nullable: true, .. })
+        ));
+        assert!(matches!(err_transport, ErrorTransport::Encoded { .. }));
+    }
+
+    #[test]
+    fn callback_return_shape_fallible_handle_avoids_wire_codec_for_ok() {
+        let contract = empty_contract();
+        let lowerer = Lowerer::new(&contract);
+        let returns = ReturnDef::Result {
+            ok: TypeExpr::Handle(ClassId::new("Transfer")),
+            err: TypeExpr::Primitive(PrimitiveType::I32),
+        };
+        let (shape, err_transport) = lowerer.callback_return_shape_and_error(&returns);
+        assert_eq!(
+            shape.value_return_strategy(),
+            ValueReturnStrategy::ObjectHandle
+        );
+        assert_eq!(
+            shape.error_return_strategy(),
+            ErrorReturnStrategy::Encoded
+        );
+        assert!(shape.encode_ops.is_none());
         assert!(matches!(
             &shape.transport,
             Some(Transport::Handle { nullable: true, .. })

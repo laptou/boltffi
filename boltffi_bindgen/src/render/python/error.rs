@@ -18,6 +18,24 @@ pub enum PythonLowerError {
         colliding_parameter: String,
     },
     #[error(
+        "Python record field name `{generated_name}` collides in record `{record_name}` between field `{existing_field}` and field `{colliding_field}`"
+    )]
+    RecordFieldNameCollision {
+        record_name: String,
+        generated_name: String,
+        existing_field: String,
+        colliding_field: String,
+    },
+    #[error(
+        "Python record callable name `{generated_name}` collides in record `{record_name}` between {existing_subject} and {colliding_subject}"
+    )]
+    RecordCallableNameCollision {
+        record_name: String,
+        generated_name: String,
+        existing_subject: String,
+        colliding_subject: String,
+    },
+    #[error(
         "Python enum member name `{generated_name}` collides in enum `{enum_name}` between variant `{existing_variant}` and variant `{colliding_variant}`"
     )]
     EnumMemberNameCollision {

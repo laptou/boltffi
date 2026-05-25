@@ -7,6 +7,7 @@ use super::metadata::{CargoCrateType, CargoMetadata};
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CargoMetadataFixture {
     target_directory: PathBuf,
+    workspace_root: Option<PathBuf>,
     packages: Vec<CargoPackageFixture>,
 }
 
@@ -14,8 +15,14 @@ impl CargoMetadataFixture {
     pub(crate) fn new(target_directory: impl AsRef<Path>) -> Self {
         Self {
             target_directory: target_directory.as_ref().to_path_buf(),
+            workspace_root: None,
             packages: Vec::new(),
         }
+    }
+
+    pub(crate) fn workspace_root(mut self, workspace_root: impl AsRef<Path>) -> Self {
+        self.workspace_root = Some(workspace_root.as_ref().to_path_buf());
+        self
     }
 
     pub(crate) fn package(mut self, package: CargoPackageFixture) -> Self {

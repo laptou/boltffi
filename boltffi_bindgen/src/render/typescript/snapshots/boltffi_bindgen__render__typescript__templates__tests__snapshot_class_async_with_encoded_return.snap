@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/typescript/templates.rs
+assertion_line: 1513
 expression: template.render().unwrap()
 ---
 const _DatabaseFinalizer: FinalizationRegistry<number> | null =
@@ -60,7 +61,7 @@ export class Database {
       const outPtr = _module.allocBufDescriptor();
       let completeCompleted = false;
       try {
-        (_exports.boltffi_database_query_complete as Function)(outPtr, awaitedHandle, 0);
+        _module.completeAsync((statusPtr: number) => (_exports.boltffi_database_query_complete as Function)(outPtr, awaitedHandle, statusPtr));
         completeCompleted = true;
         const reader = _module.readerFromBuf(outPtr);
         const result = QueryResultCodec.decode(reader);

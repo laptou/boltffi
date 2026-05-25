@@ -38,7 +38,9 @@ experimental = ["typescript.async_streams"]
 - CLI `--experimental` flag includes experimental targets for that command
 
 Experimental targets:
-- none currently
+- `dart`
+- `python`
+- `kotlin_multiplatform`
 
 Experimental features:
 - `typescript.async_streams`
@@ -140,6 +142,20 @@ Uuid = { type = "UUID", conversion = "uuid_string" }
 - `skip_package_swift` (bool, optional): Skip generating `Package.swift`.
   - Default: `false`
 
+### `[targets.apple.debug_symbols]` (optional)
+
+Companion archive output for Apple slice libraries collected by `boltffi pack apple`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside Apple packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.apple.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
+
 ## Android
 
 ### `[targets.android]` (optional)
@@ -168,7 +184,13 @@ Uuid = { type = "UUID", conversion = "uuid_string" }
 - `module_name` (string, optional): Kotlin module/object name.
   - Default: `PascalCase(package.name)`
 - `library_name` (string, optional): Native library name for `System.loadLibrary`.
-  - Default: inferred from crate name
+  - Default: inferred from the configured package/crate name. The Android load name preserves
+    hyphens to match `jniLibs`; the desktop JVM loader uses Cargo-normalized artifact names.
+- `desktop_loader` (`bundled` | `system` | `none`): How generated Kotlin loads the native library on non-Android JVMs.
+  - Default: `bundled`
+  - `bundled`: extract bundled desktop natives when present, otherwise fall back to `System.loadLibrary`
+  - `system`: call `System.loadLibrary` on desktop JVMs
+  - `none`: skip desktop JVM loading and assume the host process has already loaded the native library
 - `api_style` (`top_level` | `module_object`): How functions are exposed.
   - Default: `top_level`
 - `factory_style` (`constructors` | `companion_methods`): How factory constructors are exposed.
@@ -195,6 +217,39 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
 
 - `output` (path, optional): Where `boltffi pack android` writes the `jniLibs/` folder.
   - Default: `{targets.android.output}/jniLibs`
+
+### `[targets.android.debug_symbols]` (optional)
+
+Companion archive output for Android JNI libraries collected by `boltffi pack android`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside Android packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.android.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
+
+## Kotlin Multiplatform
+
+### `[targets.kotlin_multiplatform]` (optional, experimental)
+
+Generates a Kotlin Multiplatform module with `commonMain` declarations and JVM/Android actuals backed by the existing Kotlin/JNI generator. This target currently covers the same JVM-compatible binding surface that can be represented in common Kotlin. Kotlin/Native `cinterop` actuals for iOS/macOS are not generated yet.
+
+- `enabled` (bool): Whether this target is active.
+  - Default: `false`
+- `output` (path): Kotlin Multiplatform module output directory.
+  - Default: `dist/kotlin-multiplatform`
+- `package` (string, optional): Kotlin package for generated common and platform sources.
+  - Default: same as `[targets.android.kotlin].package`
+- `module_name` (string, optional): Kotlin source/module class name.
+  - Default: same as `[targets.android.kotlin].module_name`
+
+Desktop JVM native resources for `boltffi pack kmp` use `[targets.java.jvm].host_targets`.
+`targets.java.jvm.enabled` does not need to be true for KMP packaging to read this shared JVM
+host matrix. When omitted, the host matrix defaults to `["current"]`.
 
 ## Java
 
@@ -227,6 +282,20 @@ Desktop JVM target configuration.
   - Phase 3 behavior: all configured values must resolve to the current host target after `current` expansion and deduping
   - Packaging layout: `boltffi pack java` writes the JNI library to `dist/java/native/<host-target>/` and also keeps a flat current-host `_jni` copy in `dist/java/`
   - `boltffi pack java --no-build` is unsupported in Phase 3; rerun without `--no-build`
+
+### `[targets.java.jvm.debug_symbols]` (optional)
+
+Companion archive output for desktop JNI libraries collected by `boltffi pack java`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside JVM packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.java.jvm.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
 
 ### `[targets.java.android]` (optional)
 
@@ -308,6 +377,30 @@ Controls npm package generation in `boltffi pack wasm`.
   - Default: `{package.license}`
 - `repository` (string, optional): Package repository URL.
   - Default: `{package.repository}`
+
+## C#
+
+### `[targets.csharp]` (optional)
+
+- `enabled` (bool): Whether C# generation and packaging are active.
+  - Default: `false`
+- `output` (path): C# artifact root directory.
+  - Default: `dist/csharp`
+  - `boltffi generate csharp` writes `.cs` files directly here.
+  - `boltffi pack csharp` writes generated sources under `{output}/src`, native assets under `{output}/runtimes/<rid>/native`, and a generated project file at `{output}/BoltFFI.CSharp.csproj`.
+- `package_id` (string, optional): NuGet package ID.
+  - Default: `{package.name}`
+- `target_framework` (string, optional): Target framework for the generated NuGet package project.
+  - Default: `net10.0`
+- `package_output` (path, optional): Directory where `boltffi pack csharp` writes `.nupkg` files.
+  - Default: `{targets.csharp.output}/packages`
+- `runtime_identifiers` (array of strings, optional): Desired .NET native runtime asset outputs.
+  - Supported canonical values: `current`, `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, `win-x64`
+  - Supported aliases: `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`
+  - Default: `["current"]`
+  - Behavior: `current` resolves to the active host RID, repeated values are deduped after resolution, and native libraries are packaged under NuGet `runtimes/{rid}/native/`.
+
+`boltffi pack csharp` rejects explicit Cargo `--target` passthrough args because the native asset matrix is controlled by `targets.csharp.runtime_identifiers`. Current-host packaging works on `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, and `win-x64`. Cross-host support follows the shared desktop toolchain support used by JVM packaging; unsupported host/target pairs fail during preflight.
 
 ## Apple SwiftPM layouts
 

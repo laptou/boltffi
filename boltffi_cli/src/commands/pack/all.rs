@@ -3,9 +3,9 @@ use crate::config::{Config, Target};
 use crate::reporter::Reporter;
 
 use super::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackPythonOptions,
-    PackWasmOptions, pack_android, pack_apple, pack_java, pack_python, pack_wasm,
-    prepare_java_packaging,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions, PackDartOptions,
+    PackJavaOptions, PackKmpOptions, PackPythonOptions, PackWasmOptions, pack_android, pack_apple,
+    pack_csharp, pack_dart, pack_java, pack_kmp, pack_python, pack_wasm, prepare_java_packaging,
 };
 
 pub(super) fn pack_all(
@@ -14,6 +14,12 @@ pub(super) fn pack_all(
     reporter: &Reporter,
 ) -> Result<()> {
     super::ensure_java_no_build_supported(
+        config,
+        options.execution.no_build,
+        options.experimental,
+        "pack all",
+    )?;
+    super::ensure_kmp_no_build_supported(
         config,
         options.execution.no_build,
         options.experimental,
@@ -58,6 +64,18 @@ pub(super) fn pack_all(
         packed_any = true;
     }
 
+    if config.should_process(Target::KotlinMultiplatform, options.experimental) {
+        pack_kmp(
+            config,
+            PackKmpOptions {
+                execution: options.execution.clone(),
+                experimental: options.experimental,
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
     if config.is_wasm_enabled() {
         pack_wasm(
             config,
@@ -89,6 +107,29 @@ pub(super) fn pack_all(
                 execution: options.execution.clone(),
                 experimental: options.experimental,
                 python_interpreters: options.python_interpreters.clone(),
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::Dart, options.experimental) {
+        pack_dart(
+            config,
+            PackDartOptions {
+                execution: options.execution.clone(),
+                experimental: options.experimental,
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.is_csharp_enabled() {
+        pack_csharp(
+            config,
+            PackCSharpOptions {
+                execution: options.execution,
             },
             reporter,
         )?;

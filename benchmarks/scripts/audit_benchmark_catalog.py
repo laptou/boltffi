@@ -66,8 +66,17 @@ HARNESS_SOURCES: tuple[HarnessSource, ...] = (
         pattern=re.compile(r"(?:runSuite\(|name:\s*)'([^']+)'"),
     ),
     HarnessSource(
+        name="python_pyperf",
+        path=REPO_ROOT / "benchmarks/harnesses/python-bench/bench.py",
+        pattern=re.compile(r'BenchmarkCase\(\s*"([^"]+)"'),
+    ),
+    HarnessSource(
         name="dotnet_benchmarkdotnet",
-        path=REPO_ROOT / "benchmarks/harnesses/dotnet-bench/WireReaderBenchmarks.cs",
+        path=(
+            REPO_ROOT / "benchmarks/harnesses/dotnet-bench/WireReaderBenchmarks.cs",
+            REPO_ROOT / "benchmarks/harnesses/dotnet-bench/EnumWireBenchmarks.cs",
+            REPO_ROOT / "benchmarks/harnesses/dotnet-bench/SharedSurfaceBenchmarks.cs",
+        ),
         pattern=re.compile(r"\[Benchmark\]\s+public\s+[^\n(]+?\s+([A-Za-z0-9_]+)\(", re.MULTILINE),
     ),
 )

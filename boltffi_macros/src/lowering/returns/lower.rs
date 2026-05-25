@@ -5,7 +5,8 @@ use syn::Type;
 
 use crate::index::custom_types::{self, CustomTypeRegistry};
 
-use super::classify::ReturnTypeDescriptor;
+use super::classify::{option_primitive_uses_scalar_encoding, ReturnTypeDescriptor};
+
 use boltffi_ffi_rules::transport::ErrorReturnStrategy;
 
 use super::model::{
@@ -159,6 +160,13 @@ impl ResolvedReturn {
         }
     }
 
+    pub fn async_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        let rust_return_type = self.async_rust_return_type();
+        quote! {
+            return ::boltffi::__private::rustfuture::rust_future_invalid_arg::<#rust_return_type>();
+        }
+    }
+
     pub fn async_complete_conversion(
         &self,
         return_lowering: &super::model::ReturnLoweringContext<'_>,
@@ -231,6 +239,7 @@ impl WasmOptionScalarEncoding {
     pub fn from_option_rust_type(rust_type: &Type) -> Option<Self> {
         ReturnTypeDescriptor::parse(rust_type)
             .option_primitive()
+            .filter(|primitive| option_primitive_uses_scalar_encoding(*primitive))
             .map(|primitive| Self { primitive })
     }
 

@@ -165,6 +165,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::PythonPackageLayout;
+    use crate::cli::CliError;
+    use crate::target::NativeHostPlatform;
 
     #[test]
     fn builds_expected_python_package_paths() {
@@ -204,10 +206,7 @@ mod tests {
             PathBuf::from("dist/python/demo_lib/_native.c")
         );
         assert_eq!(
-            layout.packaged_shared_library_path(
-                crate::target::NativeHostPlatform::DarwinArm64,
-                "demo_lib"
-            ),
+            layout.packaged_shared_library_path(NativeHostPlatform::DarwinArm64, "demo_lib"),
             PathBuf::from("dist/python/demo_lib/libdemo_lib.dylib")
         );
     }
@@ -223,7 +222,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::cli::CliError::CommandFailed { command, status: None }
+            CliError::CommandFailed { command, status: None }
                 if command.contains("targets.python.wheel.output")
         ));
     }
@@ -242,7 +241,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::cli::CliError::CommandFailed { command, status: None }
+            CliError::CommandFailed { command, status: None }
                 if command.contains("generated Python package directory")
         ));
     }
@@ -261,7 +260,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::cli::CliError::CommandFailed { command, status: None }
+            CliError::CommandFailed { command, status: None }
                 if command.contains("must not be inside the generated Python package directory")
         ));
     }

@@ -1,7 +1,7 @@
 plugins {
-    kotlin("jvm") version "2.3.20"
-    kotlin("plugin.allopen") version "2.3.20"
-    id("me.champeau.jmh") version "0.7.2"
+    kotlin("jvm") version "2.3.21"
+    kotlin("plugin.allopen") version "2.3.21"
+    id("me.champeau.jmh") version "0.7.3"
     application
 }
 
@@ -18,7 +18,7 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("net.java.dev.jna:jna:5.17.0")
+    implementation("net.java.dev.jna:jna:5.18.1")
 }
 
 application {

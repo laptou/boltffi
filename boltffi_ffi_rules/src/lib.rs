@@ -290,6 +290,15 @@ pub mod naming {
         Name::new(crate_name.replace('-', "_"))
     }
 
+    /// Wraps an already-selected native loader name.
+    ///
+    /// Unlike [`library_name`], this preserves hyphens because some packagers
+    /// intentionally emit libraries such as `libmy-crate.so` for
+    /// `System.loadLibrary("my-crate")`.
+    pub fn load_library_name(library_name: &str) -> Name<LibraryName> {
+        Name::new(library_name.to_string())
+    }
+
     pub fn vec_len_suffix() -> &'static str {
         "_len"
     }
@@ -820,6 +829,14 @@ pub mod callback {
         #[case::mixed("my-cool_crate", "my_cool_crate")]
         fn library_name_replaces_hyphens(#[case] input: &str, #[case] expected: &str) {
             assert_eq!(crate::naming::library_name(input).as_str(), expected);
+        }
+
+        #[test]
+        fn load_library_name_preserves_hyphens() {
+            assert_eq!(
+                crate::naming::load_library_name("my-cool-crate").as_str(),
+                "my-cool-crate"
+            );
         }
 
         #[test]

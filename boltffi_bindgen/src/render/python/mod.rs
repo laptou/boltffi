@@ -5,6 +5,7 @@ mod naming;
 mod plan;
 mod primitives;
 mod templates;
+mod version;
 
 pub use emit::{PythonEmitter, PythonOutputFile, PythonPackageSources};
 pub use error::PythonLowerError;
@@ -12,6 +13,8 @@ pub use lower::PythonLowerer;
 pub use naming::NamingConvention;
 pub use plan::{
     PythonCStyleEnum, PythonCStyleEnumVariant, PythonCallable, PythonEnumConstructor,
-    PythonEnumMethod, PythonEnumType, PythonFunction, PythonModule, PythonParameter,
+    PythonEnumMethod, PythonEnumType, PythonFunction, PythonModule, PythonParameter, PythonRecord,
+    PythonRecordConstructor, PythonRecordField, PythonRecordMethod, PythonRecordType,
     PythonSequenceType, PythonType,
 };
+pub use version::PythonRuntimeVersion;

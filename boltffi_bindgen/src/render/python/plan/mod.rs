@@ -1,6 +1,7 @@
 mod callable;
 mod enumeration;
 mod module;
+mod record;
 mod type_shape;
 
 pub use callable::{
@@ -9,4 +10,7 @@ pub use callable::{
 };
 pub use enumeration::{PythonCStyleEnum, PythonCStyleEnumVariant, PythonEnumType};
 pub use module::PythonModule;
+pub use record::{
+    PythonRecord, PythonRecordConstructor, PythonRecordField, PythonRecordMethod, PythonRecordType,
+};
 pub use type_shape::{PythonSequenceType, PythonType};
