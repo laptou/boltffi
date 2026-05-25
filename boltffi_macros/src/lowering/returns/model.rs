@@ -147,7 +147,11 @@ impl<'a> ReturnLoweringContext<'a> {
     }
 
     pub(crate) fn named_type_transport_classifier(&self) -> NamedTypeTransportClassifier<'a> {
-        NamedTypeTransportClassifier::new(self.custom_types, self.data_types, self.exported_classes)
+        NamedTypeTransportClassifier::new(
+            self.custom_types,
+            self.data_types,
+            self.exported_classes,
+        )
     }
 
     pub fn lower_output(&self, output: &ReturnType) -> syn::Result<ResolvedReturn> {
@@ -227,10 +231,9 @@ pub fn replace_self_in_type(ty: &Type, concrete: &syn::Ident) -> Type {
 pub fn normalize_return_type_for_self(output: &ReturnType, concrete: &syn::Ident) -> ReturnType {
     match output {
         ReturnType::Default => ReturnType::Default,
-        ReturnType::Type(arrow, ty) => ReturnType::Type(
-            *arrow,
-            Box::new(replace_self_in_type(ty.as_ref(), concrete)),
-        ),
+        ReturnType::Type(arrow, ty) => {
+            ReturnType::Type(*arrow, Box::new(replace_self_in_type(ty.as_ref(), concrete)))
+        }
     }
 }
 

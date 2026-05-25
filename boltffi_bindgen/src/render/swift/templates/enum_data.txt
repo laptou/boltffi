@@ -142,7 +142,7 @@ extension {{ class_name }} {
 {{ method.method_body_indent() }}
 {{ method.method_body_indent() }}}
 {{ method.method_body_indent() }}if errLen > 0, let p = errOutPtr {
-{{ method.method_body_indent() }}    defer { boltffi_free_return_buffer(p, Int(errLen)) }
+{{ method.method_body_indent() }}    defer { free(UnsafeMutableRawPointer(p)) }
 {{ method.method_body_indent() }}    throw try boltffiDecodeOwnedBuf(UnsafePointer(p), Int(errLen)) { reader in {{ method.returns.throws_direct_err_throw_expr().unwrap() }} }
 {{ method.method_body_indent() }}
 {{ method.method_body_indent() }}

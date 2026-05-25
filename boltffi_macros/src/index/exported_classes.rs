@@ -209,9 +209,11 @@ fn has_export_attr(item_impl: &ItemImpl) -> bool {
 
 fn impl_self_type_ident(item_impl: &ItemImpl) -> Option<String> {
     match item_impl.self_ty.as_ref() {
-        Type::Path(type_path) if type_path.qself.is_none() => {
-            type_path.path.segments.last().map(|s| s.ident.to_string())
-        }
+        Type::Path(type_path) if type_path.qself.is_none() => type_path
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string()),
         _ => None,
     }
 }

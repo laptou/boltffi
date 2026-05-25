@@ -33,6 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -51,6 +53,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
       - run: cargo test --workspace --all-features
 
   build:
@@ -76,8 +80,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
           key: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }} -p boltffi_cli
+      - run: cargo build --profile release-lto --target ${{ matrix.target }} -p boltffi_cli
 
   verify:
     name: Verify
@@ -92,8 +98,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-      - run: cargo build --release -p boltffi_cli
-      - run: ./target/release/boltffi --version
+          cache-bin: false
+          prefix-key: v1-rust
+      - run: cargo build --profile release-lto -p boltffi_cli
+      - run: ./target/release-lto/boltffi --version
 
   docs:
     name: Docs
@@ -107,6 +115,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
       - run: cargo doc --workspace --no-deps
 
   miri:
@@ -141,10 +151,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
           key: android-packaging-${{ matrix.os }}
           workspaces: .
       - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- check --android --fix
       - run: cargo run -p boltffi_cli --manifest-path ../../Cargo.toml -- -v pack android
+
+  demo-test-audit:
+    name: Demo Test Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo run --manifest-path examples/demo/Cargo.toml --bin demo-tests -- audit
 
   demo-platforms:
     name: Demo Platforms (${{ matrix.os }}, py${{ matrix.python-version }})
@@ -166,17 +192,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
+          prefix-key: v1-rust
           key: demo-platforms-${{ matrix.os }}-${{ matrix.python-version }}
       - if: matrix.python-version == '3.13'
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
       - if: matrix.python-version == '3.13'
         run: npm install -g typescript
       - if: matrix.python-version == '3.13'
         uses: Aandreba/setup-binaryen@v1.0.0
         with:
           token: ${{ github.token }}
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
       - run: python -m pip install --upgrade pip setuptools wheel
       - if: matrix.python-version == '3.13'
         run: ./examples/demo/verify-platform-demos.sh --host-defaults --python python

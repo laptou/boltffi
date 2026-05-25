@@ -197,11 +197,6 @@ pub fn resolve(
     write_if_changed(&dir.join("Cargo.toml"), &cargo_toml)?;
     write_if_changed(&src_dir.join("main.rs"), &generate_main_rs(&parsed))?;
 
-    // isolated `[workspace]` runner gets its own lockfile; without pruning it can drift from the target
-    // crate's resolution (same semver range to different patch picks) and break trait coherence.
-    let runner_lock = dir.join("Cargo.lock");
-    let _ = fs::remove_file(&runner_lock);
-
     let output = Command::new("cargo")
         .arg("run")
         .arg("--quiet")

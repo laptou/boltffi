@@ -159,6 +159,14 @@ pub(crate) fn parse_build_target_from_inline_config(config_argument: &str) -> Op
         .map(trim_wrapping_quotes)
         .filter(|target| !target.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            parse_inline_config_value(config_argument, &["build", "target"]).and_then(|value| {
+                value
+                    .as_str()
+                    .filter(|target| !target.is_empty())
+                    .map(str::to_string)
+            })
+        })
 }
 
 pub(crate) fn parse_build_target_from_config_file(config_path: &Path) -> Option<String> {
@@ -170,6 +178,30 @@ pub(crate) fn parse_build_target_from_config_file(config_path: &Path) -> Option<
         .as_str()
         .filter(|target| !target.is_empty())
         .map(str::to_string)
+}
+
+pub(crate) fn parse_profile_debug_from_inline_config(
+    config_argument: &str,
+    profile_name: &str,
+) -> Option<bool> {
+    let prefix = format!("profile.{profile_name}.debug=");
+    config_argument
+        .strip_prefix(&prefix)
+        .and_then(parse_debuginfo_value)
+        .or_else(|| {
+            parse_inline_config_value(config_argument, &["profile", profile_name, "debug"])
+                .and_then(|value| parse_debuginfo_toml_value(&value))
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn parse_profile_debug_from_config_file(
+    config_path: &Path,
+    profile_name: &str,
+) -> Option<bool> {
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let value: toml::Value = toml::from_str(&content).ok()?;
+    resolve_profile_debug_from_toml(&value, profile_name, &mut Vec::new())
 }
 
 fn selected_manifest_directory(
@@ -258,6 +290,76 @@ fn trim_wrapping_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+pub(crate) fn parse_inline_config_value(
+    config_argument: &str,
+    path: &[&str],
+) -> Option<toml::Value> {
+    let value: toml::Value = toml::from_str(config_argument).ok()?;
+    let mut current = &value;
+
+    for key in path {
+        current = current.get(*key)?;
+    }
+
+    Some(current.clone())
+}
+
+pub(crate) fn parse_debuginfo_toml_value(value: &toml::Value) -> Option<bool> {
+    match value {
+        toml::Value::Boolean(enabled) => Some(*enabled),
+        toml::Value::Integer(level) => Some(*level > 0),
+        toml::Value::String(level) => parse_debuginfo_value(level),
+        _ => None,
+    }
+}
+
+fn parse_debuginfo_value(value: &str) -> Option<bool> {
+    let normalized = trim_wrapping_quotes(value).trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "true" | "1" | "2" | "limited" | "line-tables-only" | "line-directives-only" | "full" => {
+            Some(true)
+        }
+        "false" | "0" | "none" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn resolve_profile_debug_from_toml(
+    value: &toml::Value,
+    profile_name: &str,
+    visited: &mut Vec<String>,
+) -> Option<bool> {
+    if visited
+        .iter()
+        .any(|visited_name| visited_name == profile_name)
+    {
+        return None;
+    }
+    visited.push(profile_name.to_string());
+
+    let resolved = value
+        .get("profile")
+        .and_then(|profiles| profiles.get(profile_name))
+        .and_then(|profile| {
+            profile
+                .get("debug")
+                .and_then(parse_debuginfo_toml_value)
+                .or_else(|| {
+                    profile
+                        .get("inherits")
+                        .and_then(toml::Value::as_str)
+                        .and_then(|inherits| {
+                            resolve_profile_debug_from_toml(value, inherits, visited)
+                        })
+                })
+        });
+
+    visited.pop();
+    resolved
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -267,7 +369,8 @@ mod tests {
     use super::{
         cargo_config_file_candidates_with_inputs, cargo_config_search_roots,
         configured_build_target, extract_cargo_config_args, parse_build_target_from_config_file,
-        parse_build_target_from_inline_config,
+        parse_build_target_from_inline_config, parse_profile_debug_from_config_file,
+        parse_profile_debug_from_inline_config,
     };
 
     #[test]
@@ -317,6 +420,59 @@ mod tests {
         let target = parse_build_target_from_config_file(&config_path).expect("config target");
 
         assert_eq!(target, "x86_64-unknown-linux-musl");
+    }
+
+    #[test]
+    fn parses_profile_debug_from_cargo_config_file_with_inheritance() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let temp_directory =
+            std::env::temp_dir().join(format!("boltffi-profile-debug-config-test-{unique}"));
+        fs::create_dir_all(&temp_directory).expect("create temp directory");
+        let config_path = temp_directory.join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"
+[profile.release]
+debug = "line-tables-only"
+
+[profile.mobile-release]
+inherits = "release"
+"#,
+        )
+        .expect("write config file");
+
+        let enabled = parse_profile_debug_from_config_file(&config_path, "mobile-release");
+
+        assert_eq!(enabled, Some(true));
+    }
+
+    #[test]
+    fn parses_line_directives_only_profile_debug_from_cargo_config_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let temp_directory =
+            std::env::temp_dir().join(format!("boltffi-profile-line-directives-config-{unique}"));
+        fs::create_dir_all(&temp_directory).expect("create temp directory");
+        let config_path = temp_directory.join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"
+[profile.release]
+debug = "line-directives-only"
+"#,
+        )
+        .expect("write config file");
+
+        let enabled = parse_profile_debug_from_config_file(&config_path, "release");
+
+        assert_eq!(enabled, Some(true));
     }
 
     #[test]
@@ -376,5 +532,22 @@ mod tests {
         .expect("configured build target");
 
         assert_eq!(target, "x86_64-pc-windows-gnu");
+    }
+
+    #[test]
+    fn parses_spaced_inline_build_target_config() {
+        let target =
+            parse_build_target_from_inline_config("build.target = 'x86_64-pc-windows-gnu'")
+                .expect("inline build target");
+
+        assert_eq!(target, "x86_64-pc-windows-gnu");
+    }
+
+    #[test]
+    fn parses_spaced_inline_profile_debug_config() {
+        let enabled =
+            parse_profile_debug_from_inline_config("profile.release.debug = true", "release");
+
+        assert_eq!(enabled, Some(true));
     }
 }

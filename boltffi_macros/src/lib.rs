@@ -2,7 +2,6 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, ItemFn, parse_macro_input};
 
-mod abi;
 mod callbacks;
 mod custom;
 mod data;

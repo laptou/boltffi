@@ -1,6 +1,6 @@
 use crate::ir::types::PrimitiveType;
 
-use super::{PythonEnumType, PythonSequenceType, PythonType};
+use super::{PythonEnumType, PythonRecordType, PythonSequenceType, PythonType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonParameter {
@@ -55,6 +55,10 @@ impl PythonCallable {
         self.return_type.is_string()
     }
 
+    pub fn returns_record(&self) -> bool {
+        self.return_type.is_record()
+    }
+
     pub fn returns_c_style_enum(&self) -> bool {
         self.return_type.is_c_style_enum()
     }
@@ -80,6 +84,10 @@ impl PythonCallable {
 
     pub fn return_c_style_enum(&self) -> Option<&PythonEnumType> {
         self.return_type.c_style_enum()
+    }
+
+    pub fn return_record(&self) -> Option<&PythonRecordType> {
+        self.return_type.record()
     }
 
     pub fn return_vector_primitive(&self) -> Option<PrimitiveType> {

@@ -14,9 +14,12 @@ export async function makeCallback(): Promise<MyCallback> {
   );
 
 
-  const result = _exports.boltffi_make_callback_complete(awaitedHandle) as number;
-  _exports.boltffi_make_callback_free(awaitedHandle);
-  return wrapMyCallback(result);
+  try {
+    const result = _module.completeAsync((statusPtr: number) => (_exports.boltffi_make_callback_complete as Function)(awaitedHandle, statusPtr)) as number;
+    return wrapMyCallback(result);
+  } finally {
+    (_exports.boltffi_make_callback_free as Function)(awaitedHandle);
+  }
 
 
 }

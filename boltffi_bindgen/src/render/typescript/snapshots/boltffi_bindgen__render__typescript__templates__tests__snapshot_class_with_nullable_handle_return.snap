@@ -6,7 +6,7 @@ const _CacheFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        _exports.boltffi_cache_free(handle);
+        (_exports.boltffi_cache_free as Function)(handle);
       });
 
 export class Cache {
@@ -36,25 +36,8 @@ export class Cache {
     }
     this._disposed = true;
     _CacheFinalizer?.unregister(this);
-    _exports.boltffi_cache_free(this._handle);
+    (_exports.boltffi_cache_free as Function)(this._handle);
     this._handle = 0;
-  }
-
-  /**
-   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
-   */
-  takeHandle(): number {
-    if (this._disposed) {
-      throw new Error("Cache has been disposed");
-    }
-    if (this._handle === 0) {
-      throw new Error("Cache received a null handle");
-    }
-    this._disposed = true;
-    _CacheFinalizer?.unregister(this);
-    const h = this._handle;
-    this._handle = 0;
-    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -67,7 +50,7 @@ export class Cache {
     this._assertNotDisposed();
     const key_alloc = _module.allocString(key);
     try {
-      const result = _exports.boltffi_cache_get(this._handle, key_alloc.ptr, key_alloc.len);
+      const result = (_exports.boltffi_cache_get as Function)(this._handle, key_alloc.ptr, key_alloc.len);
       if (result === 0) {
         return null;
       }

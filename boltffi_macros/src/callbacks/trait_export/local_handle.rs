@@ -7,10 +7,10 @@ use quote::{format_ident, quote};
 use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
+use crate::lowering::returns::callback_return::resolve_sync_callback_return;
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types::CustomTypeRegistry;
 use crate::index::custom_types::{contains_custom_types, from_wire_expr_owned, wire_type_for};
-use crate::lowering::returns::callback_return::resolve_sync_callback_return;
 use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
 use crate::lowering::returns::model::{
@@ -149,7 +149,7 @@ impl<'a> LocalHandleExpander<'a> {
 
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C-unwind" fn #free_function_name(handle: u32) {
+            pub extern "C" fn #free_function_name(handle: u32) {
                 if handle == 0 {
                     return;
                 }
@@ -161,7 +161,7 @@ impl<'a> LocalHandleExpander<'a> {
 
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C-unwind" fn #clone_function_name(handle: u32) -> u32 {
+            pub extern "C" fn #clone_function_name(handle: u32) -> u32 {
                 if handle == 0 {
                     return 0;
                 }
@@ -501,7 +501,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             syn::ReturnType::Default => Ok(quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
-                pub extern "C-unwind" fn #function_name(
+                pub extern "C" fn #function_name(
                     handle: u32
                     #(, #ffi_params)*
                 ) {
@@ -577,7 +577,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
             return Ok(quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
-                pub extern "C-unwind" fn #function_name(
+                pub extern "C" fn #function_name(
                     handle: u32
                     #(, #ffi_params)*
                 ) -> u64 {
@@ -628,7 +628,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
         Ok(quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C-unwind" fn #function_name(
+            pub extern "C" fn #function_name(
                 handle: u32
                 #(, #ffi_params)*
             ) -> #ffi_return_type {
@@ -667,16 +667,9 @@ impl<'a> LocalHandleMethodExpander<'a> {
             )
     }
 
-    fn lower_param(
-        &self,
-        param_name: &syn::Ident,
-        param_type: &syn::Type,
-    ) -> syn::Result<LocalHandleParam> {
+    fn lower_param(&self, param_name: &syn::Ident, param_type: &syn::Type) -> syn::Result<LocalHandleParam> {
         let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
-        let value_strategy = self
-            .return_lowering
-            .lower_type(param_type)?
-            .value_return_strategy();
+        let value_strategy = self.return_lowering.lower_type(param_type)?.value_return_strategy();
         if matches!(value_strategy, ValueReturnStrategy::Scalar(_)) {
             return Ok(LocalHandleParam {
                 ffi_params: vec![quote! { #param_name: #direct_ffi_type }],

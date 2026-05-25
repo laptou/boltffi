@@ -6,7 +6,7 @@ use quote::quote;
 use syn::ItemFn;
 
 use crate::exports::async_export::{
-    AsyncExportNames, AsyncRuntimeExports, wasm_complete_export_for_async,
+    AsyncExportNames, AsyncRuntimeExports, AsyncWasmCompleteExport,
 };
 use crate::exports::callable::FunctionCallable;
 use crate::exports::callback_return::resolve_sync_callback_return;
@@ -289,7 +289,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                 #[cfg(target_arch = "wasm32")]
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 #[unsafe(no_mangle)]
-                #fn_vis extern "C-unwind" fn #export_ident() -> #wasm_return_type {
+                #fn_vis extern "C" fn #export_ident() -> #wasm_return_type {
                     #wasm_body
                 }
 
@@ -307,7 +307,7 @@ fn ffi_export_item_impl(input: ItemFn) -> proc_macro2::TokenStream {
                 #[cfg(target_arch = "wasm32")]
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 #[unsafe(no_mangle)]
-                #fn_vis unsafe extern "C-unwind" fn #export_ident(
+                #fn_vis unsafe extern "C" fn #export_ident(
                     #(#wasm_ffi_params),*
                 ) -> #wasm_return_type {
                     #wasm_body
@@ -680,20 +680,21 @@ fn generate_async_export(
     let base_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
     let export_names = AsyncExportNames::new(&base_name, fn_name.span());
     let crate_index = match CrateIndex::for_current_crate() {
-        Ok(i) => i,
+        Ok(crate_index) => crate_index,
         Err(error) => return error.to_compile_error().into(),
     };
-    let data_types = crate_index.data_types();
-    let exported_classes = crate_index.exported_classes();
-    let callback_for_lower = crate_index.callback_traits();
     let return_lowering = ReturnLoweringContext::new(
         custom_types,
-        data_types,
-        exported_classes,
-        callback_for_lower,
+        crate_index.data_types(),
+        crate_index.exported_classes(),
+        crate_index.callback_traits(),
     );
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(return_abi) => return_abi,
+        Err(error) => return error.to_compile_error().into(),
+    };
 
-    let on_wire_record_error = quote! { return ::core::ptr::null(); };
+    let on_wire_record_error = return_abi.async_invalid_arg_early_return_statement();
     let params = match transform_params_async(
         fn_inputs,
         &return_lowering,
@@ -702,10 +703,6 @@ fn generate_async_export(
     ) {
         Ok(params) => params,
         Err(error) => return error.to_compile_error().into(),
-    };
-    let return_abi = match return_lowering.lower_output(fn_output) {
-        Ok(r) => r,
-        Err(e) => return e.to_compile_error().into(),
     };
 
     let ffi_return_type = return_abi.async_ffi_return_type();
@@ -734,7 +731,8 @@ fn generate_async_export(
     let entry_fn = ExternExport::async_entry(fn_vis, export_names.entry(), ffi_params, entry_body)
         .render(ExportCondition::Always);
 
-    let wasm_complete = wasm_complete_export_for_async(&return_abi, &quote! { #rust_return_type });
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: fn_vis,
         names: &export_names,

@@ -22,7 +22,6 @@ pub(super) struct CallbackReturnType<'a> {
 }
 
 pub(super) struct ParsedResultTypes {
-    pub(super) ok: Type,
     pub(super) err: Type,
 }
 
@@ -51,10 +50,8 @@ impl<'a> CallbackReturnType<'a> {
             syn::GenericArgument::Type(ty) => Some(ty.clone()),
             _ => None,
         });
-        Some(ParsedResultTypes {
-            ok: types.next()?,
-            err: types.next()?,
-        })
+        types.next()?;
+        Some(ParsedResultTypes { err: types.next()? })
     }
 }
 
@@ -291,7 +288,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
 
         #[cfg(target_arch = "wasm32")]
         #[unsafe(no_mangle)]
-        pub extern "C-unwind" fn #wasm_create_fn(js_handle: u32) -> u32 {
+        pub extern "C" fn #wasm_create_fn(js_handle: u32) -> u32 {
             js_handle
         }
 
@@ -404,8 +401,6 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         quote! {}
     };
 
-    // sync methods are expanded per-method (async trait items are skipped); `Passable` for
-    // `Box<dyn Trait>` still requires all methods sync — see `box_dyn_passable_impl` below.
     let local_handle_impl = if is_object_safe && !has_async_methods {
         LocalHandleExpander::new(
             &item_trait,

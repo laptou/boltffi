@@ -13,9 +13,11 @@ use crate::index::CrateIndex;
 use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::custom_types;
 use crate::lowering::params::{FfiParams, transform_method_params};
-use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_body;
-use crate::lowering::returns::model::{ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy};
+use crate::lowering::returns::classify::option_inner_type;
+use crate::lowering::returns::model::{
+    ResolvedReturn, ReturnLoweringContext, ValueReturnStrategy,
+};
 
 enum RecordMethodKind {
     Constructor,
@@ -693,7 +695,7 @@ fn emit_encoded_ffi_function(
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub extern "C-unwind" fn #export_name() -> u64 {
+            pub extern "C" fn #export_name() -> u64 {
                 let __boltffi_buf: ::boltffi::__private::FfiBuf = { #body };
                 __boltffi_buf.into_packed()
             }
@@ -708,7 +710,7 @@ fn emit_encoded_ffi_function(
         quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C-unwind" fn #export_name(
+            pub unsafe extern "C" fn #export_name(
                 #(#ffi_params),*
             ) -> u64 {
                 let __boltffi_buf: ::boltffi::__private::FfiBuf = { #body };
@@ -743,7 +745,7 @@ mod tests {
     use super::*;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
-    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
     use crate::lowering::returns::model::ReturnLoweringContext;
 
     fn parse_impl(code: &str) -> syn::ItemImpl {
@@ -756,7 +758,10 @@ mod tests {
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
-        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::with_entries(&[
+            ("UserProfile", DataTypeCategory::WireEncoded),
+            ("Filter", DataTypeCategory::WireEncoded),
+        ])));
         let exported_classes = Box::leak(Box::new(
             crate::index::exported_classes::ExportedClassRegistry::default(),
         ));

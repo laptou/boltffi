@@ -77,6 +77,22 @@ pub enum SwiftAsyncResult {
 }
 
 impl SwiftAsyncResult {
+    fn ok_buffer_expr(ok_type: Option<&str>, ok: &ReadSeq) -> String {
+        if matches!(ok_type, Some("Void")) {
+            "()".to_string()
+        } else {
+            emit::emit_read_value_at(ok, "pos")
+        }
+    }
+
+    fn ok_reader_expr(ok_type: Option<&str>, ok: &ReadSeq) -> String {
+        if matches!(ok_type, Some("Void")) {
+            "()".to_string()
+        } else {
+            emit::emit_reader_read(ok)
+        }
+    }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, Self::Void)
     }
@@ -206,10 +222,16 @@ impl SwiftAsyncResult {
                 decode,
                 err_decode,
                 err_is_string,
+                ok_type,
                 ..
             } => match decode.ops.first() {
                 Some(ReadOp::Result { ok, .. }) => {
-                    Some(emit::emit_result_ok_throw(ok, err_decode, *err_is_string))
+                    let ok_expr = Self::ok_buffer_expr(ok_type.as_deref(), ok);
+                    Some(emit::emit_result_ok_throw_with_ok_expr(
+                        &ok_expr,
+                        err_decode,
+                        *err_is_string,
+                    ))
                 }
                 _ => Some(emit::emit_read_value_at(decode, "0")),
             },
@@ -228,12 +250,7 @@ impl SwiftAsyncResult {
                 ..
             } => match decode.ops.first() {
                 Some(ReadOp::Result { ok, err, .. }) => {
-                    // `Result<(), E>` async: ok_type == Some("Void") — emit `()`, not a spurious read.
-                    let ok_read = if ok_type.as_deref() == Some("Void") {
-                        "()".to_string()
-                    } else {
-                        emit::emit_reader_read(ok)
-                    };
+                    let ok_read = Self::ok_reader_expr(ok_type.as_deref(), ok);
                     let err_read = emit::emit_reader_read(err);
                     let err_body = if *err_is_string {
                         format!("FfiError(message: {})", err_read)
@@ -342,7 +359,8 @@ impl SwiftModule {
         self.functions.iter().any(|f| f.mode.is_async())
             || self.classes.iter().any(|c| {
                 c.methods.iter().any(|m| m.mode.is_async())
-                    || c.constructors
+                    || c
+                        .constructors
                         .iter()
                         .any(|ctor| ctor.is_async_constructor())
             })
@@ -719,9 +737,9 @@ impl SwiftConstructor {
 
     pub fn constructor_mode(&self) -> Option<&SwiftCallMode> {
         match self {
-            Self::Designated { mode, .. }
-            | Self::Convenience { mode, .. }
-            | Self::Factory { mode, .. } => Some(mode),
+            Self::Designated { mode, .. } | Self::Convenience { mode, .. } | Self::Factory { mode, .. } => {
+                Some(mode)
+            }
         }
     }
 
@@ -1180,7 +1198,8 @@ impl SwiftCallbackMethod {
             }
             SwiftReturn::Direct { swift_type } => format!("var result: {swift_type} = 0"),
             SwiftReturn::FromDirectBuffer {
-                element_swift_type, ..
+                element_swift_type,
+                ..
             } => format!("var result: {element_swift_type} = {element_swift_type}()"),
             _ => self
                 .proxy_out_ffi_type()
@@ -1773,6 +1792,16 @@ pub enum SwiftReturn {
 }
 
 impl SwiftReturn {
+    fn result_ok_reader_expr(&self, ok: &ReadSeq) -> String {
+        match self {
+            SwiftReturn::Void => "()".to_string(),
+            SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
+                format!("{}(rawValue: {})!", swift_type, emit::emit_reader_read(ok))
+            }
+            _ => emit::emit_reader_read(ok),
+        }
+    }
+
     pub fn swift_type(&self) -> Option<String> {
         match self {
             SwiftReturn::Void => None,
@@ -1857,9 +1886,7 @@ impl SwiftReturn {
     pub fn is_wire_encoded(&self) -> bool {
         match self {
             SwiftReturn::FromWireBuffer { .. } => true,
-            SwiftReturn::Throws {
-                ok, result_decode, ..
-            } => {
+            SwiftReturn::Throws { ok, result_decode, .. } => {
                 if !result_decode.ops.is_empty() {
                     return true;
                 }
@@ -2069,20 +2096,7 @@ impl SwiftReturn {
         // payload from `ok_return`.
         match decode.ops.first() {
             Some(ReadOp::Result { ok, err, .. }) => {
-                let raw_ok_read = emit::emit_reader_read(ok);
-                // `()` ok is often lowered as `FromWireBuffer { swift_type: "Void", .. }` (not `SwiftReturn::Void`).
-                let ok_read = if matches!(ok_return, SwiftReturn::Void)
-                    || ok_return.swift_type().as_deref() == Some("Void")
-                {
-                    "()".to_string()
-                } else {
-                    match ok_return {
-                        SwiftReturn::CStyleEnumFromRawValue { swift_type } => {
-                            format!("{}(rawValue: {})!", swift_type, raw_ok_read)
-                        }
-                        _ => raw_ok_read,
-                    }
-                };
+                let ok_read = ok_return.result_ok_reader_expr(ok);
                 let err_read = emit::emit_reader_read(err);
                 let err_body = if err_is_string {
                     format!("FfiError(message: {})", err_read)

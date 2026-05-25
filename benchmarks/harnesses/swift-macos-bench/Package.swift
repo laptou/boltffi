@@ -7,7 +7,7 @@ let package = Package(
         .macOS(.v13),
     ],
     dependencies: [
-        .package(url: "https://github.com/google/swift-benchmark", from: "0.1.0"),
+        .package(url: "https://github.com/google/swift-benchmark", from: "0.1.2"),
         .package(name: "BenchBoltFFI", path: "../../generated/boltffi/BoltFFIPackage"),
         .package(name: "BenchUniffi", path: "../../adapters/uniffi/UniffiPackage"),
     ],

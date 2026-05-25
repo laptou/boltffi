@@ -46,13 +46,14 @@ impl LoweredCallbackReturn {
                 ReturnPlatform::Native,
             ),
             ValueReturnMethod::WriteToOutBufferParts
-        ) || matches!(
-            self.resolved_return.value_return_method(
-                ReturnInvocationContext::CallbackVtable,
-                ReturnPlatform::Wasm,
-            ),
-            ValueReturnMethod::WriteToOutBufferParts
         )
+            || matches!(
+                self.resolved_return.value_return_method(
+                    ReturnInvocationContext::CallbackVtable,
+                    ReturnPlatform::Wasm,
+                ),
+                ValueReturnMethod::WriteToOutBufferParts
+            )
     }
 
     /// wasm async completion: use `wire::decode` only for buffer-encoded returns; handles/scalars use [`Passable`].
@@ -61,5 +62,9 @@ impl LoweredCallbackReturn {
             self.resolved_return.value_return_strategy(),
             ValueReturnStrategy::Buffer(_)
         )
+    }
+
+    pub(super) fn fallible_ok_type(&self) -> Option<Type> {
+        self.resolved_return.fallible_ok_type()
     }
 }

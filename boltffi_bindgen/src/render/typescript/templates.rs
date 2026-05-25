@@ -21,24 +21,9 @@ pub fn ts_doc_block(doc: &Option<String>, indent: &str) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "render_typescript/custom_type.txt", escape = "none")]
-pub struct CustomTypeTemplate<'a> {
-    pub name: &'a str,
-    pub target_type: &'a str,
-    pub doc: &'a Option<String>,
-}
-
-#[derive(Template)]
-#[template(path = "render_typescript/preamble_header.txt", escape = "none")]
-pub struct PreambleHeaderTemplate {
+#[template(path = "render_typescript/preamble.txt", escape = "none")]
+pub struct PreambleTemplate {
     pub abi_version: u32,
-    pub wasm_bindgen_glue: Option<String>,
-}
-
-#[derive(Template)]
-#[template(path = "render_typescript/preamble_tail.txt", escape = "none")]
-pub struct PreambleTailTemplate {
-    pub wasm_bindgen_glue: Option<String>,
 }
 
 #[derive(Template)]
@@ -171,7 +156,6 @@ pub struct AsyncFunctionTemplate<'a> {
     pub wrapper_code: &'a str,
     pub cleanup_code: &'a str,
     pub return_route: &'a TsOutputRoute,
-    pub return_handle: &'a Option<TsHandleReturn>,
     pub return_callback: &'a Option<TsCallbackHandleReturn>,
     pub doc: &'a Option<String>,
 }
@@ -195,57 +179,13 @@ impl TypeScriptEmitter {
         let mut output = String::new();
 
         output.push_str(
-            &PreambleHeaderTemplate {
+            &PreambleTemplate {
                 abi_version: module.abi_version,
-                wasm_bindgen_glue: module.wasm_bindgen_glue.clone(),
             }
             .render()
             .unwrap(),
         );
         output.push('\n');
-
-        let wasm_import_views: Vec<TsWasmImportView> = module
-            .wasm_imports
-            .iter()
-            .map(|import| TsWasmImportView {
-                ffi_name: &import.ffi_name,
-                params: &import.params,
-                return_wasm_type_str: import.return_wasm_type.as_deref().unwrap_or("void"),
-            })
-            .collect();
-
-        output.push_str(
-            &WasmExportsTemplate {
-                wasm_imports: &wasm_import_views,
-            }
-            .render()
-            .unwrap(),
-        );
-        output.push_str("\n\n");
-        output.push_str(
-            &PreambleTailTemplate {
-                wasm_bindgen_glue: module.wasm_bindgen_glue.clone(),
-            }
-            .render()
-            .unwrap(),
-        );
-        output.push('\n');
-
-        for ct in &module.custom_types {
-            output.push_str(
-                &CustomTypeTemplate {
-                    name: &ct.name,
-                    target_type: &ct.target_type,
-                    doc: &ct.doc,
-                }
-                .render()
-                .unwrap(),
-            );
-            output.push('\n');
-        }
-        if !module.custom_types.is_empty() {
-            output.push('\n');
-        }
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
@@ -413,7 +353,6 @@ impl TypeScriptEmitter {
                     wrapper_code: &wrapper_code,
                     cleanup_code: &cleanup_code,
                     return_route: &async_function.return_route,
-                    return_handle: &async_function.return_handle,
                     return_callback: &async_function.return_callback,
                     doc: &async_function.doc,
                 }
@@ -433,22 +372,6 @@ impl TypeScriptEmitter {
             output.push_str("\n\n");
         }
 
-        output
-    }
-
-    pub fn emit_node(module: &TsModule, module_name: &str) -> String {
-        let mut output = String::new();
-
-        output.push_str(
-            &NodePreambleTemplate {
-                abi_version: module.abi_version,
-                module_name: module_name.to_string(),
-            }
-            .render()
-            .unwrap(),
-        );
-        output.push('\n');
-
         let wasm_import_views: Vec<TsWasmImportView> = module
             .wasm_imports
             .iter()
@@ -466,23 +389,23 @@ impl TypeScriptEmitter {
             .render()
             .unwrap(),
         );
-        output.push_str("\n\n");
+        output.push('\n');
 
-        for ct in &module.custom_types {
-            output.push_str(
-                &CustomTypeTemplate {
-                    name: &ct.name,
-                    target_type: &ct.target_type,
-                    doc: &ct.doc,
-                }
-                .render()
-                .unwrap(),
-            );
-            output.push('\n');
-        }
-        if !module.custom_types.is_empty() {
-            output.push('\n');
-        }
+        output
+    }
+
+    pub fn emit_node(module: &TsModule, module_name: &str) -> String {
+        let mut output = String::new();
+
+        output.push_str(
+            &NodePreambleTemplate {
+                abi_version: module.abi_version,
+                module_name: module_name.to_string(),
+            }
+            .render()
+            .unwrap(),
+        );
+        output.push('\n');
 
         for record in &module.records {
             output.push_str(&RecordTemplate::from_record(record).render().unwrap());
@@ -567,6 +490,25 @@ impl TypeScriptEmitter {
             output.push_str(&CallbackTemplate { callback }.render().unwrap());
             output.push_str("\n\n");
         }
+
+        let wasm_import_views: Vec<TsWasmImportView> = module
+            .wasm_imports
+            .iter()
+            .map(|import| TsWasmImportView {
+                ffi_name: &import.ffi_name,
+                params: &import.params,
+                return_wasm_type_str: import.return_wasm_type.as_deref().unwrap_or("void"),
+            })
+            .collect();
+
+        output.push_str(
+            &WasmExportsTemplate {
+                wasm_imports: &wasm_import_views,
+            }
+            .render()
+            .unwrap(),
+        );
+        output.push('\n');
 
         output.push_str(&NodeFooterTemplate.render().unwrap());
         output.push_str("\n\n");
@@ -658,7 +600,6 @@ impl TypeScriptEmitter {
                     wrapper_code: &wrapper_code,
                     cleanup_code: &cleanup_code,
                     return_route: &async_function.return_route,
-                    return_handle: &async_function.return_handle,
                     return_callback: &async_function.return_callback,
                     doc: &async_function.doc,
                 }
@@ -710,23 +651,6 @@ mod tests {
         }
     }
 
-    fn test_proxy_abi_i32_return_shape() -> crate::ir::abi::ReturnShape {
-        use crate::ir::plan::{ScalarOrigin, Transport};
-        use boltffi_ffi_rules::transport::{
-            ReturnContract, ScalarReturnStrategy, ValueReturnStrategy,
-        };
-        crate::ir::abi::ReturnShape {
-            contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
-                ScalarReturnStrategy::PrimitiveValue,
-            )),
-            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
-                PrimitiveType::I32,
-            ))),
-            decode_ops: None,
-            encode_ops: None,
-        }
-    }
-
     fn primitive_write(primitive: PrimitiveType, field: &str) -> WriteSeq {
         WriteSeq {
             size: SizeExpr::Fixed(primitive_size(primitive)),
@@ -769,40 +693,7 @@ mod tests {
 
     #[test]
     fn snapshot_preamble() {
-        let mut output = PreambleHeaderTemplate {
-            abi_version: 1,
-            wasm_bindgen_glue: None,
-        }
-        .render()
-        .unwrap();
-        output.push_str("\n");
-        output.push_str(
-            &PreambleTailTemplate {
-                wasm_bindgen_glue: None,
-            }
-            .render()
-            .unwrap(),
-        );
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn snapshot_preamble_wasm_bindgen_glue() {
-        let glue = "demo_wbg.js".to_string();
-        let mut output = PreambleHeaderTemplate {
-            abi_version: 1,
-            wasm_bindgen_glue: Some(glue.clone()),
-        }
-        .render()
-        .unwrap();
-        output.push_str("\n");
-        output.push_str(
-            &PreambleTailTemplate {
-                wasm_bindgen_glue: Some(glue),
-            }
-            .render()
-            .unwrap(),
-        );
+        let output = PreambleTemplate { abi_version: 1 }.render().unwrap();
         insta::assert_snapshot!(output);
     }
 
@@ -1047,6 +938,33 @@ mod tests {
     }
 
     #[test]
+    fn function_template_uses_number_carrier_for_nan_boxed_optional_return() {
+        let doc: Option<String> = None;
+        let template = FunctionTemplate {
+            name: "findEven",
+            params: &[],
+            return_type_str: "number | null",
+            return_route: &TsOutputRoute::nan_boxed_optional(
+                "_module.unpackOptionI32(packed)".to_string(),
+            ),
+            return_callback: &None,
+            ffi_name: "boltffi_find_even",
+            call_args: "",
+            call_args_with_out: "",
+            wrapper_code: "",
+            cleanup_code: "",
+            doc: &doc,
+        };
+
+        let rendered = template.render().unwrap();
+        assert!(
+            rendered
+                .contains("const packed = (_exports.boltffi_find_even as Function)() as number;")
+        );
+        assert!(rendered.contains("return _module.unpackOptionI32(packed);"));
+    }
+
+    #[test]
     fn async_function_param_cleanup_runs_after_await() {
         let doc: Option<String> = None;
         let params = vec![TsParam {
@@ -1069,7 +987,6 @@ mod tests {
             wrapper_code: "const message_writer = _module.allocWriter(MessageCodec.size(message));\n  MessageCodec.encode(message_writer, message);",
             cleanup_code: "_module.freeWriter(message_writer);",
             return_route: &TsOutputRoute::packed("ResponseCodec.decode(reader)".to_string()),
-            return_handle: &None,
             return_callback: &None,
             doc: &doc,
         }
@@ -1093,7 +1010,6 @@ mod tests {
             local_free_fn: "__boltffi_local_value_handler_free".to_string(),
             wrap_handle_fn: "wrapValueHandler".to_string(),
             proxy_class_name: "ValueHandlerProxy".to_string(),
-            is_returned: true,
             methods: vec![TsCallbackMethod {
                 ts_name: "onValue".to_string(),
                 import_name: "__boltffi_callback_value_handler_on_value".to_string(),
@@ -1114,12 +1030,8 @@ mod tests {
                 return_type: Some("number".to_string()),
                 import_return: TsCallbackImportReturn::Direct {
                     wasm_type: "number".to_string(),
-                    outbound_wrap: None,
                 },
                 proxy_return_route: TsOutputRoute::direct(String::new()),
-                proxy_return_handle: None,
-                proxy_return_callback: None,
-                proxy_abi_returns: test_proxy_abi_i32_return_shape(),
                 doc: None,
             }],
             async_methods: vec![],
@@ -1136,23 +1048,11 @@ mod tests {
             local_free_fn: "__boltffi_local_async_fetcher_free".to_string(),
             wrap_handle_fn: "wrapAsyncFetcher".to_string(),
             proxy_class_name: "AsyncFetcherProxy".to_string(),
-            is_returned: true,
             methods: vec![],
             async_methods: vec![TsAsyncCallbackMethod {
                 ts_name: "fetch".to_string(),
                 start_import_name: "__boltffi_callback_async_fetcher_fetch_start".to_string(),
                 complete_export_name: "boltffi_callback_async_fetcher_fetch_complete".to_string(),
-                proxy_export_name: "__boltffi_local_async_fetcher_fetch".to_string(),
-                proxy_params: vec![],
-                poll_sync_ffi_name: "__boltffi_local_async_fetcher_fetch_poll_sync".to_string(),
-                complete_ffi_name: "__boltffi_local_async_fetcher_fetch_complete".to_string(),
-                panic_message_ffi_name: "__boltffi_local_async_fetcher_fetch_panic_message"
-                    .to_string(),
-                cancel_ffi_name: "__boltffi_local_async_fetcher_fetch_cancel".to_string(),
-                free_ffi_name: "__boltffi_local_async_fetcher_fetch_free".to_string(),
-                proxy_return_route: TsOutputRoute::packed("reader.readI32()".to_string()),
-                return_handle: None,
-                return_callback: None,
                 params: vec![TsCallbackParam {
                     name: "key".to_string(),
                     ts_type: "number".to_string(),
@@ -1167,104 +1067,11 @@ mod tests {
                 direct_write_method: Some("writeI32".to_string()),
                 direct_write_value_expr: Some("result".to_string()),
                 direct_size: Some(4),
-                proxy_wasm_imports: vec![],
                 doc: None,
             }],
             closure_fn_type: None,
             doc: None,
         }
-    }
-
-    /// fallible async encoded return (`Result<Option<Vec<u8>>, _>`) — hand-built mirror of what
-    /// lowering emits for indexeddb-style harness callbacks; kept beside [`async_callback_fixture`].
-    fn async_fallible_callback_fixture() -> TsCallback {
-        TsCallback {
-            interface_name: "AsyncFallibleStore".to_string(),
-            trait_name_snake: "async_fallible_store".to_string(),
-            create_handle_fn: "boltffi_create_async_fallible_store_handle".to_string(),
-            local_free_fn: "__boltffi_local_async_fallible_store_free".to_string(),
-            wrap_handle_fn: "wrapAsyncFallibleStore".to_string(),
-            proxy_class_name: "AsyncFallibleStoreProxy".to_string(),
-            is_returned: true,
-            methods: vec![],
-            async_methods: vec![TsAsyncCallbackMethod {
-                ts_name: "get".to_string(),
-                start_import_name: "__boltffi_callback_async_fallible_store_get_start".to_string(),
-                complete_export_name: "boltffi_callback_async_fallible_store_get_complete"
-                    .to_string(),
-                proxy_export_name: "__boltffi_local_async_fallible_store_get".to_string(),
-                proxy_params: vec![
-                    TsParam {
-                        name: "store".to_string(),
-                        ts_type: "number".to_string(),
-                        input_route: TsInputRoute::Direct,
-                    },
-                    TsParam {
-                        name: "key".to_string(),
-                        ts_type: "string".to_string(),
-                        input_route: TsInputRoute::Direct,
-                    },
-                ],
-                poll_sync_ffi_name: "__boltffi_local_async_fallible_store_get_poll_sync"
-                    .to_string(),
-                complete_ffi_name: "__boltffi_local_async_fallible_store_get_complete".to_string(),
-                panic_message_ffi_name: "__boltffi_local_async_fallible_store_get_panic_message"
-                    .to_string(),
-                cancel_ffi_name: "__boltffi_local_async_fallible_store_get_cancel".to_string(),
-                free_ffi_name: "__boltffi_local_async_fallible_store_get_free".to_string(),
-                proxy_return_route: TsOutputRoute::packed(
-                    "reader.readOptional((reader) => reader.readBytes())".to_string(),
-                ),
-                return_handle: None,
-                return_callback: None,
-                params: vec![
-                    TsCallbackParam {
-                        name: "store".to_string(),
-                        ts_type: "number".to_string(),
-                        kind: TsCallbackParamKind::Primitive {
-                            import_ts_type: "number".to_string(),
-                            call_expr: "store".to_string(),
-                        },
-                    },
-                    TsCallbackParam {
-                        name: "key".to_string(),
-                        ts_type: "string".to_string(),
-                        kind: TsCallbackParamKind::Primitive {
-                            import_ts_type: "string".to_string(),
-                            call_expr: "key".to_string(),
-                        },
-                    },
-                ],
-                return_type: Some("Uint8Array | null".to_string()),
-                encode_expr: Some(
-                    "writer.writeOptional(result, (v) => { writer.writeBytes(v) })".to_string(),
-                ),
-                size_expr: Some(
-                    "(result !== null ? 1 + (4 + (4 + result.byteLength)) : 1)".to_string(),
-                ),
-                direct_write_method: None,
-                direct_write_value_expr: None,
-                direct_size: None,
-                proxy_wasm_imports: vec![],
-                doc: None,
-            }],
-            closure_fn_type: None,
-            doc: None,
-        }
-    }
-
-    #[test]
-    fn async_fallible_callback_encodes_fulfilled_value_as_ok_payload() {
-        let callback = async_fallible_callback_fixture();
-        let rendered = CallbackTemplate {
-            callback: &callback,
-        }
-        .render()
-        .unwrap();
-
-        assert!(rendered.contains("get(store: number, key: string): Promise<Uint8Array | null>;"));
-        assert!(rendered.contains("writer.writeOptional(result, (v) => { writer.writeBytes(v) })"));
-        assert!(!rendered.contains("writer.writeResult(result"));
     }
 
     #[test]
@@ -1337,10 +1144,6 @@ mod tests {
                 is_default: true,
                 params: vec![],
                 returns_nullable_handle: false,
-                return_type: None,
-                return_handle: None,
-                return_callback: None,
-                mode: TsClassConstructorMode::Sync(TsClassSyncConstructor {}),
                 doc: Some("Creates a counter".to_string()),
             }],
             methods: vec![
@@ -1402,10 +1205,6 @@ mod tests {
                     input_route: TsInputRoute::String,
                 }],
                 returns_nullable_handle: true,
-                return_type: None,
-                return_handle: None,
-                return_callback: None,
-                mode: TsClassConstructorMode::Sync(TsClassSyncConstructor {}),
                 doc: None,
             }],
             methods: vec![],
@@ -1448,7 +1247,10 @@ mod tests {
         assert!(rendered.contains("let completeCompleted = false;"));
         assert!(rendered.contains("_module.freeBuf(outPtr);"));
         assert!(rendered.contains("_module.freeBufDescriptor(outPtr);"));
-        assert!(rendered.contains("_exports.boltffi_counter_next_value_free(awaitedHandle);"));
+        assert!(
+            rendered
+                .contains("(_exports.boltffi_counter_next_value_free as Function)(awaitedHandle);")
+        );
     }
 
     #[test]
@@ -1540,34 +1342,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_class_with_pass_handle_constructor() {
-        let class = TsClass {
-            class_name: "Receiver".to_string(),
-            ffi_free: "boltffi_receiver_free".to_string(),
-            constructors: vec![TsClassConstructor {
-                ts_name: "new".to_string(),
-                ffi_name: "boltffi_receiver_new".to_string(),
-                is_default: true,
-                params: vec![TsParam {
-                    name: "endpoint".to_string(),
-                    ts_type: "Endpoint".to_string(),
-                    input_route: TsInputRoute::Handle { nullable: false },
-                }],
-                returns_nullable_handle: false,
-                return_type: None,
-                return_handle: None,
-                return_callback: None,
-                mode: TsClassConstructorMode::Sync(TsClassSyncConstructor {}),
-                doc: None,
-            }],
-            methods: vec![],
-            doc: None,
-        };
-        let template = ClassTemplate { cls: &class };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    #[test]
     fn snapshot_class_with_static_method() {
         let class = TsClass {
             class_name: "MathUtils".to_string(),
@@ -1614,10 +1388,6 @@ mod tests {
                 is_default: true,
                 params: vec![],
                 returns_nullable_handle: false,
-                return_type: None,
-                return_handle: None,
-                return_callback: None,
-                mode: TsClassConstructorMode::Sync(TsClassSyncConstructor {}),
                 doc: None,
             }],
             methods: vec![TsClassMethod {
@@ -1768,303 +1538,5 @@ mod tests {
         };
         let template = ClassTemplate { cls: &class };
         insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    #[test]
-    fn snapshot_class_with_async_fallible_constructor() {
-        let class = TsClass {
-            class_name: "Endpoint".to_string(),
-            ffi_free: "boltffi_endpoint_free".to_string(),
-            constructors: vec![TsClassConstructor {
-                ts_name: "new".to_string(),
-                ffi_name: "boltffi_endpoint_new".to_string(),
-                is_default: true,
-                params: vec![TsParam {
-                    name: "cfg".to_string(),
-                    ts_type: "string".to_string(),
-                    input_route: TsInputRoute::String,
-                }],
-                returns_nullable_handle: false,
-                return_type: Some("Endpoint".to_string()),
-                return_handle: Some(TsHandleReturn {
-                    class_name: "Endpoint".to_string(),
-                    nullable: false,
-                }),
-                return_callback: None,
-                mode: TsClassConstructorMode::Async(TsClassAsyncMethod {
-                    poll_sync_ffi_name: "boltffi_endpoint_new_poll_sync".to_string(),
-                    complete_ffi_name: "boltffi_endpoint_new_complete".to_string(),
-                    panic_message_ffi_name: "boltffi_endpoint_new_panic_message".to_string(),
-                    cancel_ffi_name: "boltffi_endpoint_new_cancel".to_string(),
-                    free_ffi_name: "boltffi_endpoint_new_free".to_string(),
-                    return_route: TsOutputRoute::async_fallible_handle_carrier(
-                        "Endpoint".to_string(),
-                        "new TransferErrorException(TransferErrorCodec.decode(reader))".to_string(),
-                        false,
-                    ),
-                }),
-                doc: None,
-            }],
-            methods: vec![],
-            doc: None,
-        };
-        let template = ClassTemplate { cls: &class };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    #[test]
-    fn snapshot_class_sync_method_with_result_and_handle_ok() {
-        let class = TsClass {
-            class_name: "Receiver".to_string(),
-            ffi_free: "boltffi_receiver_free".to_string(),
-            constructors: vec![],
-            methods: vec![TsClassMethod {
-                ts_name: "receive".to_string(),
-                ffi_name: "boltffi_receiver_receive".to_string(),
-                is_static: false,
-                params: vec![],
-                return_type: Some("Transfer".to_string()),
-                return_handle: Some(TsHandleReturn {
-                    class_name: "Transfer".to_string(),
-                    nullable: false,
-                }),
-                return_callback: None,
-                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
-                    return_route: TsOutputRoute::sync_direct_ok_carrier_ok(
-                        "Transfer".to_string(),
-                        "new TransferErrorException(TransferErrorCodec.decode(reader))".to_string(),
-                        String::new(),
-                        false,
-                    ),
-                }),
-                doc: None,
-            }],
-            doc: None,
-        };
-        let template = ClassTemplate { cls: &class };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    #[test]
-    fn snapshot_callback_with_handle_param() {
-        let callback = TsCallback {
-            interface_name: "SenderCallbacks".to_string(),
-            trait_name_snake: "sender_callbacks".to_string(),
-            create_handle_fn: "boltffi_create_sender_callbacks_handle".to_string(),
-            local_free_fn: "__boltffi_local_sender_callbacks_free".to_string(),
-            wrap_handle_fn: "wrapSenderCallbacks".to_string(),
-            proxy_class_name: "SenderCallbacksProxy".to_string(),
-            is_returned: true,
-            methods: vec![TsCallbackMethod {
-                ts_name: "onTransferStarted".to_string(),
-                import_name: "__boltffi_callback_sender_callbacks_on_transfer_started".to_string(),
-                proxy_export_name: "__boltffi_local_sender_callbacks_on_transfer_started"
-                    .to_string(),
-                params: vec![TsCallbackParam {
-                    name: "transfer".to_string(),
-                    ts_type: "Transfer".to_string(),
-                    kind: TsCallbackParamKind::InboundHandle {
-                        class_name: "Transfer".to_string(),
-                    },
-                }],
-                proxy_params: vec![TsParam {
-                    name: "transfer".to_string(),
-                    ts_type: "Transfer".to_string(),
-                    input_route: TsInputRoute::Handle { nullable: false },
-                }],
-                return_type: None,
-                import_return: TsCallbackImportReturn::Void,
-                proxy_return_route: TsOutputRoute::void(),
-                proxy_return_handle: None,
-                proxy_return_callback: None,
-                proxy_abi_returns: crate::ir::abi::ReturnShape::void(),
-                doc: None,
-            }],
-            async_methods: vec![],
-            closure_fn_type: None,
-            doc: None,
-        };
-        let template = CallbackTemplate {
-            callback: &callback,
-        };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    /// when the trait is never returned from rust, omit proxy class and `wrap*` (mirrors swift).
-    #[test]
-    fn snapshot_callback_not_returned_omits_proxy() {
-        let mut callback = sync_callback_fixture();
-        callback.is_returned = false;
-        let template = CallbackTemplate {
-            callback: &callback,
-        };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    /// rust→js import returns a nested callback handle; user implementation is registered to a u32.
-    #[test]
-    fn snapshot_callback_inbound_register_callback_return() {
-        let callback = TsCallback {
-            interface_name: "ParentCb".to_string(),
-            trait_name_snake: "parent_cb".to_string(),
-            create_handle_fn: "boltffi_create_parent_cb_handle".to_string(),
-            local_free_fn: "__boltffi_local_parent_cb_free".to_string(),
-            wrap_handle_fn: "wrapParentCb".to_string(),
-            proxy_class_name: "ParentCbProxy".to_string(),
-            is_returned: true,
-            methods: vec![TsCallbackMethod {
-                ts_name: "getChild".to_string(),
-                import_name: "__boltffi_callback_parent_cb_get_child".to_string(),
-                proxy_export_name: "__boltffi_local_parent_cb_get_child".to_string(),
-                params: vec![],
-                proxy_params: vec![],
-                return_type: Some("ChildCb".to_string()),
-                import_return: TsCallbackImportReturn::Direct {
-                    wasm_type: "number".to_string(),
-                    outbound_wrap: Some(TsCallbackImportOutboundWrap::RegisterCallback {
-                        register_fn: "registerChildCb".to_string(),
-                        nullable: false,
-                    }),
-                },
-                proxy_return_route: TsOutputRoute::direct(String::new()),
-                proxy_return_handle: None,
-                proxy_return_callback: Some(TsCallbackHandleReturn {
-                    interface_name: "ChildCb".to_string(),
-                    wrap_fn: "wrapChildCb".to_string(),
-                    nullable: false,
-                }),
-                proxy_abi_returns: test_proxy_abi_i32_return_shape(),
-                doc: None,
-            }],
-            async_methods: vec![],
-            closure_fn_type: None,
-            doc: None,
-        };
-        let template = CallbackTemplate {
-            callback: &callback,
-        };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    fn test_proxy_abi_u64_return_shape() -> crate::ir::abi::ReturnShape {
-        use crate::ir::plan::{ScalarOrigin, Transport};
-        use boltffi_ffi_rules::transport::{
-            ReturnContract, ScalarReturnStrategy, ValueReturnStrategy,
-        };
-        crate::ir::abi::ReturnShape {
-            contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
-                ScalarReturnStrategy::PrimitiveValue,
-            )),
-            transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
-                PrimitiveType::U64,
-            ))),
-            decode_ops: None,
-            encode_ops: None,
-        }
-    }
-
-    /// u64 return from `__boltffi_local_*` maps to `bigint` in `WasmExports` typing.
-    #[test]
-    fn snapshot_callback_proxy_u64_return_uses_bigint() {
-        let callback = TsCallback {
-            interface_name: "StreamSource".to_string(),
-            trait_name_snake: "stream_source".to_string(),
-            create_handle_fn: "boltffi_create_stream_source_handle".to_string(),
-            local_free_fn: "__boltffi_local_stream_source_free".to_string(),
-            wrap_handle_fn: "wrapStreamSource".to_string(),
-            proxy_class_name: "StreamSourceProxy".to_string(),
-            is_returned: true,
-            methods: vec![TsCallbackMethod {
-                ts_name: "count".to_string(),
-                import_name: "__boltffi_callback_stream_source_count".to_string(),
-                proxy_export_name: "__boltffi_local_stream_source_count".to_string(),
-                params: vec![],
-                proxy_params: vec![],
-                return_type: Some("bigint".to_string()),
-                import_return: TsCallbackImportReturn::Direct {
-                    wasm_type: "bigint".to_string(),
-                    outbound_wrap: None,
-                },
-                proxy_return_route: TsOutputRoute::direct(String::new()),
-                proxy_return_handle: None,
-                proxy_return_callback: None,
-                proxy_abi_returns: test_proxy_abi_u64_return_shape(),
-                doc: None,
-            }],
-            async_methods: vec![],
-            closure_fn_type: None,
-            doc: None,
-        };
-        let template = CallbackTemplate {
-            callback: &callback,
-        };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    /// wasm `complete` returns a u32 handle directly (not out-buf); mirrors `ReceivedTransfer::stream`.
-    #[test]
-    fn snapshot_class_async_method_returns_handle() {
-        let class = TsClass {
-            class_name: "ReceivedTransfer".to_string(),
-            ffi_free: "boltffi_received_transfer_free".to_string(),
-            constructors: vec![],
-            methods: vec![TsClassMethod {
-                ts_name: "stream".to_string(),
-                ffi_name: "boltffi_received_transfer_stream".to_string(),
-                is_static: false,
-                params: vec![TsParam {
-                    name: "fileIndex".to_string(),
-                    ts_type: "bigint".to_string(),
-                    input_route: TsInputRoute::Direct,
-                }],
-                return_type: Some("DataStreamHandle".to_string()),
-                return_handle: Some(TsHandleReturn {
-                    class_name: "DataStreamHandle".to_string(),
-                    nullable: false,
-                }),
-                return_callback: None,
-                mode: TsClassMethodMode::Async(TsClassAsyncMethod {
-                    poll_sync_ffi_name: "boltffi_received_transfer_stream_poll_sync".to_string(),
-                    complete_ffi_name: "boltffi_received_transfer_stream_complete".to_string(),
-                    panic_message_ffi_name: "boltffi_received_transfer_stream_panic_message"
-                        .to_string(),
-                    cancel_ffi_name: "boltffi_received_transfer_stream_cancel".to_string(),
-                    free_ffi_name: "boltffi_received_transfer_stream_free".to_string(),
-                    return_route: TsOutputRoute::async_scalar(String::new()),
-                }),
-                doc: None,
-            }],
-            doc: None,
-        };
-        let template = ClassTemplate { cls: &class };
-        insta::assert_snapshot!(template.render().unwrap());
-    }
-
-    #[test]
-    fn snapshot_async_function_returns_callback_handle() {
-        let output = AsyncFunctionTemplate {
-            name: "makeCallback",
-            params: &[],
-            return_type_str: "MyCallback",
-            entry_ffi_name: "boltffi_make_callback",
-            poll_sync_ffi_name: "boltffi_make_callback_poll_sync",
-            complete_ffi_name: "boltffi_make_callback_complete",
-            panic_message_ffi_name: "boltffi_make_callback_panic_message",
-            free_ffi_name: "boltffi_make_callback_free",
-            call_args: "",
-            wrapper_code: "",
-            cleanup_code: "",
-            return_route: &TsOutputRoute::async_scalar(String::new()),
-            return_handle: &None,
-            return_callback: &Some(TsCallbackHandleReturn {
-                interface_name: "MyCallback".to_string(),
-                wrap_fn: "wrapMyCallback".to_string(),
-                nullable: false,
-            }),
-            doc: &None,
-        }
-        .render()
-        .unwrap();
-        insta::assert_snapshot!(output);
     }
 }

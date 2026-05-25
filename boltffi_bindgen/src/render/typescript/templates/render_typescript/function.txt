@@ -4,45 +4,10 @@
 {%- endif %}
 {%- if cleanup_code.is_empty() %}
 {%- if return_route.is_void() %}
-  _exports.{{ ffi_name }}({{ call_args }});
-{%- elif return_route.is_throws_direct_ok_carrier() %}
-  const __outOkSlot = _module.exports.boltffi_wasm_alloc(4);
-  const __errPair = _module.allocErrOutPair();
-  try {
-    const __status = _exports.{{ ffi_name }}({% if call_args.is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ call_args }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
-    if (__status === 0) {
-      const _u32 = new Uint32Array(_module.exports.memory.buffer);
-      const h = _u32[__outOkSlot >>> 2];
-{%- if return_route.carrier_handle_nullable() %}
-      if (h === 0) {
-        return null;
-      }
-{%- else %}
-      if (h === 0) {
-        throw new Error("ffi call failed");
-      }
-{%- endif %}
-      return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(h);
-    }
-    const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
-    try {
-      if (__errLen > 0) {
-        const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
-        throw {{ return_route.carrier_err_throw_expr_for_template() }};
-      }
-      throw new Error("ffi call failed");
-    } finally {
-      if (__errLen > 0) {
-        _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
-      }
-    }
-  } finally {
-    _module.exports.boltffi_wasm_free(__outOkSlot, 4);
-    _module.freeErrOutPair(__errPair);
-  }
+  (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- elif return_route.is_direct() %}
 {%- if let Some(callback_return) = return_callback %}
-  const result = _exports.{{ ffi_name }}({{ call_args }});
+  const result = (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- if callback_return.nullable %}
   if (result === 0) {
     return null;
@@ -50,69 +15,37 @@
 {%- endif %}
   return {{ callback_return.wrap_fn }}(result);
 {%- else %}
-  return _exports.{{ ffi_name }}({{ call_args }}){{ return_route.ts_cast() }};
+  return (_exports.{{ ffi_name }} as Function)({{ call_args }}){{ return_route.ts_cast() }};
 {%- endif %}
 {%- elif return_route.is_struct_return_slot() %}
   const __outPtr = _module.exports.boltffi_wasm_alloc({{ return_route.return_slot_size().unwrap() }});
   try {
-    _exports.{{ ffi_name }}({% if call_args.is_empty() %}__outPtr{% else %}__outPtr, {{ call_args }}{% endif %});
+    (_exports.{{ ffi_name }} as Function)({% if call_args.is_empty() %}__outPtr{% else %}__outPtr, {{ call_args }}{% endif %});
     return {{ return_route.decode_expr() }};
   } finally {
     _module.exports.boltffi_wasm_free(__outPtr, {{ return_route.return_slot_size().unwrap() }});
   }
 {%- elif return_route.is_void_slot() %}
-  _exports.{{ ffi_name }}({{ call_args }});
+  (_exports.{{ ffi_name }} as Function)({{ call_args }});
+  return {{ return_route.decode_expr() }};
+{%- elif return_route.is_nan_boxed_optional() %}
+  const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as number;
   return {{ return_route.decode_expr() }};
 {%- elif return_route.is_packed() %}
-  const packed = _exports.{{ ffi_name }}({{ call_args }}) as bigint;
+  const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as bigint;
   const reader = _module.takePackedBuffer(packed);
   return {{ return_route.decode_expr() }};
 {%- else %}
-  const packed = _exports.{{ ffi_name }}({{ call_args }}) as bigint;
+  const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as bigint;
   return {{ return_route.decode_expr() }};
 {%- endif %}
 {%- else %}
   try {
 {%- if return_route.is_void() %}
-    _exports.{{ ffi_name }}({{ call_args }});
-{%- elif return_route.is_throws_direct_ok_carrier() %}
-    const __outOkSlot = _module.exports.boltffi_wasm_alloc(4);
-    const __errPair = _module.allocErrOutPair();
-    try {
-      const __status = _exports.{{ ffi_name }}({% if call_args.is_empty() %}__outOkSlot, __errPair, __errPair + 4{% else %}{{ call_args }}, __outOkSlot, __errPair, __errPair + 4{% endif %}) as number;
-      if (__status === 0) {
-        const _u32 = new Uint32Array(_module.exports.memory.buffer);
-        const h = _u32[__outOkSlot >>> 2];
-{%- if return_route.carrier_handle_nullable() %}
-        if (h === 0) {
-          return null;
-        }
-{%- else %}
-        if (h === 0) {
-          throw new Error("ffi call failed");
-        }
-{%- endif %}
-        return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(h);
-      }
-      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
-      try {
-        if (__errLen > 0) {
-          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
-          throw {{ return_route.carrier_err_throw_expr_for_template() }};
-        }
-        throw new Error("ffi call failed");
-      } finally {
-        if (__errLen > 0) {
-          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
-        }
-      }
-    } finally {
-      _module.exports.boltffi_wasm_free(__outOkSlot, 4);
-      _module.freeErrOutPair(__errPair);
-    }
+    (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- elif return_route.is_direct() %}
 {%- if let Some(callback_return) = return_callback %}
-    const result = _exports.{{ ffi_name }}({{ call_args }});
+    const result = (_exports.{{ ffi_name }} as Function)({{ call_args }});
 {%- if callback_return.nullable %}
     if (result === 0) {
       return null;
@@ -120,25 +53,28 @@
 {%- endif %}
     return {{ callback_return.wrap_fn }}(result);
 {%- else %}
-    return _exports.{{ ffi_name }}({{ call_args }}){{ return_route.ts_cast() }};
+    return (_exports.{{ ffi_name }} as Function)({{ call_args }}){{ return_route.ts_cast() }};
 {%- endif %}
 {%- elif return_route.is_struct_return_slot() %}
     const __outPtr = _module.exports.boltffi_wasm_alloc({{ return_route.return_slot_size().unwrap() }});
     try {
-      _exports.{{ ffi_name }}({% if call_args.is_empty() %}__outPtr{% else %}__outPtr, {{ call_args }}{% endif %});
+      (_exports.{{ ffi_name }} as Function)({% if call_args.is_empty() %}__outPtr{% else %}__outPtr, {{ call_args }}{% endif %});
       return {{ return_route.decode_expr() }};
     } finally {
       _module.exports.boltffi_wasm_free(__outPtr, {{ return_route.return_slot_size().unwrap() }});
     }
 {%- elif return_route.is_void_slot() %}
-    _exports.{{ ffi_name }}({{ call_args }});
+    (_exports.{{ ffi_name }} as Function)({{ call_args }});
+    return {{ return_route.decode_expr() }};
+{%- elif return_route.is_nan_boxed_optional() %}
+    const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as number;
     return {{ return_route.decode_expr() }};
 {%- elif return_route.is_packed() %}
-    const packed = _exports.{{ ffi_name }}({{ call_args }}) as bigint;
+    const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as bigint;
     const reader = _module.takePackedBuffer(packed);
     return {{ return_route.decode_expr() }};
 {%- else %}
-    const packed = _exports.{{ ffi_name }}({{ call_args }}) as bigint;
+    const packed = (_exports.{{ ffi_name }} as Function)({{ call_args }}) as bigint;
     return {{ return_route.decode_expr() }};
 {%- endif %}
   } finally {

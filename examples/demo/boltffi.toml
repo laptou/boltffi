@@ -47,7 +47,7 @@ host_targets = ["current"]
 
 [targets.dart]
 enabled = true
-output = "../platforms/dart/dist"
+output = "../platforms/dart/pkgs"
 
 [targets.python]
 enabled = true

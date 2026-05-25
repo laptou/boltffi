@@ -1,5 +1,4 @@
 mod npm;
-mod wasm_bindgen;
 
 use std::path::Path;
 use std::process::Command;
@@ -14,7 +13,7 @@ use crate::config::{Config, WasmNpmTarget, WasmOptimizeLevel, WasmOptimizeOnMiss
 use crate::pack::PackError;
 use crate::reporter::Reporter;
 
-use super::{format_command_for_log, print_cargo_line, resolve_build_cargo_args};
+use super::{print_cargo_line, resolve_build_cargo_args};
 
 use self::npm::{
     generate_wasm_loader_entrypoints, generate_wasm_package_json, generate_wasm_readme,
@@ -86,24 +85,7 @@ pub(crate) fn pack_wasm(
         step.finish_success();
     }
 
-    let ts_out = config.wasm_typescript_output();
-    std::fs::create_dir_all(&ts_out).map_err(|source| CliError::CreateDirectoryFailed {
-        path: ts_out.clone(),
-        source,
-    })?;
-
-    let module_name = config.wasm_typescript_module_name();
-    let mut wasm_bindgen_ran = false;
-    if wasm_bindgen::wasm_has_wasm_bindgen_placeholder_imports(&wasm_artifact_path)? {
-        let step = reporter.step("Running wasm-bindgen");
-        wasm_bindgen::run_wasm_bindgen_for_pack(config, &wasm_artifact_path, &module_name)?;
-        wasm_bindgen_ran = true;
-        step.finish_success();
-    } else {
-        wasm_bindgen::clear_stale_wasm_bindgen_artifacts(&ts_out, &module_name)?;
-    }
-
-    if options.execution.regenerate || wasm_bindgen_ran {
+    if options.execution.regenerate {
         let step = reporter.step("Generating TypeScript bindings");
         run_generate_with_output(
             config,
@@ -122,33 +104,15 @@ pub(crate) fn pack_wasm(
         source,
     })?;
 
+    let module_name = config.wasm_typescript_module_name();
     let packaged_wasm_path = npm_output.join(format!("{}_bg.wasm", module_name));
-    let wasm_src_for_pack = if wasm_bindgen_ran {
-        ts_out.join(format!("{module_name}_bg.wasm"))
-    } else {
-        wasm_artifact_path.clone()
-    };
-    if wasm_bindgen::paths_differ(&wasm_src_for_pack, &packaged_wasm_path) {
-        std::fs::copy(&wasm_src_for_pack, &packaged_wasm_path).map_err(|source| {
-            CliError::CopyFailed {
-                from: wasm_src_for_pack.clone(),
-                to: packaged_wasm_path.clone(),
-                source,
-            }
-        })?;
-    }
-
-    if wasm_bindgen_ran {
-        let glue_src = ts_out.join(format!("{module_name}_wbg.js"));
-        let glue_dst = npm_output.join(format!("{module_name}_wbg.js"));
-        if wasm_bindgen::paths_differ(&glue_src, &glue_dst) {
-            std::fs::copy(&glue_src, &glue_dst).map_err(|source| CliError::CopyFailed {
-                from: glue_src,
-                to: glue_dst,
-                source,
-            })?;
+    std::fs::copy(&wasm_artifact_path, &packaged_wasm_path).map_err(|source| {
+        CliError::CopyFailed {
+            from: wasm_artifact_path.clone(),
+            to: packaged_wasm_path.clone(),
+            source,
         }
-    }
+    })?;
 
     let generated_typescript_source = config
         .wasm_typescript_output()
@@ -322,7 +286,7 @@ fn transpile_typescript_bundle(
         .arg("--outDir")
         .arg(output_dir);
 
-    let command_display = format_command_for_log(&command);
+    let command_display = format_command_for_display(&command);
     let working_directory = std::env::current_dir()
         .map(|dir| dir.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
@@ -335,8 +299,12 @@ fn transpile_typescript_bundle(
     })?;
 
     let module_name = config.wasm_typescript_module_name();
-    let javascript_path = output_dir.join(format!("{}.js", module_name));
-    let declarations_path = output_dir.join(format!("{}.d.ts", module_name));
+    let source_stem = source_file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&module_name);
+    let javascript_path = output_dir.join(format!("{source_stem}.js"));
+    let declarations_path = output_dir.join(format!("{source_stem}.d.ts"));
     let emitted_outputs_exist = javascript_path.exists() && declarations_path.exists();
 
     if output.status.success() || emitted_outputs_exist {
@@ -360,10 +328,28 @@ fn transpile_typescript_bundle(
 
     Err(CliError::CommandFailed {
         command: format!(
-            "tsc failed while transpiling {} into {}\nworking directory: {working_directory}\ncommand: {command_display}\n{details}",
+            "tsc failed while transpiling {} into {}\nworking directory: {working_directory}\ncommand: {command_display}\n{}",
             source_file.display(),
             output_dir.display(),
+            details
         ),
         status: output.status.code(),
     })
+}
+
+fn format_command_for_display(command: &Command) -> String {
+    let mut parts = vec![shell_quote(command.get_program())];
+    parts.extend(command.get_args().map(shell_quote));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &std::ffi::OsStr) -> String {
+    let rendered = value.to_string_lossy();
+    if rendered.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | ',' | '=')
+    }) {
+        rendered.into_owned()
+    } else {
+        format!("'{}'", rendered.replace('\'', r"'\''"))
+    }
 }

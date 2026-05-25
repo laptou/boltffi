@@ -11,10 +11,6 @@ typedef struct FfiBuf_u8 { uint8_t* ptr; size_t len; size_t cap; size_t align; }
 typedef struct FfiError { FfiString message; } FfiError;
 typedef struct BoltFFICallbackHandle { uint64_t handle; const void* vtable; } BoltFFICallbackHandle;
 
-/* return-buffer heap (Rust std::alloc); host frees with this, not libc `free`, so allocator stays paired with boltffi. */
-uint8_t *boltffi_alloc_return_buffer(size_t len);
-void boltffi_free_return_buffer(uint8_t *ptr, size_t len);
-
 {% raw %}static inline bool {% endraw %}{{ prefix }}{% raw %}_atomic_u8_cas(volatile uint8_t* target, uint8_t expected, uint8_t desired) {
     return atomic_compare_exchange_strong((_Atomic uint8_t*)target, &expected, desired);
 }

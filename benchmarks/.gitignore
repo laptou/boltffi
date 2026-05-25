@@ -3,6 +3,7 @@ generated/**/target/
 generated/**/dist/
 generated/**/BoltFFIPackage/
 generated/**/bindings/
+rust-boltffi/
 adapters/uniffi/target/
 adapters/uniffi/dist/
 adapters/uniffi/UniffiPackage/

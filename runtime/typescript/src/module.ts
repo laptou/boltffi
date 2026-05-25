@@ -2,6 +2,7 @@ import { WireReader, WireWriter } from "./wire.js";
 import type { WasmWireWriterAllocator } from "./wire.js";
 
 const FFI_BUF_DESCRIPTOR_SIZE = 16;
+const FFI_STATUS_SIZE = 4;
 const MIN_WRITER_CAPACITY = 64;
 const MAX_WRITERS_PER_CAPACITY = 32;
 
@@ -121,9 +122,6 @@ export interface BoltFFIExports {
   boltffi_wasm_realloc: (ptr: number, oldSize: number, newSize: number) => number;
   boltffi_wasm_free_string_return: (ptr: number, len: number) => void;
   boltffi_wasm_return_slot_addr: () => number;
-  /** rust-allocated wire bytes for typed errors / callback returns; pair with [`boltffi_free_return_buffer`]. */
-  boltffi_alloc_return_buffer: (len: number) => number;
-  boltffi_free_return_buffer: (ptr: number, len: number) => void;
   [key: string]: WebAssembly.ExportValue;
 }
 
@@ -192,19 +190,47 @@ export class BoltFFIModule {
     return { ptr: view[idx], len: view[idx + 1], cap: view[idx + 2], align: view[idx + 3] };
   }
 
-  /** pair of u32 cells on the wasm heap: `[err_out_ptr, err_out_len]` for fallible ffi out-params. */
-  allocErrOutPair(): number {
-    return this.exports.boltffi_wasm_alloc(8);
+  completeAsync<T>(complete: (statusPtr: number) => T): T {
+    const statusPtr = this.allocStatus();
+    try {
+      const result = complete(statusPtr);
+      this.checkStatus(this.readStatus(statusPtr));
+      return result;
+    } finally {
+      this.freeStatus(statusPtr);
+    }
   }
 
-  readErrOutPair(pairPtr: number): { ptr: number; len: number } {
-    const u32 = this.getU32();
-    const idx = pairPtr >>> 2;
-    return { ptr: u32[idx], len: u32[idx + 1] };
+  private allocStatus(): number {
+    const ptr = this.exports.boltffi_wasm_alloc(FFI_STATUS_SIZE);
+    if (ptr === 0) {
+      throw new Error("Failed to allocate memory for status");
+    }
+    this.getView().setInt32(ptr, 0, true);
+    return ptr;
   }
 
-  freeErrOutPair(pairPtr: number): void {
-    this.exports.boltffi_wasm_free(pairPtr, 8);
+  private readStatus(ptr: number): number {
+    return this.getView().getInt32(ptr, true);
+  }
+
+  private freeStatus(ptr: number): void {
+    if (ptr !== 0) {
+      this.exports.boltffi_wasm_free(ptr, FFI_STATUS_SIZE);
+    }
+  }
+
+  private checkStatus(status: number): void {
+    if (status === 0) {
+      return;
+    }
+    if (status === 3) {
+      throw new Error("invalid argument");
+    }
+    if (status === 4) {
+      throw new BoltFFICancelledError();
+    }
+    throw new Error(`FFI failed in async completion with code ${status}`);
   }
 
   private getView(): DataView {
@@ -1046,33 +1072,24 @@ export class BoltFFIModule {
   }
 }
 
-/** hooks from wasm-bindgen `--target web` glue (`__wbg_get_imports` / `__wbg_finalize_init`). */
-export interface BoltFFIWasmBindgenHooks {
-  getImports: () => WebAssembly.Imports;
-  finalize: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void;
-}
-
 export interface BoltFFIImports {
   env?: Record<string, WebAssembly.ImportValue>;
-  wasmBindgen?: BoltFFIWasmBindgenHooks;
 }
 
-let pendingWasmBindgenEnv: Record<string, WebAssembly.ImportValue> | null = null;
-
-function prepareWasmBindgenEnv(env: Record<string, WebAssembly.ImportValue>): void {
-  pendingWasmBindgenEnv = env;
+function createUnimplementedImport(importName: string): (...args: unknown[]) => never {
+  return () => {
+    throw new Error(`Unimplemented wasm import: ${importName}`);
+  };
 }
 
-/** used by patched wasm-bindgen glue to supply the `env` namespace to `__wbg_get_imports`. */
-export function __boltffi_takePendingEnv(): Record<string, WebAssembly.ImportValue> {
-  const env = pendingWasmBindgenEnv;
-  if (env === null) {
-    throw new Error(
-      "boltffi: wasm-bindgen env not prepared (instantiateBoltFFI with wasmBindgen must run first)"
-    );
-  }
-  pendingWasmBindgenEnv = null;
-  return env;
+function createImportModuleProxy(moduleName: string): Record<string, WebAssembly.ImportValue> {
+  return new Proxy(
+    {},
+    {
+      get: (_target, propertyName) =>
+        createUnimplementedImport(`${moduleName}.${String(propertyName)}`),
+    }
+  );
 }
 
 export async function instantiateBoltFFI(
@@ -1090,49 +1107,26 @@ export async function instantiateBoltFFI(
 
   const asyncManager = new AsyncFutureManager();
 
-  const env: Record<string, WebAssembly.ImportValue> = {
-    __boltffi_wake: (handle: number) => asyncManager.wake(handle),
-    ...(imports?.env ?? {}),
-  };
-
-  if (imports?.wasmBindgen) {
-    prepareWasmBindgenEnv(env);
-    const importObject = imports.wasmBindgen.getImports();
-    const { instance, module } = (await WebAssembly.instantiate(
-      wasmSource,
-      importObject,
-    )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
-    imports.wasmBindgen.finalize(instance, module);
-    const boltModule = new BoltFFIModule(instance, asyncManager);
-
-    const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
-    if (actualVersion !== expectedVersion) {
-      throw new Error(
-        `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
-      );
-    }
-
-    return boltModule;
-  }
-
   const importObject: WebAssembly.Imports = {
-    env,
+    env: {
+      __boltffi_wake: (handle: number) => asyncManager.wake(handle),
+      ...(imports?.env ?? {}),
+    },
+    __wbindgen_placeholder__: createImportModuleProxy("__wbindgen_placeholder__"),
+    __wbindgen_externref_xform__: createImportModuleProxy("__wbindgen_externref_xform__"),
   };
 
-  const { instance } = (await WebAssembly.instantiate(
-    wasmSource,
-    importObject,
-  )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
-  const boltModule = new BoltFFIModule(instance, asyncManager);
+  const { instance } = await WebAssembly.instantiate(wasmSource, importObject);
+  const module = new BoltFFIModule(instance, asyncManager);
 
-  const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
+  const actualVersion = module.exports.boltffi_wasm_abi_version();
   if (actualVersion !== expectedVersion) {
     throw new Error(
       `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
     );
   }
 
-  return boltModule;
+  return module;
 }
 
 export function instantiateBoltFFISync(
@@ -1142,43 +1136,25 @@ export function instantiateBoltFFISync(
 ): BoltFFIModule {
   const asyncManager = new AsyncFutureManager();
 
-  const env: Record<string, WebAssembly.ImportValue> = {
-    __boltffi_wake: (handle: number) => asyncManager.wake(handle),
-    ...(imports?.env ?? {}),
-  };
-
-  if (imports?.wasmBindgen) {
-    prepareWasmBindgenEnv(env);
-    const importObject = imports.wasmBindgen.getImports();
-    const wasmModule = new WebAssembly.Module(source);
-    const instance = new WebAssembly.Instance(wasmModule, importObject);
-    imports.wasmBindgen.finalize(instance, wasmModule);
-    const boltModule = new BoltFFIModule(instance, asyncManager);
-
-    const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
-    if (actualVersion !== expectedVersion) {
-      throw new Error(
-        `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
-      );
-    }
-
-    return boltModule;
-  }
-
   const importObject: WebAssembly.Imports = {
-    env,
+    env: {
+      __boltffi_wake: (handle: number) => asyncManager.wake(handle),
+      ...(imports?.env ?? {}),
+    },
+    __wbindgen_placeholder__: createImportModuleProxy("__wbindgen_placeholder__"),
+    __wbindgen_externref_xform__: createImportModuleProxy("__wbindgen_externref_xform__"),
   };
 
   const wasmModule = new WebAssembly.Module(source);
   const instance = new WebAssembly.Instance(wasmModule, importObject);
-  const boltModule = new BoltFFIModule(instance, asyncManager);
+  const module = new BoltFFIModule(instance, asyncManager);
 
-  const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
+  const actualVersion = module.exports.boltffi_wasm_abi_version();
   if (actualVersion !== expectedVersion) {
     throw new Error(
       `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
     );
   }
 
-  return boltModule;
+  return module;
 }

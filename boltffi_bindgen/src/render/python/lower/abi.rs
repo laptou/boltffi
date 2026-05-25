@@ -1,6 +1,6 @@
-use crate::ir::abi::{AbiEnum, CallId};
+use crate::ir::abi::{AbiEnum, AbiRecord, CallId};
 use crate::ir::definitions::FunctionDef;
-use crate::ir::ids::EnumId;
+use crate::ir::ids::{EnumId, RecordId};
 
 use super::PythonLowerer;
 
@@ -28,5 +28,13 @@ impl PythonLowerer<'_> {
             .iter()
             .find(|abi_enum| abi_enum.id == *enum_id)
             .unwrap_or_else(|| panic!("python lowering missing ABI enum for {:?}", enum_id))
+    }
+
+    pub(super) fn resolve_abi_record(&self, record_id: &RecordId) -> &AbiRecord {
+        self.abi_contract
+            .records
+            .iter()
+            .find(|abi_record| abi_record.id == *record_id)
+            .unwrap_or_else(|| panic!("python lowering missing ABI record for {:?}", record_id))
     }
 }

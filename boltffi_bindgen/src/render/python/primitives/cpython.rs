@@ -264,6 +264,7 @@ impl CPythonTypeExt for PythonType {
         match self {
             PythonType::Void => "void".to_string(),
             PythonType::Primitive(primitive) => primitive.c_type_name().to_string(),
+            PythonType::Record(record_type) => record_type.c_type_name.clone(),
             PythonType::CStyleEnum(enum_type) => enum_type.tag_type.c_type_name().to_string(),
             PythonType::String | PythonType::Sequence(_) => "FfiBuf_u8".to_string(),
         }
@@ -285,6 +286,10 @@ impl CPythonParameterExt for PythonParameter {
             PythonType::Void => unreachable!("python parameters cannot be void"),
             PythonType::Primitive(primitive) => vec![CPythonCBinding {
                 c_type_name: primitive.c_type_name().to_string(),
+                name: self.value_binding_name(),
+            }],
+            PythonType::Record(record_type) => vec![CPythonCBinding {
+                c_type_name: record_type.c_type_name.clone(),
                 name: self.value_binding_name(),
             }],
             PythonType::CStyleEnum(enum_type) => vec![CPythonCBinding {
@@ -341,6 +346,10 @@ impl CPythonParameterExt for PythonParameter {
                 c_type_name: primitive.c_type_name().to_string(),
                 name: self.value_binding_name(),
             }],
+            PythonType::Record(record_type) => vec![CPythonCBinding {
+                c_type_name: record_type.c_type_name.clone(),
+                name: self.value_binding_name(),
+            }],
             PythonType::CStyleEnum(enum_type) => vec![CPythonCBinding {
                 c_type_name: enum_type.tag_type.c_type_name().to_string(),
                 name: self.value_binding_name(),
@@ -364,6 +373,7 @@ impl CPythonParameterExt for PythonParameter {
         match &self.type_ref {
             PythonType::Void => unreachable!("python parameters cannot be void"),
             PythonType::Primitive(primitive) => primitive.parser_name().to_string(),
+            PythonType::Record(record_type) => record_type.parser_name(),
             PythonType::CStyleEnum(enum_type) => enum_type.parser_name(),
             PythonType::String => "boltffi_python_parse_string".to_string(),
             PythonType::Sequence(PythonSequenceType::Bytes) => {
@@ -381,7 +391,7 @@ impl CPythonParameterExt for PythonParameter {
     fn parser_output_arguments(&self) -> Vec<String> {
         match &self.type_ref {
             PythonType::Void => unreachable!("python parameters cannot be void"),
-            PythonType::Primitive(_) | PythonType::CStyleEnum(_) => {
+            PythonType::Primitive(_) | PythonType::Record(_) | PythonType::CStyleEnum(_) => {
                 vec![format!("&{}", self.value_binding_name())]
             }
             PythonType::String | PythonType::Sequence(_) => {
@@ -393,7 +403,9 @@ impl CPythonParameterExt for PythonParameter {
     fn ffi_argument_expressions(&self) -> Vec<String> {
         match &self.type_ref {
             PythonType::Void => unreachable!("python parameters cannot be void"),
-            PythonType::Primitive(_) | PythonType::CStyleEnum(_) => vec![self.value_binding_name()],
+            PythonType::Primitive(_) | PythonType::Record(_) | PythonType::CStyleEnum(_) => {
+                vec![self.value_binding_name()]
+            }
             PythonType::String => vec![
                 format!("{}.ptr", self.parser_state_name()),
                 format!("{}.len", self.parser_state_name()),

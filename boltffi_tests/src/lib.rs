@@ -24,6 +24,14 @@ pub enum FixtureStatus {
     Failed = 3,
 }
 
+#[data]
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct FixtureMessageRecord {
+    pub label: String,
+    pub anchor: FixturePoint,
+    pub status: FixtureStatus,
+}
+
 #[export]
 pub trait SyncValueCallback {
     fn on_value(&self, value: i32) -> i32;
@@ -84,10 +92,9 @@ pub trait AsyncMultiMethod {
 /// boxed `Future` return — same ffi async path as `async fn -> T`
 #[export]
 pub trait FutureReturnFetcher {
-    fn fetch(
-        &self,
-        key: u32,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = u64> + Send + '_>>;
+    fn fetch(&self, key: u32) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = u64> + Send + '_>,
+    >;
 }
 
 #[export]
@@ -252,7 +259,9 @@ pub async fn invoke_async_option_impl(fetcher: impl AsyncOptionFetcher, key: i32
     fetcher.find(key).await
 }
 
-#[export]
+pub async fn async_echo_message_record(record: FixtureMessageRecord) -> FixtureMessageRecord {
+    record
+}
 pub async fn invoke_async_multi_impl(
     callback: impl AsyncMultiMethod,
     id: i64,
@@ -375,12 +384,6 @@ impl std::fmt::Display for FixtureError {
 
 impl std::error::Error for FixtureError {}
 
-impl From<UnexpectedFfiCallbackError> for FixtureError {
-    fn from(_: UnexpectedFfiCallbackError) -> Self {
-        FixtureError::InvalidInput
-    }
-}
-
 #[export]
 pub fn fallible_divide(a: i32, b: i32) -> Result<i32, FixtureError> {
     if b == 0 {
@@ -410,25 +413,6 @@ pub async fn async_fallible_fetch(key: i32) -> Result<String, FixtureError> {
     } else {
         Ok(format!("value_{}", key))
     }
-}
-
-/// boxed fallible future — indexeddb-style `Pin<Box<dyn Future<Output = Result<_, E>>>>`
-#[export]
-pub trait FallibleFutureReturnFetcher {
-    fn fetch(
-        &self,
-        key: u32,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<u8>, FixtureError>> + Send + '_>,
-    >;
-}
-
-#[export]
-pub async fn invoke_fallible_future_return_impl(
-    fetcher: impl FallibleFutureReturnFetcher,
-    key: u32,
-) -> Result<Vec<u8>, FixtureError> {
-    fetcher.fetch(key).await
 }
 
 pub struct CancellableTask {
@@ -857,6 +841,13 @@ impl ClassTestFixture {
 
     pub async fn async_get_name(&self) -> String {
         self.name.clone()
+    }
+
+    pub async fn async_echo_message_record(
+        &self,
+        record: FixtureMessageRecord,
+    ) -> FixtureMessageRecord {
+        record
     }
 
     pub async fn async_set_id(&mut self, id: i32) {

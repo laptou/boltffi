@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use boltffi_bindgen::{
     CfgContext, TypeConversion as BindgenTypeConversion, TypeMapping as BindgenTypeMapping,
-    TypeMappings, ir, scan_crate_with_config,
+    TypeMappings, ir, scan_crate_with_config, scan_crate_with_pointer_width,
 };
 
 use crate::cli::{CliError, Result};

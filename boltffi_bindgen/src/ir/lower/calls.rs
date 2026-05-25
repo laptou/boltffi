@@ -124,9 +124,7 @@ impl<'c> Lowerer<'c> {
     /// return type for constructor lowering (async uses [`ReturnDef`] for async plan; sync uses [`ReturnPlan`]).
     fn constructor_return_def(&self, class: &ClassDef, ctor: &ConstructorDef) -> ReturnDef {
         if ctor.is_optional() {
-            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(
-                class.id.clone(),
-            ))))
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(class.id.clone()))))
         } else if ctor.is_fallible() {
             ReturnDef::Result {
                 ok: TypeExpr::Handle(class.id.clone()),

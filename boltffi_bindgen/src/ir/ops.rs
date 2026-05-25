@@ -395,11 +395,7 @@ fn remap_root_in_op(op: &WriteOp, new_root: &ValueExpr) -> WriteOp {
 pub fn remap_enum_encode_bindings_in_write_seq(seq: &WriteSeq) -> WriteSeq {
     WriteSeq {
         size: remap_enum_encode_bindings_in_size_expr(&seq.size),
-        ops: seq
-            .ops
-            .iter()
-            .map(remap_enum_encode_bindings_in_write_op)
-            .collect(),
+        ops: seq.ops.iter().map(remap_enum_encode_bindings_in_write_op).collect(),
         shape: seq.shape,
     }
 }
@@ -422,15 +418,9 @@ fn remap_enum_encode_bindings_in_size_expr(size: &SizeExpr) -> SizeExpr {
     match size {
         SizeExpr::Fixed(value) => SizeExpr::Fixed(*value),
         SizeExpr::Runtime => SizeExpr::Runtime,
-        SizeExpr::StringLen(value) => {
-            SizeExpr::StringLen(remap_enum_encode_bindings_in_value_expr(value))
-        }
-        SizeExpr::BytesLen(value) => {
-            SizeExpr::BytesLen(remap_enum_encode_bindings_in_value_expr(value))
-        }
-        SizeExpr::ValueSize(value) => {
-            SizeExpr::ValueSize(remap_enum_encode_bindings_in_value_expr(value))
-        }
+        SizeExpr::StringLen(value) => SizeExpr::StringLen(remap_enum_encode_bindings_in_value_expr(value)),
+        SizeExpr::BytesLen(value) => SizeExpr::BytesLen(remap_enum_encode_bindings_in_value_expr(value)),
+        SizeExpr::ValueSize(value) => SizeExpr::ValueSize(remap_enum_encode_bindings_in_value_expr(value)),
         SizeExpr::WireSize { value, owner } => SizeExpr::WireSize {
             value: remap_enum_encode_bindings_in_value_expr(value),
             owner: owner.clone(),

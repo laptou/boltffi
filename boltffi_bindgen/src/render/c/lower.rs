@@ -674,12 +674,12 @@ mod tests {
             .with_class(
                 Class::new("Svc")
                     .with_constructor(Constructor::new())
-                    .with_method(Method::new("take", Receiver::Ref).with_return(
-                        ReturnType::fallible(
+                    .with_method(
+                        Method::new("take", Receiver::Ref).with_return(ReturnType::fallible(
                             Type::Object("Widget".into()),
                             Type::Enum("AppErr".into()),
-                        ),
-                    )),
+                        )),
+                    ),
             );
         let header = generate_header(&mut module);
         assert!(

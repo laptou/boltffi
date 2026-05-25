@@ -6,7 +6,13 @@ fun {{ func_name }}({% for param in signature_params %}{{ param.name }}: {{ para
 {%- if return_is_unit %}
     Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- elif return_is_direct %}
+{%- if direct_return_is_nullable %}
+    val result = Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+        ?: throw FfiException(-1, "Null buffer returned")
+    return result{{ return_cast }}
+{%- else %}
     return Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_cast }}
+{%- endif %}
 {%- else %}
     val buf = Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
         ?: throw FfiException(-1, "Null buffer returned")
@@ -27,7 +33,13 @@ fun {{ func_name }}({% for param in signature_params %}{{ param.name }}: {{ para
 {%- if return_is_unit %}
         Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- elif return_is_direct %}
+{%- if direct_return_is_nullable %}
+        val result = Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+            ?: throw FfiException(-1, "Null buffer returned")
+        return result{{ return_cast }}
+{%- else %}
         return Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_cast }}
+{%- endif %}
 {%- else %}
         val buf = Native.{{ ffi_name }}({% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
             ?: throw FfiException(-1, "Null buffer returned")

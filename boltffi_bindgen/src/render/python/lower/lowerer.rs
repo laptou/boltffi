@@ -36,10 +36,11 @@ impl<'a> PythonLowerer<'a> {
         );
 
         let functions = self.lower_functions()?;
+        let records = self.lower_records()?;
         let enums = self.lower_c_style_enums()?;
 
-        Self::validate_top_level_names(&functions, &enums)?;
-        Self::validate_native_module_names(&functions, &enums)?;
+        Self::validate_top_level_names(&functions, &records, &enums)?;
+        Self::validate_native_module_names(&functions, &records, &enums)?;
 
         Ok(PythonModule {
             module_name: self.module_name.to_string(),
@@ -50,6 +51,7 @@ impl<'a> PythonLowerer<'a> {
                 .or_else(|| self.ffi_contract.package.version.clone()),
             library_name: self.library_name.to_string(),
             free_buffer_symbol: self.abi_contract.free_buf.to_string(),
+            records,
             enums,
             functions,
         })

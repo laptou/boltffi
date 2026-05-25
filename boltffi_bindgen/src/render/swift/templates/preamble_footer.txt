@@ -479,7 +479,7 @@ func boltffiAsyncCallDirect<T>(
                         if status.code == 0 {
                             cont.resume(returning: value)
                         } else {
-                            cont.resume(throwing: FfiError(message: "async call failed"))
+                            cont.resume(throwing: FfiError(message: "FFI failed in async completion with code \(status.code)"))
                         }
                     case .finishWithoutContinuation, .alreadyFinished:
                         break
@@ -541,7 +541,7 @@ func boltffiAsyncCallDirectWithErrOut<T>(
                             cont.resume(returning: value)
                         } else {
                             if errLen > 0, let p = errOutPtr {
-                                defer { boltffi_free_return_buffer(p, Int(errLen)) }
+                                defer { free(UnsafeMutableRawPointer(p)) }
                                 do {
                                     let err = try decodeTypedErr(UnsafePointer(p), Int(errLen))
                                     cont.resume(throwing: err)

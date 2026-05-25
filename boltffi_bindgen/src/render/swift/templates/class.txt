@@ -332,7 +332,7 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         ) { buf, status in
-            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
             defer { {{ prefix }}_free_buf(buf) }
 {%- if result.direct_buffer_is_data() %}
             guard buf.len > 0, let ptr = buf.ptr else { return Data() }
@@ -361,7 +361,7 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         ) { buf, status in
-            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
 {%- if result.throws() %}
             defer { {{ prefix }}_free_buf(buf) }
             return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
@@ -439,7 +439,7 @@
 {{ method.method_body_indent() }}
 {{ method.method_body_indent() }}}
 {{ method.method_body_indent() }}if errLen > 0, let p = errOutPtr {
-{{ method.method_body_indent() }}    defer { boltffi_free_return_buffer(p, Int(errLen)) }
+{{ method.method_body_indent() }}    defer { free(UnsafeMutableRawPointer(p)) }
 {{ method.method_body_indent() }}    throw try boltffiDecodeOwnedBuf(UnsafePointer(p), Int(errLen)) { reader in {{ method.returns.throws_direct_err_throw_expr().unwrap() }} }
 {{ method.method_body_indent() }}
 {{ method.method_body_indent() }}

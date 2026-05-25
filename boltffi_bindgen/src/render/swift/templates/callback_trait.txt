@@ -65,11 +65,11 @@ private final class {{ callback.protocol_name }}Proxy: {{ callback.protocol_name
         invoke(handle_.handle{% for param in method.params %}{% for arg in param.proxy_ffi_args %}, {{ arg }}{% endfor %}{% endfor %}, &outPtr, &outLen, &ffiStatus)
 {%- if method.throws() %}
         guard ffiStatus.code == 0 else { throw FfiError(message: "callback invocation failed") }
-        defer { if let outPtr { boltffi_free_return_buffer(outPtr, Int(outLen)) } }
+        defer { free(outPtr) }
         return try boltffiDecodeOwnedBuf(outPtr, Int(outLen)) { reader in {{ method.returns.reader_decode_expr().unwrap() }} }
 {%- else %}
         guard ffiStatus.code == 0 else { fatalError("callback invocation failed") }
-        defer { if let outPtr { boltffi_free_return_buffer(outPtr, Int(outLen)) } }
+        defer { free(outPtr) }
         return boltffiDecodeOwnedBuf(outPtr, Int(outLen)) { reader in {{ method.returns.reader_decode_expr().unwrap() }} }
 {%- endif %}
 {%- elif method.has_return() %}

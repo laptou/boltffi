@@ -6,7 +6,7 @@ const _MathUtilsFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        _exports.boltffi_math_utils_free(handle);
+        (_exports.boltffi_math_utils_free as Function)(handle);
       });
 
 export class MathUtils {
@@ -36,25 +36,8 @@ export class MathUtils {
     }
     this._disposed = true;
     _MathUtilsFinalizer?.unregister(this);
-    _exports.boltffi_math_utils_free(this._handle);
+    (_exports.boltffi_math_utils_free as Function)(this._handle);
     this._handle = 0;
-  }
-
-  /**
-   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
-   */
-  takeHandle(): number {
-    if (this._disposed) {
-      throw new Error("MathUtils has been disposed");
-    }
-    if (this._handle === 0) {
-      throw new Error("MathUtils received a null handle");
-    }
-    this._disposed = true;
-    _MathUtilsFinalizer?.unregister(this);
-    const h = this._handle;
-    this._handle = 0;
-    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -64,6 +47,6 @@ export class MathUtils {
   }
 
   static add(a: number, b: number): number {
-    return _exports.boltffi_math_utils_add(a, b);
+    return (_exports.boltffi_math_utils_add as Function)(a, b);
   }
 }

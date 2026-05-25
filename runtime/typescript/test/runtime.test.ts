@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  AsyncFutureManager,
-  BoltFFIModule,
-  __boltffi_takePendingEnv,
-} from "../src/module.js";
+import { AsyncFutureManager, BoltFFIModule } from "../src/module.js";
 import { WireReader, WireWriter, wireErr, wireOk } from "../src/wire.js";
 
 type ExportFunction = (...args: number[]) => number | void;
@@ -77,18 +73,6 @@ function createHarness(): RuntimeHarness {
       allocations.delete(ptr);
     },
     boltffi_wasm_return_slot_addr: () => returnSlotAddress,
-    boltffi_alloc_return_buffer: (len: number) => {
-      if (len === 0) return 0;
-      const pointer = nextPointer;
-      nextPointer += len;
-      allocations.set(pointer, len);
-      return pointer;
-    },
-    boltffi_free_return_buffer: (ptr: number, len: number) => {
-      if (ptr === 0 || len === 0) return;
-      freedAllocations.push([ptr, len]);
-      allocations.delete(ptr);
-    },
   };
 
   const instance = { exports } as unknown as WebAssembly.Instance;
@@ -252,12 +236,6 @@ describe("WireWriter result encoding", () => {
   });
 });
 
-describe("wasm-bindgen host hooks", () => {
-  it("rejects takePendingEnv when env was not prepared", () => {
-    expect(() => __boltffi_takePendingEnv()).toThrow(/wasm-bindgen env not prepared/);
-  });
-});
-
 describe("BoltFFIModule memory operations", () => {
   it("allocString writes UTF-8 bytes and freeAlloc releases them", () => {
     const { module, freedAllocations } = createHarness();
@@ -364,28 +342,21 @@ describe("BoltFFIModule memory operations", () => {
     expect(reusedWriter.ptr).toBe(pointer);
     expect(reusedWriter.len).toBe(0);
   });
+});
 
-  it("err-out pair helpers round-trip ptr/len and free return buffer", () => {
+describe("BoltFFIModule async completion", () => {
+  it("throws invalid argument from completion status", () => {
     const { module, freedAllocations } = createHarness();
-    const pairPtr = module.allocErrOutPair();
-    expect(pairPtr).toBeGreaterThan(0);
 
-    const errBufPtr = module.exports.boltffi_alloc_return_buffer(4);
-    expect(errBufPtr).toBeGreaterThan(0);
-    module.writeToMemory(errBufPtr, Uint8Array.from([1, 2, 3, 4]));
+    expect(() =>
+      module.completeAsync((statusPtr) => {
+        const status = new DataView(new ArrayBuffer(4));
+        status.setInt32(0, 3, true);
+        module.writeToMemory(statusPtr, new Uint8Array(status.buffer));
+        return 0;
+      })
+    ).toThrow("invalid argument");
 
-    const u32 = new Uint32Array(module.exports.memory.buffer);
-    const idx = pairPtr >>> 2;
-    u32[idx] = errBufPtr;
-    u32[idx + 1] = 4;
-
-    expect(module.readErrOutPair(pairPtr)).toEqual({ ptr: errBufPtr, len: 4 });
-    expect(Array.from(module.readFromMemory(errBufPtr, 4))).toEqual([1, 2, 3, 4]);
-
-    module.exports.boltffi_free_return_buffer(errBufPtr, 4);
-    expect(freedAllocations).toContainEqual([errBufPtr, 4]);
-
-    module.freeErrOutPair(pairPtr);
-    expect(freedAllocations).toContainEqual([pairPtr, 8]);
+    expect(freedAllocations).toContainEqual([256, 4]);
   });
 });

@@ -1,15 +1,8 @@
 export interface WasmExports {
-  memory: WebAssembly.Memory;
   boltffi_wasm_abi_version(): number;
   boltffi_wasm_alloc(size: number): number;
   boltffi_wasm_free(ptr: number, size: number): void;
-  boltffi_wasm_free_buf(ptr: number, size: number, align: number): void;
-  boltffi_wasm_realloc(ptr: number, oldSize: number, newSize: number): number;
-  boltffi_wasm_free_string_return(ptr: number, len: number): void;
-  boltffi_wasm_return_slot_addr(): number;
   boltffi_free_buf(ptr: number): void;
-  boltffi_alloc_return_buffer(len: number): number;
-  boltffi_free_return_buffer(ptr: number, len: number): void;
 {%- for import in wasm_imports %}
   {{ import.ffi_name }}({% for param in import.params %}{{ param.name }}: {{ param.wasm_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ import.return_wasm_type_str }};
 {%- endfor %}

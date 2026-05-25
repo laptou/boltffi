@@ -1,6 +1,5 @@
 use quote::quote;
 
-use crate::abi::{native_export_abi, wasm_export_abi};
 use crate::lowering::returns::model::DirectBufferReturnMethod;
 
 #[derive(Clone, Copy)]
@@ -127,10 +126,6 @@ impl<'a> ExternExport<'a> {
             ExportSafety::Safe => quote! {},
             ExportSafety::Unsafe => quote! { unsafe },
         };
-        let export_abi = match condition {
-            ExportCondition::Wasm => wasm_export_abi(),
-            ExportCondition::NonWasm | ExportCondition::Always => native_export_abi(),
-        };
         let signature_params = match (receiver, params.is_empty()) {
             (Some(receiver_parameter), true) => quote! { #receiver_parameter },
             (Some(receiver_parameter), false) => quote! { #receiver_parameter, #(#params),* },
@@ -142,7 +137,7 @@ impl<'a> ExternExport<'a> {
             #cfg_attr
             #allow_attr
             #[unsafe(no_mangle)]
-            #visibility #safety extern #export_abi fn #export_name(
+            #visibility #safety extern "C" fn #export_name(
                 #signature_params
             ) #return_type {
                 #body

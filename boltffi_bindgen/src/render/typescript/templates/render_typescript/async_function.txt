@@ -3,68 +3,32 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
 {% if !wrapper_code.is_empty() %}  {{ wrapper_code }}
 {% endif %}
 {% if cleanup_code.is_empty() %}
-  const handle = _exports.{{ entry_ffi_name }}({{ call_args }});
+  const handle = (_exports.{{ entry_ffi_name }} as Function)({{ call_args }});
   const awaitedHandle = await _module.asyncManager.pollAsync(
     handle,
-    (h: number) => _exports.{{ poll_sync_ffi_name }}(h),
-    (h: number) => _exports.{{ panic_message_ffi_name }}(h),
-    (h: number) => _exports.{{ free_ffi_name }}(h)
+    (h: number) => (_exports.{{ poll_sync_ffi_name }} as Function)(h),
+    (h: number) => (_exports.{{ panic_message_ffi_name }} as Function)(h),
+    (h: number) => (_exports.{{ free_ffi_name }} as Function)(h)
   );
 
 {% if return_route.is_void() %}
-  _exports.{{ free_ffi_name }}(awaitedHandle);
-{% elif return_route.is_async_scalar() %}
-  const result = _exports.{{ complete_ffi_name }}(awaitedHandle){% if let Some(_) = return_handle %} as number{% elif let Some(_) = return_callback %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
-  _exports.{{ free_ffi_name }}(awaitedHandle);
-{%- if let Some(handle_return) = return_handle %}
-{%- if handle_return.nullable %}
-  if (result === 0) {
-    return null;
-  }
-{%- endif %}
-  return {{ handle_return.class_name }}._fromHandle(result);
-{%- elif let Some(callback_ret) = return_callback %}
-{%- if callback_ret.nullable %}
-  if (result === 0) {
-    return null;
-  }
-{%- endif %}
-  return {{ callback_ret.wrap_fn }}(result);
-{%- else %}
-  return result;
-{%- endif %}
-{% elif return_route.is_async_fallible_handle_carrier() %}
-  const __errPair = _module.allocErrOutPair();
   try {
-    const rawHandle = _exports.{{ complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
-    if (rawHandle !== 0) {
-      return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
-    }
-    const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
-    try {
-      if (__errLen > 0) {
-        const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
-        throw {{ return_route.carrier_err_throw_expr_for_template() }};
-      }
-{%- if return_route.carrier_handle_nullable() %}
-      return null;
-{%- else %}
-      throw new Error("ffi call failed");
-{%- endif %}
-    } finally {
-      if (__errLen > 0) {
-        _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
-      }
-    }
+    _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
   } finally {
-    _module.freeErrOutPair(__errPair);
-    _exports.{{ free_ffi_name }}(awaitedHandle);
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  }
+{% elif return_route.is_async_scalar() %}
+  try {
+    const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+    return result;
+  } finally {
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   }
 {% elif return_route.is_packed() %}
   const outPtr = _module.allocBufDescriptor();
   let completeCompleted = false;
   try {
-    _exports.{{ complete_ffi_name }}(outPtr, awaitedHandle, 0);
+    _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, statusPtr));
     completeCompleted = true;
     const reader = _module.readerFromBuf(outPtr);
     const result = {{ return_route.decode_expr() }};
@@ -75,79 +39,43 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     } else {
       _module.freeBufDescriptor(outPtr);
     }
-    _exports.{{ free_ffi_name }}(awaitedHandle);
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   }
 {% elif return_route.is_direct() %}
-  _exports.{{ free_ffi_name }}(awaitedHandle);
+  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   throw new Error("Unsupported async return route: Direct{{ return_route.ts_cast() }}");
 {% else %}
-  _exports.{{ free_ffi_name }}(awaitedHandle);
+  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   throw new Error("Unsupported async return route: RawPacked {{ return_route.decode_expr() }}");
 {% endif %}
 {% else %}
   try {
-    const handle = _exports.{{ entry_ffi_name }}({{ call_args }});
+    const handle = (_exports.{{ entry_ffi_name }} as Function)({{ call_args }});
     const awaitedHandle = await _module.asyncManager.pollAsync(
       handle,
-      (h: number) => _exports.{{ poll_sync_ffi_name }}(h),
-      (h: number) => _exports.{{ panic_message_ffi_name }}(h),
-      (h: number) => _exports.{{ free_ffi_name }}(h)
+      (h: number) => (_exports.{{ poll_sync_ffi_name }} as Function)(h),
+      (h: number) => (_exports.{{ panic_message_ffi_name }} as Function)(h),
+      (h: number) => (_exports.{{ free_ffi_name }} as Function)(h)
     );
 
 {% if return_route.is_void() %}
-    _exports.{{ free_ffi_name }}(awaitedHandle);
-{% elif return_route.is_async_scalar() %}
-    const result = _exports.{{ complete_ffi_name }}(awaitedHandle){% if let Some(_) = return_handle %} as number{% elif let Some(_) = return_callback %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
-    _exports.{{ free_ffi_name }}(awaitedHandle);
-{%- if let Some(handle_return) = return_handle %}
-{%- if handle_return.nullable %}
-    if (result === 0) {
-      return null;
-    }
-{%- endif %}
-    return {{ handle_return.class_name }}._fromHandle(result);
-{%- elif let Some(callback_ret) = return_callback %}
-{%- if callback_ret.nullable %}
-    if (result === 0) {
-      return null;
-    }
-{%- endif %}
-    return {{ callback_ret.wrap_fn }}(result);
-{%- else %}
-    return result;
-{%- endif %}
-{% elif return_route.is_async_fallible_handle_carrier() %}
-    const __errPair = _module.allocErrOutPair();
     try {
-      const rawHandle = _exports.{{ complete_ffi_name }}(awaitedHandle, __errPair, __errPair + 4) as number;
-      if (rawHandle !== 0) {
-        return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
-      }
-      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
-      try {
-        if (__errLen > 0) {
-          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
-          throw {{ return_route.carrier_err_throw_expr_for_template() }};
-        }
-{%- if return_route.carrier_handle_nullable() %}
-        return null;
-{%- else %}
-        throw new Error("ffi call failed");
-{%- endif %}
-      } finally {
-        if (__errLen > 0) {
-          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
-        }
-      }
+      _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
     } finally {
-      _module.freeErrOutPair(__errPair);
-      _exports.{{ free_ffi_name }}(awaitedHandle);
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    }
+{% elif return_route.is_async_scalar() %}
+    try {
+      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+      return result;
+    } finally {
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     }
 {% elif return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
-      _exports.{{ complete_ffi_name }}(outPtr, awaitedHandle, 0);
+      _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, statusPtr));
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
       const result = {{ return_route.decode_expr() }};
@@ -158,13 +86,13 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
       } else {
         _module.freeBufDescriptor(outPtr);
       }
-      _exports.{{ free_ffi_name }}(awaitedHandle);
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     }
 {% elif return_route.is_direct() %}
-    _exports.{{ free_ffi_name }}(awaitedHandle);
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     throw new Error("Unsupported async return route: Direct{{ return_route.ts_cast() }}");
 {% else %}
-    _exports.{{ free_ffi_name }}(awaitedHandle);
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     throw new Error("Unsupported async return route: RawPacked {{ return_route.decode_expr() }}");
 {% endif %}
   } finally {

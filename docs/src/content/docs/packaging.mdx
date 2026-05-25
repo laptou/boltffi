@@ -5,17 +5,22 @@ description: "Understand the BoltFFI packaging pipeline for compiling Rust artif
 
 # Packaging
 
-Packaging takes your Rust library and produces artifacts ready for each platform. A single command handles everything: compiling for each target architecture, generating bindings, and bundling the results into the format each platform expects.
+Packaging takes your Rust library and produces artifacts ready for each packaged platform. A single command handles everything: compiling for each target architecture, generating bindings, and bundling the results into the format each platform expects.
+
+`pack` is for targets where BoltFFI owns the platform package layout, such as an Apple
+XCFramework/SwiftPM package, Android jniLibs, Java JNI output, a C# NuGet package, a WASM npm
+package, or a Python wheel. `generate` writes only the source bindings for a single language and is
+useful when you want to integrate them into an existing project layout yourself.
 
 ## Overview
 
 The packaging process has three stages:
 
 1. **Build** - Compile your Rust library for each target architecture (arm64, x86_64, etc.)
-2. **Generate** - Create Swift/Kotlin bindings and C headers from your exported API
+2. **Generate** - Create Swift/Kotlin/Java/C#/TypeScript/Python bindings and C headers from your exported API
 3. **Package** - Bundle everything into platform-specific formats
 
-For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For WASM, this produces an npm package with TypeScript bindings. For Python, this produces a generated source package plus one or more wheels for the current host.
+For Apple, this produces an xcframework and SwiftPM package. For Android, this produces jniLibs and Kotlin sources. For Java (JVM), this produces a JNI shared library and Java sources. For C#, this produces a NuGet package containing the bindings and native runtime assets. For WASM, this produces an npm package with TypeScript bindings. For Python, this produces a generated source package plus one or more wheels for the current host.
 
 ## Getting Started
 
@@ -47,6 +52,7 @@ Package each platform with its own command:
 boltffi pack apple
 boltffi pack android
 boltffi pack java
+boltffi pack csharp
 boltffi pack wasm
 boltffi pack python --experimental
 ```
@@ -57,6 +63,7 @@ Add `--release` for optimized builds:
 boltffi pack apple --release
 boltffi pack android --release
 boltffi pack java --release
+boltffi pack csharp --release
 boltffi pack wasm --release
 boltffi pack python --release --experimental
 ```
@@ -108,6 +115,18 @@ dist/
 │   │   ├── jni_glue.c
 │   │   └── mylib.h
 │   └── libmylib_jni.dylib (or .so)
+├── csharp/
+│   ├── BoltFFI.CSharp.csproj
+│   ├── src/
+│   │   ├── MyLib.cs
+│   │   ├── Point.cs
+│   │   └── ... (records, enums, classes, callbacks, streams)
+│   ├── runtimes/
+│   │   ├── osx-arm64/native/libmylib.dylib
+│   │   ├── linux-x64/native/libmylib.so
+│   │   └── win-x64/native/mylib.dll
+│   └── packages/
+│       └── MyLib.0.1.0.nupkg
 ├── wasm/
 │   └── pkg/
 │       ├── mylib_bg.wasm
@@ -157,6 +176,15 @@ boltffi generate header
 boltffi pack java --release --no-build
 ```
 
+**C#:**
+```bash
+boltffi generate csharp
+boltffi pack csharp --release
+```
+
+`pack csharp` builds the Rust `cdylib` for each runtime identifier configured in
+`targets.csharp.runtime_identifiers`, so it does not accept Cargo `--target` passthrough args.
+
 **WASM:**
 ```bash
 boltffi build wasm --release
@@ -184,6 +212,10 @@ boltffi pack apple --release
 This builds for arm64 (device) and arm64/x86_64 (simulator), generates Swift bindings and a C header, creates an xcframework, and generates a SwiftPM package.
 
 Those slices come from `targets.apple.ios_architectures` and `targets.apple.simulator_architectures`. If you enable macOS, `targets.apple.macos_architectures` is included too.
+
+If you enable `[targets.apple.debug_symbols]`, BoltFFI also writes `{XcframeworkName}.xcframework.symbols.zip` under `dist/apple/symbols/`. That companion archive contains the unstripped slice libraries plus a `symbols.json` manifest.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled, for example via `[profile.release] debug = true`.
 
 ### Output Structure
 
@@ -299,6 +331,10 @@ boltffi pack android --release
 
 This builds for all Android ABIs (arm64-v8a, armeabi-v7a, x86, x86_64), generates Kotlin bindings and JNI glue, and copies the shared libraries to jniLibs.
 
+If you enable `[targets.android.debug_symbols]`, BoltFFI also writes `{crate_artifact_name}.android.symbols.zip` under `dist/android/symbols/`. That archive mirrors the `jniLibs/<abi>/` layout and includes a `symbols.json` manifest.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled.
+
 ### Output Structure
 
 ```
@@ -353,6 +389,28 @@ android {
 
 The shared libraries are loaded automatically when you first call into your Kotlin bindings.
 
+## Kotlin Multiplatform Packaging
+
+Package the experimental Kotlin Multiplatform module:
+
+```bash
+boltffi pack kmp --experimental --release
+```
+
+This generates the KMP sources, builds Android `jniLibs`, and writes JVM desktop native resources to `dist/kotlin-multiplatform/src/jvmMain/resources/native/<host-target>/`.
+
+KMP reuses the Java JVM host matrix:
+
+```toml
+[targets.kotlin_multiplatform]
+enabled = true
+
+[targets.java.jvm]
+host_targets = ["current", "linux-x86_64"]
+```
+
+`targets.java.jvm.enabled` does not need to be true for KMP packaging to read `host_targets`. The default is `["current"]`.
+
 ## Java Packaging
 
 Package for JVM:
@@ -362,6 +420,10 @@ boltffi pack java --release
 ```
 
 This builds the host Rust library, generates Java bindings and a C header, links the JNI glue against the Rust `staticlib` when available, and writes the native output to `dist/java/native/<host-target>/`. A flat current-host `_jni` copy is kept in `dist/java/` for compatibility during the transition.
+
+If you enable `[targets.java.jvm.debug_symbols]`, BoltFFI also writes `{selected_artifact_name}.jvm.symbols.zip` under `dist/java/symbols/`. That archive mirrors `native/<host-target>/` and includes a `symbols.json` manifest for host-target mapping.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled. On Windows MSVC hosts, BoltFFI also archives `.pdb` sidecars for the packaged JNI DLL and bundled Rust DLL when present.
 
 ### Prerequisites
 
@@ -457,6 +519,95 @@ tasks.test {
     jvmArgs("-Djava.library.path=libs/native")
 }
 ```
+
+<h2 id="c-sharp-packaging">C# Packaging</h2>
+
+Package everything for .NET:
+
+```bash
+boltffi pack csharp --release
+```
+
+This generates the C# bindings, builds the Rust `cdylib` for each configured runtime identifier,
+and bundles the bindings and native runtime assets into a single NuGet package.
+
+Your Rust crate must include `cdylib` in `crate-type`:
+
+```toml
+[lib]
+crate-type = ["staticlib", "cdylib"]
+```
+
+### Configuration
+
+Enable C# in `boltffi.toml`:
+
+```toml
+[targets.csharp]
+enabled = true
+output = "dist/csharp"
+package_id = "MyOrg.MyLib"
+target_framework = "net10.0"
+runtime_identifiers = ["osx-arm64", "linux-x64", "win-x64"]
+```
+
+`runtime_identifiers` controls which native assets are built and bundled into the NuGet package.
+`current` resolves to the active host RID; canonical values are `osx-arm64`, `osx-x64`,
+`linux-x64`, `linux-arm64`, and `win-x64`.
+
+### Output Structure
+
+```
+dist/csharp/
+├── BoltFFI.CSharp.csproj
+├── src/
+│   ├── MyLib.cs            # Functions, native declarations, and runtime helpers
+│   ├── Point.cs            # Generated records
+│   ├── Status.cs           # Generated enums
+│   └── Sensor.cs           # Generated classes and stream methods
+├── runtimes/
+│   ├── osx-arm64/native/libmylib.dylib
+│   ├── linux-x64/native/libmylib.so
+│   └── win-x64/native/mylib.dll
+└── packages/
+    └── MyLib.0.1.0.nupkg
+```
+
+### Using the NuGet Package
+
+Add the package output directory as a local NuGet source and reference the package from your
+.NET project:
+
+```bash
+dotnet nuget add source ./dist/csharp/packages --name boltffi-local
+dotnet add package MyLib
+```
+
+Then call the generated bindings from C#:
+
+```csharp
+using MyLib;
+
+Point a = new Point(0.0, 0.0);
+Point b = new Point(3.0, 4.0);
+double distance = MyLib.Distance(a, b);
+```
+
+The native runtime assets are loaded automatically from the NuGet `runtimes/<rid>/native/`
+folder. Classes implement `IDisposable`; streams return `IAsyncEnumerable<T>` and can be consumed
+with `await foreach`.
+
+### Source-Only Generation
+
+If you prefer to integrate the bindings into an existing .NET project without using the NuGet
+package, run:
+
+```bash
+boltffi generate csharp
+```
+
+This writes only the `.cs` files to `dist/csharp/`. You are responsible for building and shipping
+the matching Rust `cdylib` alongside your application.
 
 ## WASM Packaging
 

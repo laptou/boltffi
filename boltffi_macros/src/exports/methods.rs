@@ -10,7 +10,7 @@ use quote::{quote, quote_spanned};
 use syn::{FnArg, ReturnType, Type};
 
 use crate::exports::async_export::{
-    AsyncExportNames, AsyncRuntimeExports, wasm_complete_export_for_async,
+    AsyncExportNames, AsyncRuntimeExports, AsyncWasmCompleteExport,
 };
 use crate::exports::callable::MethodCallable;
 use crate::exports::callback_return::resolve_sync_callback_return;
@@ -627,15 +627,6 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        #[cfg(target_arch = "wasm32")]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C-unwind" fn #free_ident(handle: *mut #type_name) {
-            if !handle.is_null() {
-                drop(Box::from_raw(handle));
-            }
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #free_ident(handle: *mut #type_name) {
             if !handle.is_null() {
@@ -721,13 +712,6 @@ fn generate_factory_constructor_export(
 
     if ffi_params.is_empty() {
         Some(quote! {
-            #[cfg(target_arch = "wasm32")]
-            #[unsafe(no_mangle)]
-            pub extern "C-unwind" fn #export_name() -> *mut #type_name {
-                #body
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             pub extern "C" fn #export_name() -> *mut #type_name {
                 #body
@@ -735,15 +719,6 @@ fn generate_factory_constructor_export(
         })
     } else {
         Some(quote! {
-            #[cfg(target_arch = "wasm32")]
-            #[unsafe(no_mangle)]
-            pub unsafe extern "C-unwind" fn #export_name(
-                #(#ffi_params),*
-            ) -> *mut #type_name {
-                #body
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn #export_name(
                 #(#ffi_params),*
@@ -1511,10 +1486,14 @@ fn generate_async_method_export(
     let base_name = naming::method_ffi_name(class_name, &method_name_str);
     let export_names = AsyncExportNames::new(base_name.as_str(), method_name.span());
     let visibility: syn::Visibility = syn::parse_quote! { pub };
+    let fn_output = &method.sig.output;
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(return_abi) => return_abi,
+        Err(error) => return Some(error.to_compile_error()),
+    };
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
-    // wire decode failures already called set_last_error; return null future handle (invalid).
-    let on_wire_record_error = quote! { return ::core::ptr::null(); };
+    let on_wire_record_error = return_abi.async_invalid_arg_early_return_statement();
     let params = match transform_method_params_async(
         other_inputs,
         return_lowering,
@@ -1565,7 +1544,8 @@ fn generate_async_method_export(
         InstanceMethodExport::new(&visibility, export_names.entry(), type_name, ffi_params)
             .render_async_entry(entry_body);
 
-    let wasm_complete = wasm_complete_export_for_async(&return_abi, &quote! { #rust_return_type });
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: &visibility,
         names: &export_names,
@@ -1656,7 +1636,8 @@ fn generate_async_static_method_export(
     let entry_fn = StaticMethodExport::new(&visibility, export_names.entry(), ffi_params)
         .render_async_entry(entry_body);
 
-    let wasm_complete = wasm_complete_export_for_async(&return_abi, &quote! { #rust_return_type });
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: &visibility,
         names: &export_names,
@@ -1829,7 +1810,7 @@ mod tests {
     use super::*;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
-    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
     use crate::lowering::returns::model::ReturnLoweringContext;
 
     fn parse_impl(code: &str) -> syn::ItemImpl {
@@ -1842,7 +1823,10 @@ mod tests {
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
-        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::with_entries(&[
+            ("UserProfile", DataTypeCategory::WireEncoded),
+            ("Filter", DataTypeCategory::WireEncoded),
+        ])));
         let mut exported_classes = crate::index::exported_classes::ExportedClassRegistry::default();
         exported_classes.register_simple_name_for_test("Transfer");
         let exported_classes = Box::leak(Box::new(exported_classes));

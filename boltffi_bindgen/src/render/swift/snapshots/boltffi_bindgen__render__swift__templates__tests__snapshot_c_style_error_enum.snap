@@ -15,7 +15,7 @@ public enum ApiError: Int32, Hashable, Sendable, CaseIterable, Error {
         case 0: self = .notFound
         case 1: self = .unauthorized
         case 2: self = .serverError
-        default: fatalError("Invalid ApiError wire tag: \\(wireTag)")
+        default: fatalError("Invalid ApiError wire tag: \(wireTag)")
         }
     }
     @usableFromInline var wireTag: Int32 {
@@ -23,7 +23,7 @@ public enum ApiError: Int32, Hashable, Sendable, CaseIterable, Error {
         case 0: return 0
         case 1: return 1
         case 2: return 2
-        default: fatalError("Invalid ApiError raw value: \\(rawValue)")
+        default: fatalError("Invalid ApiError raw value: \(rawValue)")
         }
     }
 

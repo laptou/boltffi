@@ -585,6 +585,81 @@ impl<'a> ValueParamDecoder<'a> {
         acc.call_args.push(quote! { #name });
     }
 
+    fn lower_sync_exported_class_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        rust_type: &syn::Type,
+    ) {
+        if let syn::Type::Reference(type_ref) = rust_type {
+            let inner = type_ref.elem.as_ref();
+            let handle_ident = syn::Ident::new(&format!("{name}_handle"), name.span());
+            acc.ffi_params.push(quote! {
+                #handle_ident: <#inner as ::boltffi::__private::Passable>::In
+            });
+            if type_ref.mutability.is_some() {
+                acc.setup.push(quote! {
+                    let #name: &mut #inner = unsafe { &mut *#handle_ident };
+                });
+            } else {
+                acc.setup.push(quote! {
+                    let #name: &#inner = unsafe { &*#handle_ident };
+                });
+            }
+            acc.call_args.push(quote! { #name });
+            return;
+        }
+
+        self.lower_sync_passable_param(acc, name, rust_type);
+    }
+
+    fn lower_async_passable_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        rust_type: &syn::Type,
+    ) {
+        acc.ffi_params
+            .push(quote! { #name: <#rust_type as ::boltffi::__private::Passable>::In });
+        acc.setup.push(quote! {
+            let #name: #rust_type = unsafe { <#rust_type as ::boltffi::__private::Passable>::unpack(#name) };
+        });
+        acc.move_vars.push(name.clone());
+        acc.call_args.push(quote! { #name });
+    }
+
+    fn lower_async_exported_class_param(
+        &self,
+        acc: &mut ParamLoweringState,
+        name: &Ident,
+        rust_type: &syn::Type,
+    ) {
+        if let syn::Type::Reference(type_ref) = rust_type {
+            let inner = type_ref.elem.as_ref();
+            let handle_ident = syn::Ident::new(&format!("{name}_handle"), name.span());
+            acc.ffi_params.push(quote! {
+                #handle_ident: <#inner as ::boltffi::__private::Passable>::In
+            });
+            acc.setup.push(quote! {
+                let #handle_ident = #handle_ident;
+            });
+            if type_ref.mutability.is_some() {
+                acc.thread_setup.push(quote! {
+                    let #name: &mut #inner = unsafe { &mut *#handle_ident };
+                });
+            } else {
+                acc.thread_setup.push(quote! {
+                    let #name: &#inner = unsafe { &*#handle_ident };
+                });
+            }
+            acc.move_vars.push(handle_ident);
+            acc.call_args.push(quote! { #name });
+            return;
+        }
+
+        self.lower_async_passable_param(acc, name, rust_type);
+    }
+
     /// nullable exported-class param: ffi `*mut T`, rust `Option<T>` (null → `None`).
     fn lower_sync_exported_class_option_param(
         &self,
@@ -603,18 +678,13 @@ impl<'a> ValueParamDecoder<'a> {
         acc.call_args.push(quote! { #name });
     }
 
-    fn lower_async_passable_param(
+    fn lower_sync_pass_through_param(
         &self,
         acc: &mut ParamLoweringState,
         name: &Ident,
-        rust_type: &syn::Type,
+        original_type: &syn::Type,
     ) {
-        acc.ffi_params
-            .push(quote! { #name: <#rust_type as ::boltffi::__private::Passable>::In });
-        acc.setup.push(quote! {
-            let #name: #rust_type = unsafe { <#rust_type as ::boltffi::__private::Passable>::unpack(#name) };
-        });
-        acc.move_vars.push(name.clone());
+        acc.ffi_params.push(quote! { #name: #original_type });
         acc.call_args.push(quote! { #name });
     }
 
@@ -633,16 +703,6 @@ impl<'a> ValueParamDecoder<'a> {
             };
         });
         acc.move_vars.push(name.clone());
-        acc.call_args.push(quote! { #name });
-    }
-
-    fn lower_sync_pass_through_param(
-        &self,
-        acc: &mut ParamLoweringState,
-        name: &Ident,
-        original_type: &syn::Type,
-    ) {
-        acc.ffi_params.push(quote! { #name: #original_type });
         acc.call_args.push(quote! { #name });
     }
 
@@ -717,7 +777,7 @@ impl<'a> SyncValueParamLowerer<'a> {
                 .lower_sync_passable_param(acc, name, &rust_type),
             ParamTransform::ExportedClass(rust_type) => self
                 .decoder
-                .lower_sync_passable_param(acc, name, &rust_type),
+                .lower_sync_exported_class_param(acc, name, &rust_type),
             ParamTransform::ExportedClassOption(inner_type) => self
                 .decoder
                 .lower_sync_exported_class_option_param(acc, name, &inner_type),
@@ -792,7 +852,7 @@ impl<'a> AsyncValueParamLowerer<'a> {
                 .lower_async_passable_param(acc, name, &rust_type),
             ParamTransform::ExportedClass(rust_type) => self
                 .decoder
-                .lower_async_passable_param(acc, name, &rust_type),
+                .lower_async_exported_class_param(acc, name, &rust_type),
             ParamTransform::ExportedClassOption(inner_type) => self
                 .decoder
                 .lower_async_exported_class_option_param(acc, name, &inner_type),

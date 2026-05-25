@@ -16,6 +16,7 @@ name = "boltffi"
 path = "src/main.rs"
 
 [dependencies]
+askama = "0.16"
 boltffi_bindgen.workspace = true
 boltffi_verify.workspace = true
 clap = { version = "4.4", features = ["derive"] }
@@ -23,15 +24,14 @@ serde.workspace = true
 toml = "1.0"
 thiserror.workspace = true
 which = "8.0"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 zip = "8.1"
 walkdir.workspace = true
 serde_json.workspace = true
-regex = "1.10"
-wasmparser = "0.230.0"
 console = "0.16"
 indicatif = "0.18"
+object = "0.39"
 
 [lints]
 workspace = true

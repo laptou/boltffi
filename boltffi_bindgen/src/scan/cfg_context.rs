@@ -31,8 +31,7 @@ impl CfgContext {
         if self.scan_all {
             return true;
         }
-        let cfg_attrs: Vec<&Attribute> =
-            attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
+        let cfg_attrs: Vec<&Attribute> = attrs.iter().filter(|a| a.path().is_ident("cfg")).collect();
         if cfg_attrs.is_empty() {
             return true;
         }

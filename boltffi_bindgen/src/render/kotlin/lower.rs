@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
-use boltffi_ffi_rules::transport::{EnumTagStrategy, ScalarReturnStrategy, ValueReturnStrategy};
+use boltffi_ffi_rules::transport::{
+    EncodedReturnStrategy, EnumTagStrategy, ScalarReturnStrategy, ValueReturnStrategy,
+};
 
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
@@ -27,9 +29,12 @@ use crate::ir::plan::{AbiType, ScalarOrigin, SpanContent, Transport};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::render::kotlin::emit;
 use crate::render::kotlin::plan::*;
+#[cfg(test)]
+use crate::render::kotlin::templates::KotlinEmitter;
 use crate::render::kotlin::templates::{AsyncMethodTemplate, WireMethodTemplate};
 use crate::render::kotlin::{
-    FactoryStyle, KotlinApiStyle as KotlinInputApiStyle, KotlinOptions, NamingConvention,
+    FactoryStyle, KotlinApiStyle as KotlinInputApiStyle, KotlinDesktopLoader, KotlinOptions,
+    NamingConvention,
 };
 use crate::render::{TypeConversion, TypeMappings};
 use askama::Template;
@@ -38,6 +43,7 @@ use boltffi_ffi_rules::naming;
 struct KotlinReturnMeta {
     is_unit: bool,
     is_direct: bool,
+    direct_is_nullable: bool,
     cast: String,
 }
 
@@ -760,12 +766,21 @@ impl<'a> KotlinLowerer<'a> {
                 )
             })
             .collect::<Vec<_>>();
-        let methods = enumeration
+        let mut methods = enumeration
             .method_calls()
             .map(|(call_id, method)| {
                 self.lower_value_type_method(method, &call_id, enumeration.id.as_str())
             })
             .collect::<Vec<_>>();
+        if matches!(enumeration.repr, EnumRepr::Data { .. }) {
+            for method in &mut methods {
+                match &mut method.impl_ {
+                    KotlinMethodImpl::SyncMethod(src) | KotlinMethodImpl::AsyncMethod(src) => {
+                        self.qualify_collisions_in_string(src, &variant_names);
+                    }
+                }
+            }
+        }
         KotlinEnum {
             class_name,
             variants,
@@ -809,17 +824,21 @@ impl<'a> KotlinLowerer<'a> {
         field: &AbiEnumField,
         variant_names: &HashSet<String>,
     ) -> KotlinEnumField {
-        let (kotlin_type, decode_name) =
+        let (mut kotlin_type, decode_name) =
             self.kotlin_type_with_disambiguation(&field.type_expr, variant_names);
         let field_name = NamingConvention::property_name(field.name.as_str());
         let base_decode = self.decode_expr_with_native_conversion(&field.type_expr, &field.decode);
-        let wire_decode_expr = self.qualify_decode_expr(base_decode, decode_name.as_deref());
+        let mut wire_decode_expr = self.qualify_decode_expr(base_decode, decode_name.as_deref());
         let base_size = emit::emit_size_expr_for_write_seq(&field.encode);
-        let wire_size_expr =
+        let mut wire_size_expr =
             self.apply_native_encode_conversion(&field.type_expr, base_size, &field_name);
         let base_encode = emit::emit_write_expr(&field.encode);
-        let wire_encode =
+        let mut wire_encode =
             self.apply_native_encode_conversion(&field.type_expr, base_encode, &field_name);
+        self.qualify_collisions_in_string(&mut kotlin_type, variant_names);
+        self.qualify_collisions_in_string(&mut wire_decode_expr, variant_names);
+        self.qualify_collisions_in_string(&mut wire_size_expr, variant_names);
+        self.qualify_collisions_in_string(&mut wire_encode, variant_names);
         KotlinEnumField {
             name: field_name,
             kotlin_type,
@@ -1113,7 +1132,7 @@ impl<'a> KotlinLowerer<'a> {
             .collect();
         let native_args = self.native_args_for_params(call, &func.params, &wire_writers);
         let return_type = self.kotlin_return_type_from_def(&func.returns, output_route);
-        let return_meta = self.kotlin_return_meta(output_route);
+        let return_meta = self.kotlin_host_return_meta(output_route, &func.returns);
         let decode_expr = self.decode_expr_for_call_return(output_route, &func.returns);
         let is_blittable_return = self.is_blittable_return(output_route, &func.returns);
         let async_call = match &call.mode {
@@ -1132,6 +1151,7 @@ impl<'a> KotlinLowerer<'a> {
             ffi_name: call.symbol.as_str().to_string(),
             return_is_unit: return_meta.is_unit,
             return_is_direct: return_meta.is_direct,
+            direct_return_is_nullable: return_meta.direct_is_nullable,
             return_cast: return_meta.cast,
             async_call,
             decode_expr,
@@ -1245,7 +1265,7 @@ impl<'a> KotlinLowerer<'a> {
         };
         let output_route = &call.returns;
         let return_type = self.kotlin_return_type_from_def(&returns, output_route);
-        let return_meta = self.kotlin_return_meta(output_route);
+        let return_meta = self.kotlin_host_return_meta(output_route, &returns);
         let decode_expr = self.decode_expr_for_call_return(output_route, &returns);
         let is_blittable_return = self.is_blittable_return(output_route, &returns);
         let err_type = self.error_type_name(&returns);
@@ -1346,7 +1366,7 @@ impl<'a> KotlinLowerer<'a> {
             })
             .collect::<Vec<_>>();
         let return_type = self.kotlin_return_type_from_def(&method.returns, output_route);
-        let return_meta = self.kotlin_return_meta(output_route);
+        let return_meta = self.kotlin_host_return_meta(output_route, &method.returns);
         let decode_expr = self.decode_expr_for_call_return(output_route, &method.returns);
         let is_blittable_return = self.is_blittable_return(output_route, &method.returns);
         let ffi_name = call.symbol.as_str().to_string();
@@ -1371,6 +1391,7 @@ impl<'a> KotlinLowerer<'a> {
                 ffi_free: &async_call.free,
                 return_is_unit: async_call.return_is_unit,
                 return_is_direct: async_call.return_is_direct,
+                direct_return_is_nullable: async_call.direct_return_is_nullable,
                 return_cast: &async_call.return_cast,
                 decode_expr: &async_call.decode_expr,
                 is_blittable_return: async_call.is_blittable_return,
@@ -1391,6 +1412,7 @@ impl<'a> KotlinLowerer<'a> {
                 ffi_name: &ffi_name,
                 return_is_unit: return_meta.is_unit,
                 return_is_direct: return_meta.is_direct,
+                direct_return_is_nullable: return_meta.direct_is_nullable,
                 return_cast: &return_meta.cast,
                 decode_expr: &decode_expr,
                 is_blittable_return,
@@ -1440,7 +1462,7 @@ impl<'a> KotlinLowerer<'a> {
         } else {
             self.kotlin_return_type_from_def(&method.returns, output_route)
         };
-        let return_meta = self.kotlin_return_meta(output_route);
+        let return_meta = self.kotlin_host_return_meta(output_route, &method.returns);
         let decode_expr = self.decode_expr_for_call_return(output_route, &method.returns);
         let is_blittable_return = self.is_blittable_return(output_route, &method.returns);
         let ffi_name = call.symbol.as_str().to_string();
@@ -1468,6 +1490,7 @@ impl<'a> KotlinLowerer<'a> {
             ffi_name: &ffi_name,
             return_is_unit: return_meta.is_unit && !mutating_void,
             return_is_direct: return_meta.is_direct,
+            direct_return_is_nullable: return_meta.direct_is_nullable,
             return_cast: &return_meta.cast,
             decode_expr: &decode_expr,
             is_blittable_return,
@@ -1913,6 +1936,7 @@ impl<'a> KotlinLowerer<'a> {
             ffi_name: &self.callback_proxy_native_name(callback, method),
             return_is_unit: return_meta.is_unit,
             return_is_direct: return_meta.is_direct,
+            direct_return_is_nullable: return_meta.direct_is_nullable,
             return_cast: &return_meta.cast,
             decode_expr: &decode_expr,
             is_blittable_return: self.is_blittable_return(&abi_method.returns, &method.returns),
@@ -2015,7 +2039,9 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => "Long".to_string(),
+            | ValueReturnStrategy::CallbackHandle => {
+                "Long".to_string()
+            }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "ByteArray".to_string()
             }
@@ -2076,7 +2102,9 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => "Handle".to_string(),
+            | ValueReturnStrategy::CallbackHandle => {
+                "Handle".to_string()
+            }
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "Wire".to_string()
             }
@@ -2514,13 +2542,36 @@ impl<'a> KotlinLowerer<'a> {
                 },
             )
             .1;
+        let default_desktop_lib_name = self
+            .options
+            .library_name
+            .as_ref()
+            .map(|name| naming::library_name(name.as_str()))
+            .unwrap_or_else(|| naming::library_name(&self.contract.package.name));
         KotlinNative {
-            lib_name: self
+            android_lib_name: self
                 .options
                 .library_name
                 .clone()
-                .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
-            desktop_loader: self.options.desktop_loader,
+                .unwrap_or_else(|| naming::load_library_name(&self.contract.package.name)),
+            desktop_jni_lib_name: self
+                .options
+                .desktop_jni_library_name
+                .clone()
+                .unwrap_or_else(|| default_desktop_lib_name.clone()),
+            desktop_fallback_lib_name: self
+                .options
+                .desktop_fallback_library_name
+                .clone()
+                .unwrap_or(default_desktop_lib_name),
+            desktop_loader_bundled: matches!(
+                self.options.desktop_loader,
+                KotlinDesktopLoader::Bundled
+            ),
+            desktop_loader_system: matches!(
+                self.options.desktop_loader,
+                KotlinDesktopLoader::System
+            ),
             prefix: naming::ffi_prefix().to_string(),
             functions,
             wire_functions,
@@ -2533,7 +2584,9 @@ impl<'a> KotlinLowerer<'a> {
         let call = self.abi_call_for_function(func);
         let return_jni_type = self.jni_type_for_return_shape(&call.returns);
         let complete_return_jni_type = match &call.mode {
-            CallMode::Async(async_call) => self.jni_type_for_return_shape(&async_call.result),
+            CallMode::Async(async_call) => {
+                self.jni_type_for_async_complete_shape(&async_call.result)
+            }
             CallMode::Sync => String::new(),
         };
         let async_ffi = match &call.mode {
@@ -2606,7 +2659,7 @@ impl<'a> KotlinLowerer<'a> {
                             jni_type: self.jni_type_for_param(param),
                         })
                         .collect(),
-                    return_jni_type: self.jni_type_for_return_shape(&async_call.result),
+                    return_jni_type: self.jni_type_for_async_complete_shape(&async_call.result),
                 }
             })
             .collect();
@@ -2670,11 +2723,21 @@ impl<'a> KotlinLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => "Long".to_string(),
+            | ValueReturnStrategy::CallbackHandle => {
+                "Long".to_string()
+            }
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String) => "String?".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "ByteArray?".to_string()
             }
         }
+    }
+
+    fn jni_type_for_async_complete_shape(&self, ret_shape: &ReturnShape) -> String {
+        if Self::is_utf8_string_return(ret_shape) {
+            return "ByteArray?".to_string();
+        }
+        self.jni_type_for_return_shape(ret_shape)
     }
 
     fn jni_type_for_abi(&self, abi: &AbiType) -> String {
@@ -2888,6 +2951,35 @@ impl<'a> KotlinLowerer<'a> {
             .unwrap_or(expr)
     }
 
+    /// Rewrites a Kotlin source fragment so any bare occurrence of a
+    /// shadowed sibling name becomes fully qualified. Boundary
+    /// detection matches identifier chars and `.` so existing FQNs
+    /// like `com.boltffi.demo.Point` are left alone.
+    fn qualify_collisions_in_string(&self, src: &mut String, sibling_names: &HashSet<String>) {
+        for name in sibling_names {
+            let qualified = format!("{}.{name}", self.package_name);
+            let mut search_from = 0;
+            while let Some(idx_in_rest) = src[search_from..].find(name.as_str()) {
+                let idx = search_from + idx_in_rest;
+                let end = idx + name.len();
+                let left_ok = match src[..idx].chars().next_back() {
+                    None => true,
+                    Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '.',
+                };
+                let right_ok = match src[end..].chars().next() {
+                    None => true,
+                    Some(c) => !c.is_ascii_alphanumeric() && c != '_',
+                };
+                if left_ok && right_ok {
+                    src.replace_range(idx..end, &qualified);
+                    search_from = idx + qualified.len();
+                } else {
+                    search_from = end;
+                }
+            }
+        }
+    }
+
     fn disambiguate_type_name(
         &self,
         type_name: &str,
@@ -3059,6 +3151,7 @@ impl<'a> KotlinLowerer<'a> {
             ValueReturnStrategy::Void => KotlinReturnMeta {
                 is_unit: true,
                 is_direct: false,
+                direct_is_nullable: false,
                 cast: String::new(),
             },
             ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
@@ -3076,6 +3169,7 @@ impl<'a> KotlinLowerer<'a> {
                 KotlinReturnMeta {
                     is_unit: false,
                     is_direct: true,
+                    direct_is_nullable: false,
                     cast,
                 }
             }
@@ -3086,6 +3180,7 @@ impl<'a> KotlinLowerer<'a> {
                 KotlinReturnMeta {
                     is_unit: false,
                     is_direct: true,
+                    direct_is_nullable: false,
                     cast: self.kotlin_handle_return_cast(class_id, *nullable),
                 }
             }
@@ -3101,6 +3196,7 @@ impl<'a> KotlinLowerer<'a> {
                 KotlinReturnMeta {
                     is_unit: false,
                     is_direct: true,
+                    direct_is_nullable: false,
                     cast: self.kotlin_callback_return_cast(callback_id, *nullable),
                 }
             }
@@ -3108,10 +3204,54 @@ impl<'a> KotlinLowerer<'a> {
                 KotlinReturnMeta {
                     is_unit: false,
                     is_direct: false,
+                    direct_is_nullable: false,
                     cast: String::new(),
                 }
             }
         }
+    }
+
+    fn kotlin_host_return_meta(
+        &self,
+        ret_shape: &ReturnShape,
+        returns_def: &ReturnDef,
+    ) -> KotlinReturnMeta {
+        if matches!(returns_def, ReturnDef::Value(TypeExpr::String))
+            && Self::is_utf8_string_return(ret_shape)
+        {
+            return KotlinReturnMeta {
+                is_unit: false,
+                is_direct: true,
+                direct_is_nullable: true,
+                cast: String::new(),
+            };
+        }
+        self.kotlin_return_meta(ret_shape)
+    }
+
+    fn kotlin_async_host_return_meta(
+        &self,
+        ret_shape: &ReturnShape,
+        returns_def: &ReturnDef,
+    ) -> KotlinReturnMeta {
+        if matches!(returns_def, ReturnDef::Value(TypeExpr::String))
+            && Self::is_utf8_string_return(ret_shape)
+        {
+            return KotlinReturnMeta {
+                is_unit: false,
+                is_direct: false,
+                direct_is_nullable: false,
+                cast: String::new(),
+            };
+        }
+        self.kotlin_host_return_meta(ret_shape, returns_def)
+    }
+
+    fn is_utf8_string_return(ret_shape: &ReturnShape) -> bool {
+        matches!(
+            ret_shape.value_return_strategy(),
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String)
+        )
     }
 
     fn kotlin_handle_return_cast(&self, class_id: &ClassId, nullable: bool) -> String {
@@ -3447,7 +3587,6 @@ impl<'a> KotlinLowerer<'a> {
             Some(ReadOp::Result { ok, err, .. }) => (ok.as_ref(), err.as_ref()),
             _ => return emit::emit_reader_read(decode_ops),
         };
-        let raw_ok_expr = emit::emit_reader_read(ok_seq);
         let ok_expr = match returns {
             ReturnDef::Result {
                 ok: TypeExpr::Void, ..
@@ -3462,10 +3601,11 @@ impl<'a> KotlinLowerer<'a> {
                 .map(|e| matches!(e.repr, EnumRepr::CStyle { .. }))
                 .unwrap_or(false) =>
             {
+                let raw_ok_expr = emit::emit_reader_read(ok_seq);
                 let enum_name = NamingConvention::class_name(id.as_str());
                 format!("{}.fromValue({})", enum_name, raw_ok_expr)
             }
-            _ => raw_ok_expr,
+            _ => emit::emit_reader_read(ok_seq),
         };
         let err_expr = emit::emit_reader_read(err_seq);
         format!(
@@ -3601,7 +3741,7 @@ impl<'a> KotlinLowerer<'a> {
             CallMode::Sync => unreachable!("async method missing async call"),
         };
         let result_route = &async_call.result;
-        let return_meta = self.kotlin_return_meta(result_route);
+        let return_meta = self.kotlin_async_host_return_meta(result_route, &method.returns);
         let decode_expr = self.decode_expr_for_call_return(result_route, &method.returns);
         let is_blittable_return = self.is_blittable_return(result_route, &method.returns);
         KotlinAsyncCall {
@@ -3611,6 +3751,7 @@ impl<'a> KotlinLowerer<'a> {
             free: async_call.free.as_str().to_string(),
             return_is_unit: return_meta.is_unit,
             return_is_direct: return_meta.is_direct,
+            direct_return_is_nullable: return_meta.direct_is_nullable,
             return_cast: return_meta.cast,
             decode_expr,
             is_blittable_return,
@@ -3643,7 +3784,7 @@ impl<'a> KotlinLowerer<'a> {
             CallMode::Sync => unreachable!("async function missing async call"),
         };
         let result_route = &async_call.result;
-        let return_meta = self.kotlin_return_meta(result_route);
+        let return_meta = self.kotlin_async_host_return_meta(result_route, &func.returns);
         let decode_expr = self.decode_expr_for_call_return(result_route, &func.returns);
         let is_blittable_return = self.is_blittable_return(result_route, &func.returns);
         KotlinAsyncCall {
@@ -3653,6 +3794,7 @@ impl<'a> KotlinLowerer<'a> {
             free: async_call.free.as_str().to_string(),
             return_is_unit: return_meta.is_unit,
             return_is_direct: return_meta.is_direct,
+            direct_return_is_nullable: return_meta.direct_is_nullable,
             return_cast: return_meta.cast,
             decode_expr,
             is_blittable_return,
@@ -4790,15 +4932,18 @@ impl JniParamMapping {
 }
 
 mod tests {
-    
-    
-    
+    use super::*;
+    use crate::ir::Lowerer as IrLowerer;
+    use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
     use crate::ir::definitions::{
-        FieldDef, RecordDef,
+        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, FieldDef, FunctionDef,
+        MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef, StreamDef, StreamMode,
     };
-    use crate::ir::ids::{FieldName, RecordId};
+    use crate::ir::ids::{
+        CallbackId, ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId, StreamId,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    
+    use boltffi_ffi_rules::callable::ExecutionKind;
 
     fn field(name: &str, primitive: PrimitiveType) -> FieldDef {
         FieldDef {
@@ -4819,6 +4964,280 @@ mod tests {
             methods: vec![],
             doc: None,
             deprecated: None,
+        }
+    }
+
+    fn lower_module(contract: &FfiContract) -> KotlinModule {
+        let abi = IrLowerer::new(contract).to_abi_contract();
+        KotlinLowerer::new(
+            contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions::default(),
+        )
+        .lower()
+    }
+
+    fn async_string_function_contract() -> FfiContract {
+        FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![FunctionDef {
+                id: FunctionId::new("fetch_name"),
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::String),
+                execution_kind: ExecutionKind::Async,
+                doc: None,
+                deprecated: None,
+            }],
+        }
+    }
+
+    fn sync_string_function_contract() -> FfiContract {
+        FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![FunctionDef {
+                id: FunctionId::new("fetch_name"),
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::String),
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn result_unit_decode_does_not_read_empty_ok_payload() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let lowerer = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions::default(),
+        );
+        let decode_ops = ReadSeq {
+            size: SizeExpr::Runtime,
+            ops: vec![ReadOp::Result {
+                tag_offset: OffsetExpr::Base,
+                ok: Box::new(ReadSeq {
+                    size: SizeExpr::Fixed(0),
+                    ops: vec![],
+                    shape: WireShape::Value,
+                }),
+                err: Box::new(ReadSeq {
+                    size: SizeExpr::Runtime,
+                    ops: vec![ReadOp::String {
+                        offset: OffsetExpr::Base,
+                    }],
+                    shape: WireShape::Value,
+                }),
+            }],
+            shape: WireShape::Value,
+        };
+        let returns = ReturnDef::Result {
+            ok: TypeExpr::Void,
+            err: TypeExpr::String,
+        };
+
+        assert_eq!(
+            lowerer.decode_result_expr(&returns, &decode_ops),
+            "reader.readResult({ Unit }, { reader.readString() }).getOrThrow()"
+        );
+    }
+
+    #[test]
+    fn native_library_name_preserves_hyphenated_package_name() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let module = lower_module(&contract);
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(module.native.android_lib_name.as_str(), "sample-library");
+        assert_eq!(
+            module.native.desktop_jni_lib_name.as_str(),
+            "sample_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
+            "sample_library"
+        );
+        assert!(rendered.contains("val androidLibrary = \"sample-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"sample_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"sample_library\""));
+        assert!(rendered.contains("System.loadLibrary(androidLibrary)"));
+    }
+
+    #[test]
+    fn native_library_name_normalizes_configured_hyphenated_name_for_desktop() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions {
+                library_name: Some(naming::load_library_name("configured-library")),
+                ..KotlinOptions::default()
+            },
+        )
+        .lower();
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(
+            module.native.android_lib_name.as_str(),
+            "configured-library"
+        );
+        assert_eq!(
+            module.native.desktop_jni_lib_name.as_str(),
+            "configured_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
+            "configured_library"
+        );
+        assert!(rendered.contains("val androidLibrary = \"configured-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"configured_library\""));
+    }
+
+    #[test]
+    fn native_library_name_can_split_desktop_jni_and_fallback_names() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions {
+                library_name: Some(naming::load_library_name("configured-library")),
+                desktop_jni_library_name: Some(naming::library_name("configured-library")),
+                desktop_fallback_library_name: Some(naming::library_name("sample-library")),
+                ..KotlinOptions::default()
+            },
+        )
+        .lower();
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(
+            module.native.android_lib_name.as_str(),
+            "configured-library"
+        );
+        assert_eq!(
+            module.native.desktop_jni_lib_name.as_str(),
+            "configured_library"
+        );
+        assert_eq!(
+            module.native.desktop_fallback_lib_name.as_str(),
+            "sample_library"
+        );
+        assert!(rendered.contains("val androidLibrary = \"configured-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"sample_library\""));
+    }
+
+    fn async_string_method_contract() -> FfiContract {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_class(ClassDef {
+            id: ClassId::new("Named"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("load"),
+                receiver: Receiver::OwnedSelf,
+                params: vec![ParamDef {
+                    name: ParamName::new("refresh"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::Bool),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::String),
+                execution_kind: ExecutionKind::Async,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
+        }
+    }
+
+    fn sync_string_method_contract() -> FfiContract {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_class(ClassDef {
+            id: ClassId::new("Named"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("load"),
+                receiver: Receiver::OwnedSelf,
+                params: vec![ParamDef {
+                    name: ParamName::new("refresh"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::Bool),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::String),
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        FfiContract {
+            package: PackageInfo {
+                name: "demo".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
         }
     }
 
@@ -4889,6 +5308,133 @@ mod tests {
             "expected stream items to be decoded via PointReader, got: {}",
             stream.pop_batch_items_expr,
         );
+    }
+
+    #[test]
+    fn async_string_function_uses_status_checked_buffer_completion() {
+        let contract = async_string_function_contract();
+        let module = lower_module(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.func_name == "fetchName")
+            .expect("async function should be lowered");
+        let native = module
+            .native
+            .functions
+            .iter()
+            .find(|function| function.ffi_name == "boltffi_fetch_name")
+            .expect("native async function should be lowered");
+        let async_call = function
+            .async_call
+            .as_ref()
+            .expect("async function should include async metadata");
+        let native_async = native
+            .async_ffi
+            .as_ref()
+            .expect("native async function should include async ffi metadata");
+
+        assert!(!async_call.return_is_direct);
+        assert_eq!(async_call.decode_expr, "reader.readString()");
+        assert_eq!(native_async.complete_return_jni_type, "ByteArray?");
+    }
+
+    #[test]
+    fn async_string_method_uses_status_checked_buffer_completion() {
+        let contract = async_string_method_contract();
+        let module = lower_module(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.class_name == "Named")
+            .expect("record methods should be lowered to a class");
+        let method = class
+            .methods
+            .iter()
+            .find_map(|method| match &method.impl_ {
+                KotlinMethodImpl::AsyncMethod(rendered)
+                    if rendered.contains("suspend fun load(") =>
+                {
+                    Some(rendered)
+                }
+                _ => None,
+            })
+            .expect("async method should be lowered");
+        let native_class = module
+            .native
+            .classes
+            .iter()
+            .find(|class| class.ffi_free == "boltffi_named_free")
+            .expect("native class should be lowered");
+        let native_method = native_class
+            .async_methods
+            .iter()
+            .find(|method| method.ffi_name == "boltffi_named_load")
+            .expect("native async method should be lowered");
+
+        assert!(method.contains("val buf = Native.boltffi_named_load_complete(handle, future)"));
+        assert!(method.contains("reader.readString()"));
+        assert_eq!(native_method.return_jni_type, "ByteArray?");
+    }
+
+    #[test]
+    fn sync_string_function_preserves_null_guard_on_direct_return() {
+        let contract = sync_string_function_contract();
+        let module = lower_module(&contract);
+        let rendered = KotlinEmitter::emit(&module);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.func_name == "fetchName")
+            .expect("sync function should be lowered");
+        let native = module
+            .native
+            .functions
+            .iter()
+            .find(|function| function.ffi_name == "boltffi_fetch_name")
+            .expect("native sync function should be lowered");
+
+        assert!(function.return_is_direct);
+        assert!(function.direct_return_is_nullable);
+        assert!(rendered.contains("val result = Native.boltffi_fetch_name()"));
+        assert!(rendered.contains("?: throw FfiException(-1, \"Null buffer returned\")"));
+        assert_eq!(native.return_jni_type, "String?");
+    }
+
+    #[test]
+    fn sync_string_method_preserves_null_guard_on_direct_return() {
+        let contract = sync_string_method_contract();
+        let module = lower_module(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.class_name == "Named")
+            .expect("class should be lowered");
+        let method = class
+            .methods
+            .iter()
+            .find_map(|method| match &method.impl_ {
+                KotlinMethodImpl::SyncMethod(rendered) if rendered.contains("fun load(") => {
+                    Some(rendered)
+                }
+                _ => None,
+            })
+            .expect("sync method should be lowered");
+        let native_class = module
+            .native
+            .classes
+            .iter()
+            .find(|class| class.ffi_free == "boltffi_named_free")
+            .expect("native class should be lowered");
+        let native_method = native_class
+            .sync_methods
+            .iter()
+            .find(|method| method.ffi_name == "boltffi_named_load")
+            .expect("native sync method should be lowered");
+
+        assert!(method.contains("val result = Native.boltffi_named_load(handle, refresh)"));
+        assert!(method.contains("?: throw FfiException(-1, \"Null buffer returned\")"));
+        assert_eq!(native_method.return_jni_type, "String?");
     }
 
     #[test]

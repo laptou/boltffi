@@ -1,6 +1,6 @@
 ---
 title: "Getting Started"
-description: "Set up a BoltFFI Rust library, install prerequisites, configure packaging, and generate bindings for Apple, Android, Java, and WASM targets."
+description: "Set up a BoltFFI Rust library, install prerequisites, configure packaging, and generate bindings for Apple, Android, Java, C#, and WASM targets."
 ---
 
 # Getting Started
@@ -13,6 +13,7 @@ This guide walks you through creating a Rust library and packaging it for use in
 - For Apple: Xcode 15+ with command line tools
 - For Android: Android Studio with NDK
 - For Java: JDK 8+ with `javac` and a C compiler for the JNI bridge
+- For C#: .NET SDK 10.0+ for the current C# demo and generated binding tests
 - For WASM: Node.js 18+ and wasm-pack (`cargo install wasm-pack`)
 
 ## Install BoltFFI
@@ -37,7 +38,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 boltffi = "0.1"
@@ -67,17 +68,18 @@ pub fn distance(a: Point, b: Point) -> f64 {
 }
 ```
 
-## Build and package
+## Build, package, or generate
 
 ```bash
 boltffi init              # creates boltffi.toml
-boltffi pack all --release    # builds for all platforms
+boltffi pack all --release    # packages all enabled packaged targets
 ```
 
 This creates:
 - `dist/apple/` - XCFramework + Swift bindings
 - `dist/android/` - JNI libraries + Kotlin bindings
 - `dist/java/` - JNI library + Java bindings
+- `dist/csharp/` - NuGet package + native runtime assets
 - `dist/wasm/` - WASM module + TypeScript bindings
 
 To build for a single platform:
@@ -86,6 +88,7 @@ To build for a single platform:
 boltffi pack apple 
 boltffi pack android
 boltffi pack java
+boltffi pack csharp
 boltffi pack wasm
 ```
 
@@ -126,6 +129,26 @@ System.out.println(distance(p1, p2));  // 5.0
 ```
 
 On Java 16+ with `min_version = 16` in `boltffi.toml`, records are used instead of classes. On Java 8+, the same API works with generated final classes.
+
+## Use in C#
+
+Build the NuGet package and add it to your .NET project from a local package source:
+
+```bash
+boltffi pack csharp
+```
+
+This produces a `.nupkg` under `dist/csharp/packages/` with the bindings and the native runtime
+assets bundled under `runtimes/<rid>/native/`. Reference it from your project just like any other
+NuGet dependency, then:
+
+```csharp
+using MyLib;
+
+var p1 = new Point(0.0, 0.0);
+var p2 = new Point(3.0, 4.0);
+Console.WriteLine(MyLib.Distance(p1, p2));  // 5.0
+```
 
 ## Use in TypeScript
 

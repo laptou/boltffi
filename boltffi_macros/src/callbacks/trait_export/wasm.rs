@@ -3,8 +3,8 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{FnArg, Pat, ReturnType};
 
-use super::CallbackReturnType;
 use super::future;
+use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
 use crate::callbacks::snake_case_ident;
 use crate::index::custom_types;
@@ -187,7 +187,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         let complete_export = quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C-unwind" fn #complete_export_name(
+            pub unsafe extern "C" fn #complete_export_name(
                 request_id: u32,
                 completion_code: i32,
                 data_ptr: u32,
@@ -271,7 +271,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         let complete_export = quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
-            pub unsafe extern "C-unwind" fn #complete_export_name(
+            pub unsafe extern "C" fn #complete_export_name(
                 request_id: u32,
                 completion_code: i32,
                 data_ptr: u32,
@@ -332,7 +332,6 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         match return_type {
             Some(return_type) => {
                 if let Some(result_types) = CallbackReturnType::new(return_type).result_types() {
-                    let ok_ty = result_types.ok;
                     let err_type = result_types.err;
                     let lowered = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
                     if lowered.uses_async_completion_wire_decode() {
@@ -354,15 +353,21 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                                                 )
                                             ));
                                         }
-                                        let ok_val: #ok_ty = ::boltffi::__private::wire::decode(&result.data)
-                                            .expect("wire decode async callback ok return");
-                                        std::task::Poll::Ready(Ok(ok_val))
+                                        let value: #return_type = ::boltffi::__private::wire::decode(&result.data)
+                                            .expect("wire decode async callback return");
+                                        std::task::Poll::Ready(value)
                                     }
                                     None => std::task::Poll::Pending,
                                 }
                             }).await
                         });
                     }
+                    let Some(ok_ty) = lowered.fallible_ok_type() else {
+                        return Err(syn::Error::new_spanned(
+                            return_type,
+                            "boltffi: wasm async Result callback: expected Encoded error strategy with a known Ok type",
+                        ));
+                    };
                     return Ok(quote! {
                         std::future::poll_fn(move |cx| {
                             callback_registry.set_waker(request_id, cx.waker().clone());
@@ -599,31 +604,4 @@ struct WasmCallbackParamLowering {
     rust_param: TokenStream,
     call_args: Vec<TokenStream>,
     prelude: Option<TokenStream>,
-}
-
-#[cfg(test)]
-mod wasm_async_result_wire_tests {
-    //! regression: typescript fulfills fallible async callbacks with ok payload bytes only; wasm must decode `#ok_ty`, not `Result<#ok_ty, E>`.
-
-    use quote::quote;
-    use syn::parse_quote;
-
-    #[test]
-    fn wire_success_decode_expect_label_targets_ok_payload_only() {
-        let ok_ty: syn::Type = parse_quote!(Vec<u8>);
-        let tokens = quote! {
-            let ok_val: #ok_ty = ::boltffi::__private::wire::decode(&result.data)
-                .expect("wire decode async callback ok return");
-            std::task::Poll::Ready(Ok(ok_val))
-        };
-        let rendered = tokens.to_string();
-        assert!(
-            rendered.contains("wire decode async callback ok return"),
-            "unexpected token render: {rendered}"
-        );
-        assert!(
-            !rendered.contains("wire decode async callback return"),
-            "must not use legacy full-return decode label on ok payload path: {rendered}"
-        );
-    }
 }

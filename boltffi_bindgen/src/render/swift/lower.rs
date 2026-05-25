@@ -3,8 +3,8 @@ use boltffi_ffi_rules::naming::{
     self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
 };
 use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy,
-    ValueReturnMethod, ValueReturnStrategy,
+    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform,
+    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
 };
 use heck::ToLowerCamelCase;
 
@@ -13,12 +13,12 @@ use std::collections::{HashMap, HashSet};
 use super::emit;
 use super::plan::{
     AsyncEncodedErrInfo, CompositeFieldMapping, DirectBufferCompositeMapping, SwiftAsyncConversion,
-    SwiftAsyncResult, SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam,
-    SwiftClass, SwiftClosureTrampoline, SwiftClosureTrampolineParam, SwiftConstructor,
-    SwiftConversion, SwiftCustomType, SwiftEnum, SwiftEnumStyle, SwiftField, SwiftFunction,
-    SwiftMethod, SwiftModule, SwiftNativeConversion, SwiftNativeMapping, SwiftParam, SwiftRecord,
-    SwiftReturn, SwiftStream, SwiftStreamItemDelivery, SwiftStreamMode, SwiftVariant,
-    SwiftVariantPayload, ValueSelfParam,
+    SwiftAsyncResult, SwiftCallMode, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam, SwiftClass,
+    SwiftClosureTrampoline, SwiftClosureTrampolineParam, SwiftConstructor, SwiftConversion,
+    SwiftCustomType, SwiftEnum, SwiftEnumStyle, SwiftField, SwiftFunction, SwiftMethod,
+    SwiftModule, SwiftNativeConversion, SwiftNativeMapping, SwiftParam, SwiftRecord, SwiftReturn,
+    SwiftStream, SwiftStreamItemDelivery, SwiftStreamMode, SwiftVariant, SwiftVariantPayload,
+    ValueSelfParam,
 };
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
@@ -158,14 +158,7 @@ impl<'a> SwiftLowerer<'a> {
         match type_expr {
             TypeExpr::Custom(id) => self.swift_named_custom_type(id.as_str()),
             TypeExpr::Option(inner) => format!("{}?", self.resolve_swift_type(inner)),
-            TypeExpr::Vec(inner) => {
-                // must match `swift_type` / wire decode (`readBytes` → Data)
-                if matches!(inner.as_ref(), TypeExpr::Primitive(PrimitiveType::U8)) {
-                    "Data".to_string()
-                } else {
-                    format!("[{}]", self.resolve_swift_type(inner))
-                }
-            }
+            TypeExpr::Vec(inner) => format!("[{}]", self.resolve_swift_type(inner)),
             TypeExpr::Result { ok, err } => self.swift_result_type(ok, err),
             _ => emit::swift_type(type_expr),
         }
@@ -371,7 +364,11 @@ impl<'a> SwiftLowerer<'a> {
                     def.id.as_str()
                 ))
             })?;
-            methods.push(self.lower_value_type_method(method, call, &abi_record.encode_ops));
+            methods.push(self.lower_value_type_method(
+                method,
+                call,
+                &abi_record.encode_ops,
+            ));
         }
 
         Ok(SwiftRecord {
@@ -435,8 +432,8 @@ impl<'a> SwiftLowerer<'a> {
             },
             ConstructorDef::NamedInit {
                 name,
-                first_param: _,
-                rest_params: _,
+                first_param,
+                rest_params,
                 is_fallible,
                 is_optional,
                 doc,
@@ -484,9 +481,7 @@ impl<'a> SwiftLowerer<'a> {
         ctor: &ConstructorDef,
     ) -> ReturnDef {
         if ctor.is_optional() {
-            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(
-                class.id.clone(),
-            ))))
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Handle(class.id.clone()))))
         } else if ctor.is_fallible() {
             ReturnDef::Result {
                 ok: TypeExpr::Handle(class.id.clone()),
@@ -650,7 +645,11 @@ impl<'a> SwiftLowerer<'a> {
                     def.id.as_str()
                 ))
             })?;
-            methods.push(self.lower_value_type_method(method, call, &abi_enum.encode_ops));
+            methods.push(self.lower_value_type_method(
+                method,
+                call,
+                &abi_enum.encode_ops,
+            ));
         }
 
         Ok(SwiftEnum {
@@ -685,7 +684,10 @@ impl<'a> SwiftLowerer<'a> {
                         } else {
                             lowered.swift_name.clone()
                         };
-                        let encode = remap_root_in_seq(&lowered.encode, ValueExpr::Var(binding));
+                        let encode = remap_root_in_seq(
+                            &lowered.encode,
+                            ValueExpr::Var(binding),
+                        );
                         SwiftField { encode, ..lowered }
                     })
                     .collect(),
@@ -703,11 +705,14 @@ impl<'a> SwiftLowerer<'a> {
                             } else {
                                 lowered.swift_name.clone()
                             };
-                            let encode =
-                                remap_root_in_seq(&lowered.encode, ValueExpr::Var(binding));
+                            let encode = remap_root_in_seq(
+                                &lowered.encode,
+                                ValueExpr::Var(binding),
+                            );
                             SwiftField { encode, ..lowered }
                         } else {
-                            let encode = remap_enum_encode_bindings_in_write_seq(&lowered.encode);
+                            let encode =
+                                remap_enum_encode_bindings_in_write_seq(&lowered.encode);
                             SwiftField { encode, ..lowered }
                         }
                     })
@@ -793,8 +798,8 @@ impl<'a> SwiftLowerer<'a> {
                             },
                             ConstructorDef::NamedInit {
                                 name,
-                                first_param: _,
-                                rest_params: _,
+                                first_param,
+                                rest_params,
                                 is_fallible,
                                 is_optional,
                                 doc,
@@ -1168,7 +1173,9 @@ impl<'a> SwiftLowerer<'a> {
                         "let {label} = {raw_name}.handle == 0 ? nil : {protocol}Bridge.wrap({raw_name})"
                     ))
                 } else {
-                    Some(format!("let {label} = {protocol}Bridge.wrap({raw_name})"))
+                    Some(format!(
+                        "let {label} = {protocol}Bridge.wrap({raw_name})"
+                    ))
                 };
                 let proxy_cb = if *nullable {
                     format!(
@@ -1251,8 +1258,10 @@ impl<'a> SwiftLowerer<'a> {
         semantic_params: &[ParamDef],
         call: &AbiCall,
     ) -> Vec<SwiftParam> {
-        let semantic_names: HashSet<&str> =
-            semantic_params.iter().map(|p| p.name.as_str()).collect();
+        let semantic_names: HashSet<&str> = semantic_params
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         let mut out = Vec::new();
         for abi in &call.params {
             if abi.name.as_str() == "self" {
@@ -1642,19 +1651,22 @@ impl<'a> SwiftLowerer<'a> {
                 decode_ops,
                 encode_ops,
             } => {
-                let direct_ok_carrier =
-                    matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. });
+                let direct_ok_carrier = matches!(error, ErrorTransport::DirectOkWithEncodedErr { .. });
                 let result_decode = return_shape.decode_ops.clone().unwrap_or_else(|| ReadSeq {
                     size: SizeExpr::Fixed(0),
                     ops: vec![],
                     shape: WireShape::Value,
                 });
-                let ok_variant = if self.is_c_style_enum_return(returns) {
-                    SwiftReturn::CStyleEnumFromRawValue {
-                        swift_type: self.swift_return_value_type(returns),
+                let ok_variant = match returns {
+                    ReturnDef::Result {
+                        ok: TypeExpr::Void, ..
+                    } => SwiftReturn::Void,
+                    _ if self.is_c_style_enum_return(returns) => {
+                        SwiftReturn::CStyleEnumFromRawValue {
+                            swift_type: self.swift_return_value_type(returns),
+                        }
                     }
-                } else {
-                    base
+                    _ => base,
                 };
                 SwiftReturn::Throws {
                     ok: Box::new(ok_variant),
@@ -2399,7 +2411,7 @@ impl<'a> SwiftLowerer<'a> {
                     },
                     typed_async_err,
                 }
-            }
+            },
             Some(Transport::Callback {
                 callback_id,
                 nullable,
@@ -2544,11 +2556,13 @@ mod tests {
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
-        CStyleVariant, CallbackKind, CallbackMethodDef, CallbackTraitDef, ConstructorDef,
-        DataVariant, EnumDef, EnumRepr, FieldDef, MethodDef, ParamDef, ParamPassing, Receiver,
-        RecordDef, ReturnDef, VariantPayload,
+        CStyleVariant, CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef,
+        DataVariant, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef, ParamPassing,
+        Receiver, RecordDef, ReturnDef, VariantPayload,
     };
-    use crate::ir::ids::{CallbackId, EnumId, FieldName, MethodId, ParamName, VariantName};
+    use crate::ir::ids::{
+        CallbackId, ClassId, EnumId, FieldName, FunctionId, MethodId, ParamName, VariantName,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
 
     fn empty_contract() -> FfiContract {
@@ -2669,66 +2683,6 @@ mod tests {
         assert!(
             !record.is_blittable,
             "Scores should NOT be blittable (has Vec)"
-        );
-    }
-
-    #[test]
-    // vec<u8> maps to swift Data and wire decode uses readBytes() -> Data (not [u8])
-    fn vec_u8_field_maps_to_data_wire_codec() {
-        let mut contract = empty_contract();
-        contract.catalog.insert_record(RecordDef {
-            is_repr_c: true,
-            is_error: false,
-            id: RecordId::new("Blob"),
-            fields: vec![FieldDef {
-                name: FieldName::new("data"),
-                type_expr: TypeExpr::Vec(Box::new(TypeExpr::Primitive(PrimitiveType::U8))),
-                doc: None,
-                default: None,
-            }],
-            constructors: vec![],
-            methods: vec![],
-            doc: None,
-            deprecated: None,
-        });
-
-        let module = lower_contract(&contract);
-        let record = &module.records[0];
-        assert_eq!(record.fields[0].swift_type, "Data");
-        assert_eq!(record.fields[0].wire_reader_decode(), "reader.readBytes()");
-        assert_eq!(
-            record.fields[0].wire_writer_encode(),
-            "writer.writeBytes(self.data)"
-        );
-    }
-
-    #[test]
-    fn optional_vec_u8_maps_to_optional_data_wire_codec() {
-        let mut contract = empty_contract();
-        contract.catalog.insert_record(RecordDef {
-            is_repr_c: true,
-            is_error: false,
-            id: RecordId::new("MaybeBlob"),
-            fields: vec![FieldDef {
-                name: FieldName::new("payload"),
-                type_expr: TypeExpr::Option(Box::new(TypeExpr::Vec(Box::new(
-                    TypeExpr::Primitive(PrimitiveType::U8),
-                )))),
-                doc: None,
-                default: None,
-            }],
-            constructors: vec![],
-            methods: vec![],
-            doc: None,
-            deprecated: None,
-        });
-
-        let module = lower_contract(&contract);
-        let record = &module.records[0];
-        assert_eq!(record.fields[0].swift_type, "Data?");
-        assert_eq!(
-            record.fields[0].wire_reader_decode(),
-            "reader.readOptional { reader in reader.readBytes() }"
         );
     }
 
@@ -3111,6 +3065,78 @@ mod tests {
         assert_eq!(cb.protocol_name, "Logger");
         assert_eq!(cb.methods.len(), 1);
         assert_eq!(cb.methods[0].params.len(), 1);
+    }
+
+    #[test]
+    fn result_unit_class_method_decodes_ok_as_void() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![ConstructorDef::Default {
+                params: vec![],
+                is_fallible: false,
+                is_optional: false,
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            methods: vec![MethodDef {
+                id: MethodId::new("try_reset_if_positive"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Void,
+                    err: TypeExpr::String,
+                },
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let method = module.classes[0]
+            .methods
+            .iter()
+            .find(|method| method.name == "tryResetIfPositive")
+            .expect("result unit class method should lower");
+        let decode_expr = method
+            .returns
+            .reader_decode_expr()
+            .expect("result unit class method should decode from reader");
+
+        assert!(decode_expr.contains("if tag == 0 { return () }"));
+        assert!(!decode_expr.contains("return reader.readU8()"));
+    }
+
+    #[test]
+    fn result_unit_async_function_decodes_ok_as_void() {
+        let mut contract = empty_contract();
+        contract.functions.push(FunctionDef {
+            id: FunctionId::new("try_reset_async"),
+            params: vec![],
+            returns: ReturnDef::Result {
+                ok: TypeExpr::Void,
+                err: TypeExpr::String,
+            },
+            execution_kind: ExecutionKind::Async,
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let SwiftCallMode::Async { result, .. } = &module.functions[0].mode else {
+            panic!("result unit async function should lower as async");
+        };
+        let decode_expr = result
+            .reader_decode_expr()
+            .expect("result unit async function should decode from reader");
+
+        assert!(decode_expr.contains("if tag == 0 { return () }"));
+        assert!(!decode_expr.contains("return reader.readU8()"));
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub(crate) fn pack_python(
         &options.execution.cargo_args,
         &options.python_interpreters,
     )?;
+    let wheel_builder = PythonWheelBuilder::new(&plan)?;
     step.finish_success();
 
     if options.execution.regenerate {
@@ -72,7 +73,7 @@ pub(crate) fn pack_python(
     };
 
     let step = reporter.step("Building Python wheel");
-    let built_wheel_matrix = PythonWheelBuilder::new(&plan)?.build(&shared_library, &step)?;
+    let built_wheel_matrix = wheel_builder.build(&shared_library, &step)?;
     let wheel_summary = built_wheel_matrix
         .wheels
         .iter()
@@ -94,6 +95,7 @@ pub(crate) fn pack_python(
 #[cfg(test)]
 mod tests {
     use super::pack_python;
+    use crate::cli::CliError;
     use crate::commands::pack::{PackExecutionOptions, PackPythonOptions};
     use crate::config::{CargoConfig, Config, PackageConfig, PythonConfig, TargetsConfig};
     use crate::reporter::{Reporter, Verbosity};
@@ -147,7 +149,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::cli::CliError::CommandFailed { command, status: None }
+            CliError::CommandFailed { command, status: None }
                 if command == "targets.python.enabled = false"
         ));
     }
@@ -172,7 +174,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::cli::CliError::CommandFailed { command, status: None }
+            CliError::CommandFailed { command, status: None }
                 if command.contains("python is experimental")
         ));
     }
