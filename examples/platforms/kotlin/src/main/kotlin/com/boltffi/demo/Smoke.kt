@@ -1,5 +1,12 @@
 package com.boltffi.demo
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+
 private fun requireThat(condition: Boolean, message: String) {
     if (!condition) {
         throw IllegalStateException(message)
@@ -37,6 +44,23 @@ fun main() {
 
     val origin = Point.origin()
     requireThat(origin == Point(0.0, 0.0), "Point.origin failed")
+
+    runBlocking {
+        withTimeout(5_000) {
+            EventBus().use { bus ->
+                val points = async {
+                    bus.subscribePoints().take(2).toList()
+                }
+                delay(100)
+                bus.emitPoint(Point(1.0, 2.0))
+                bus.emitPoint(Point(3.0, 4.0))
+                requireThat(
+                    points.await() == listOf(Point(1.0, 2.0), Point(3.0, 4.0)),
+                    "EventBus.subscribePoints failed",
+                )
+            }
+        }
+    }
 
     println("Kotlin smoke test passed")
 }

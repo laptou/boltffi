@@ -1,7 +1,7 @@
 use std::process::Command;
 
-use crate::android::AndroidNdk;
-use crate::error::{CliError, Result};
+use crate::cli::{CliError, Result};
+use crate::toolchain::AndroidNdk;
 
 #[derive(Debug)]
 pub struct EnvironmentCheck {

@@ -6,7 +6,13 @@
 {%- if return_is_unit %}
     Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- elif return_is_direct %}
+{%- if direct_return_is_nullable %}
+    val result = Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+        ?: throw FfiException(-1, "Null buffer returned")
+    return result{{ return_cast }}
+{%- else %}
     return Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_cast }}
+{%- endif %}
 {%- else %}
     val buf = Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
         ?: throw FfiException(-1, "Null buffer returned")
@@ -27,7 +33,13 @@
 {%- if return_is_unit %}
         Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- elif return_is_direct %}
+{%- if direct_return_is_nullable %}
+        val result = Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
+            ?: throw FfiException(-1, "Null buffer returned")
+        return result{{ return_cast }}
+{%- else %}
         return Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_cast }}
+{%- endif %}
 {%- else %}
         val buf = Native.{{ ffi_name }}({% if include_handle %}handle{% if native_args.len() > 0 %}, {% endif %}{% endif %}{% for arg in native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
             ?: throw FfiException(-1, "Null buffer returned")

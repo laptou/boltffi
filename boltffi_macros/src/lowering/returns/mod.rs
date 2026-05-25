@@ -5,12 +5,32 @@ pub(crate) mod model;
 
 #[cfg(test)]
 mod tests {
+    use super::classify::classify_value_return_strategy;
     use super::model::{ResolvedReturn, WasmOptionScalarEncoding};
+    use crate::index::callback_traits::CallbackTraitRegistry;
+    use crate::index::custom_types::CustomTypeRegistry;
+    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::exported_classes::ExportedClassRegistry;
+    use crate::lowering::returns::model::ReturnLoweringContext;
     use boltffi_ffi_rules::transport::{
         EncodedReturnStrategy, ErrorReturnStrategy, ReturnContract, ReturnInvocationContext,
         ReturnPlatform, ValueReturnMethod, ValueReturnStrategy,
     };
     use syn::parse_quote;
+
+    fn empty_return_lowering_context<'a>(
+        custom_types: &'a CustomTypeRegistry,
+        data_types: &'a DataTypeRegistry,
+        exported_classes: &'a ExportedClassRegistry,
+        callback_traits: &'a CallbackTraitRegistry,
+    ) -> ReturnLoweringContext<'a> {
+        ReturnLoweringContext::new(
+            custom_types,
+            data_types,
+            exported_classes,
+            callback_traits,
+        )
+    }
 
     #[test]
     fn wasm_option_bool_uses_numeric_bool_encoding() {
@@ -22,6 +42,66 @@ mod tests {
                 .to_string();
 
         assert_eq!(expression, "if value { 1.0 } else { 0.0 }");
+    }
+
+    #[test]
+    fn wasm_option_i64_is_not_nan_boxed() {
+        assert!(
+            WasmOptionScalarEncoding::from_option_rust_type(&parse_quote!(Option<i64>)).is_none()
+        );
+        assert!(
+            WasmOptionScalarEncoding::from_option_rust_type(&parse_quote!(Option<u64>)).is_none()
+        );
+    }
+
+    #[test]
+    fn option_i64_and_u64_return_use_wire_encoding_to_preserve_bigint_payloads() {
+        let custom_types = CustomTypeRegistry::default();
+        let data_types = DataTypeRegistry::default();
+        let exported_classes = ExportedClassRegistry::default();
+        let callback_traits = CallbackTraitRegistry::default();
+        let context = empty_return_lowering_context(
+            &custom_types,
+            &data_types,
+            &exported_classes,
+            &callback_traits,
+        );
+
+        let i64_strategy =
+            classify_value_return_strategy(&parse_quote!(Option<i64>), &context).unwrap();
+        let u64_strategy =
+            classify_value_return_strategy(&parse_quote!(Option<u64>), &context).unwrap();
+
+        assert_eq!(
+            i64_strategy,
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+        );
+        assert_eq!(
+            u64_strategy,
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+        );
+    }
+
+    #[test]
+    fn option_i32_return_keeps_compact_scalar_encoding() {
+        let custom_types = CustomTypeRegistry::default();
+        let data_types = DataTypeRegistry::default();
+        let exported_classes = ExportedClassRegistry::default();
+        let callback_traits = CallbackTraitRegistry::default();
+        let context = empty_return_lowering_context(
+            &custom_types,
+            &data_types,
+            &exported_classes,
+            &callback_traits,
+        );
+
+        let strategy =
+            classify_value_return_strategy(&parse_quote!(Option<i32>), &context).unwrap();
+
+        assert_eq!(
+            strategy,
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar)
+        );
     }
 
     #[test]
@@ -51,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_vec_return_uses_void_wasm_failure() {
+    fn direct_vec_return_uses_platform_aware_early_return() {
         let resolved_return = ResolvedReturn::new(
             parse_quote!(Vec<i32>),
             ReturnContract::infallible(ValueReturnStrategy::Buffer(
@@ -64,11 +144,30 @@ mod tests {
                 .value_return_method(ReturnInvocationContext::SyncExport, ReturnPlatform::Wasm,),
             ValueReturnMethod::WriteToReturnSlot
         ));
+
+        let combined = resolved_return
+            .invalid_arg_early_return_statement()
+            .to_string();
+        assert!(
+            combined.contains("return ;"),
+            "combined: wasm branch should use void return"
+        );
+        assert!(
+            combined.contains("return :: boltffi :: __private :: FfiBuf :: default ()"),
+            "combined: native branch should return FfiBuf::default()"
+        );
+
         assert_eq!(
             resolved_return
-                .invalid_arg_early_return_statement()
+                .wasm_invalid_arg_early_return_statement()
                 .to_string(),
-            "return ;"
+            "return ;",
+        );
+        assert_eq!(
+            resolved_return
+                .native_invalid_arg_early_return_statement()
+                .to_string(),
+            "return :: boltffi :: __private :: FfiBuf :: default () ;",
         );
     }
 

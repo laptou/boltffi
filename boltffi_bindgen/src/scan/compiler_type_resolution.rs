@@ -188,7 +188,7 @@ pub fn resolve(
     fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir {}: {}", src_dir.display(), e))?;
 
     let cargo_toml = format!(
-        "[package]\nname = \"boltffi_bindgen_type_resolution_runner\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n[dependencies]\ntarget_crate = {{ path = \"{}\", package = \"{}\" }}\n",
+        "[workspace]\n\n[package]\nname = \"boltffi_bindgen_type_resolution_runner\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n[dependencies]\ntarget_crate = {{ path = '{}', package = \"{}\" }}\n",
         target_package.edition,
         target_manifest_dir.display(),
         target_package.name,

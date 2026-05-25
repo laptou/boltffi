@@ -1,0 +1,54 @@
+//! Canonical source AST for exported BoltFFI APIs.
+//!
+//! The values in this crate are the handoff from macro scanning to resolution.
+//! They describe the exported Rust surface in a stable, serializable vocabulary:
+//! records, enums, functions, classes, callbacks, streams, constants, custom
+//! types, attributes, documentation, and type expressions.
+//!
+//! A record here can carry `#[repr(C)]`, named fields, and methods. The crate
+//! stops at that source description; resolved ABI and binding shapes live in
+//! the next pipeline stages.
+
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+mod attribute;
+mod callable;
+mod callback;
+mod class;
+mod constant;
+mod contract;
+mod custom;
+mod documentation;
+mod enumeration;
+mod ids;
+mod literal;
+mod name;
+mod primitive;
+mod record;
+mod source;
+mod stream;
+mod type_expr;
+
+pub use attribute::{AttributeInput, ReprAttr, ReprItem, UserAttr};
+pub use callable::{
+    CallableForm, ExecutionKind, FunctionDef, MethodDef, ParameterDef, ParameterPassing, Receiver,
+    ReturnDef,
+};
+pub use callback::CallbackTraitDef;
+pub use class::ClassDef;
+pub use constant::ConstantDef;
+pub use contract::{PackageInfo, SourceContract};
+pub use custom::{CustomTypeConverters, CustomTypeDef};
+pub use documentation::{DeprecationInfo, DocComment};
+pub use enumeration::{EnumDef, VariantDef, VariantPayload};
+pub use ids::{
+    CallbackId, ClassId, ConstantId, CustomTypeId, EnumId, FunctionId, MethodId, RecordId, StreamId,
+};
+pub use literal::{ConstExpr, DefaultValue, FloatLiteral, IntegerLiteral, Literal};
+pub use name::{CanonicalName, GenericArgument, NamePart, Path, PathRoot, PathSegment};
+pub use primitive::Primitive;
+pub use record::{FieldDef, RecordDef};
+pub use source::{Source, SourceFile, SourceSpan, Visibility};
+pub use stream::{StreamDef, StreamMode};
+pub use type_expr::{ClosureType, TypeExpr, TypeParameter};

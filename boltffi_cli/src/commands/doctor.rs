@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::check::EnvironmentCheck;
+use crate::cli::Result;
 use crate::commands::check::apple_targets_require_lipo;
 use crate::config::Config;
-use crate::error::Result;
 use crate::target::RustTarget;
 
 pub enum ConfigSummary {
@@ -237,6 +237,16 @@ fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_pat
                 "  targets.android.architectures: {}",
                 config
                     .android_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!("  targets.dart.output: {}", config.dart_output().display());
+            println!(
+                "  targets.dart.native_architectures: {}",
+                config
+                    .dart_native_architectures()
                     .iter()
                     .map(|architecture| architecture.canonical_name())
                     .collect::<Vec<_>>()

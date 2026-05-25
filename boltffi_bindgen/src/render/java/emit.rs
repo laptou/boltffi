@@ -1,5 +1,6 @@
 use crate::ir::abi::AbiContract;
 use crate::ir::contract::FfiContract;
+use crate::ir::ids::BuiltinId;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use boltffi_ffi_rules::transport::EnumTagStrategy;
@@ -15,6 +16,7 @@ use super::templates::{
     CStyleEnumTemplate, CallbackCallbacksTemplate, CallbackTraitTemplate, ClassTemplate,
     ClosureCallbacksTemplate, ClosureTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
     ErrorEnumTemplate, FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate,
+    ResultTemplate,
 };
 use askama::Template;
 
@@ -165,6 +167,15 @@ impl JavaEmitter {
 
         files.extend(closure_files.chain(callback_files));
 
+        files.push(JavaFile {
+            file_name: "BoltFFIResult.java".to_string(),
+            source: ResultTemplate {
+                package_name: &module.package_name,
+            }
+            .render()
+            .expect("result template failed"),
+        });
+
         let mut main_source = String::new();
 
         let preamble = PreambleTemplate { module: &module };
@@ -276,6 +287,9 @@ fn emit_reader_read_with_context(seq: &ReadSeq, context: &mut JavaEmitContext) -
         }
         ReadOp::String { .. } => "reader.readString()".to_string(),
         ReadOp::Bytes { .. } => "reader.readBytes()".to_string(),
+        ReadOp::Builtin { id, .. } => {
+            format!("reader.{}()", mappings::java_builtin_read_method(id))
+        }
         ReadOp::Record { id, .. } => {
             format!(
                 "{}.decode(reader)",
@@ -406,6 +420,14 @@ fn emit_write_expr_with_context(
         }
         WriteOp::Bytes { value } => {
             format!("{}.writeBytes({})", writer_name, render_value(value))
+        }
+        WriteOp::Builtin { id, value } => {
+            format!(
+                "{}.{}({})",
+                writer_name,
+                mappings::java_builtin_write_method(id),
+                render_value(value)
+            )
         }
         WriteOp::Option { value, some } => {
             let option_expr = render_value(value);
@@ -542,6 +564,7 @@ fn java_type_for_iteration(ty: &TypeExpr) -> String {
         TypeExpr::Primitive(primitive) => mappings::java_boxed_type(*primitive).to_string(),
         TypeExpr::String => "String".to_string(),
         TypeExpr::Bytes => "byte[]".to_string(),
+        TypeExpr::Builtin(id) => mappings::java_builtin_type(id).to_string(),
         TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
         TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
         TypeExpr::Option(inner) => {
@@ -585,6 +608,7 @@ fn emit_size_expr_with_context(size: &SizeExpr, context: &mut JavaEmitContext) -
         SizeExpr::BytesLen(value) => {
             format!("{}.length", render_value(value))
         }
+        SizeExpr::BuiltinSize { id, value } => emit_builtin_size(id, &render_value(value)),
         SizeExpr::WireSize { value, .. } => {
             format!("{}.wireEncodedSize()", render_value(value))
         }
@@ -625,6 +649,13 @@ fn emit_size_expr_with_context(size: &SizeExpr, context: &mut JavaEmitContext) -
             format!("({})", rendered)
         }
         other => panic!("unsupported Java size expr: {:?}", other),
+    }
+}
+
+fn emit_builtin_size(id: &BuiltinId, value: &str) -> String {
+    match id.as_str() {
+        "Url" => format!("(({}).toString().length() * 3)", value),
+        _ => panic!("unsupported Java builtin size: {:?}", id),
     }
 }
 
@@ -699,10 +730,12 @@ mod tests {
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
-        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, FunctionDef,
-        MethodDef, ParamDef, ParamPassing, Receiver, ReturnDef,
+        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, FieldDef,
+        FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef,
     };
-    use crate::ir::ids::{CallbackId, ClassId, FunctionId, MethodId, ParamName};
+    use crate::ir::ids::{
+        CallbackId, ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::render::java::JavaVersion;
     use boltffi_ffi_rules::callable::ExecutionKind;
@@ -749,6 +782,15 @@ mod tests {
             type_expr,
             passing: ParamPassing::Value,
             doc: None,
+        }
+    }
+
+    fn field(name: &str, type_expr: TypeExpr) -> FieldDef {
+        FieldDef {
+            name: FieldName::new(name),
+            type_expr,
+            doc: None,
+            default: None,
         }
     }
 
@@ -898,6 +940,82 @@ mod tests {
             .status()
             .expect("javac should execute");
         assert!(status.success());
+
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    fn emit_value_type_default_constructor_collision_compiles_with_javac_when_available() {
+        if Command::new("javac").arg("-version").output().is_err() {
+            return;
+        }
+
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("point"),
+            fields: vec![
+                field("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                field("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ],
+            constructors: vec![default_ctor(vec![
+                param("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                param("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ])],
+            methods: vec![static_method(
+                "new_",
+                vec![
+                    param("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                    param("y", TypeExpr::Primitive(PrimitiveType::F64)),
+                ],
+                ReturnDef::Value(TypeExpr::Record(RecordId::new("point"))),
+            )],
+            doc: None,
+            deprecated: None,
+        });
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let output = JavaEmitter::emit(
+            &contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            JavaOptions::default(),
+        );
+
+        let point_file = output
+            .files
+            .iter()
+            .find(|file| file.file_name == "Point.java")
+            .expect("record file should exist");
+        assert_eq!(point_file.source.matches("static Point _new").count(), 1);
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let tmp_root = env::temp_dir().join(format!("boltffi-java-keyword-collision-{}", nanos));
+        let package_dir = tmp_root.join(&output.package_path);
+        fs::create_dir_all(&package_dir).expect("should create package directory");
+
+        let source_paths: Vec<_> = output
+            .files
+            .iter()
+            .map(|file| {
+                let path = package_dir.join(&file.file_name);
+                fs::write(&path, &file.source).expect("should write generated source");
+                path
+            })
+            .collect();
+
+        let status = Command::new("javac")
+            .args(source_paths)
+            .status()
+            .expect("javac should execute");
+        assert!(
+            status.success(),
+            "keyword-colliding Java sources should compile"
+        );
 
         let _ = fs::remove_dir_all(tmp_root);
     }

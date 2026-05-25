@@ -10,6 +10,7 @@ native_lib_dir="$script_dir/src/main/java"
 manifest_path="$repo_root/Cargo.toml"
 
 requested_mode="auto"
+requested_python=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,9 +26,13 @@ while [[ $# -gt 0 ]]; do
       requested_mode="auto"
       shift
       ;;
+    --python)
+      requested_python="${2:-}"
+      shift 2
+      ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--auto|--all|--java 8|16]" >&2
+      echo "Usage: $0 [--auto|--all|--java 8|16] [--python <interpreter>]" >&2
       exit 2
       ;;
   esac
@@ -79,9 +84,31 @@ cleanup() {
 
 trap cleanup EXIT
 
+resolve_python() {
+  if [[ -n "$requested_python" ]]; then
+    printf '%s\n' "$requested_python"
+    return
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return
+  fi
+
+  echo "Missing python interpreter" >&2
+  exit 1
+}
+
+python_command="$(resolve_python)"
+
 set_min_version() {
   local version_mode="$1"
-  python3 - "$demo_config" "$version_mode" <<'PY'
+  "$python_command" - "$demo_config" "$version_mode" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -123,9 +150,9 @@ run_case() {
   mkdir -p "$build_dir"
 
   find "$output_dir/com/boltffi/demo" -maxdepth 1 -name '*.java' ! -name 'DemoTest.java' -print0 \
-    | xargs -0 javac --release "$javac_release" -d "$build_dir"
+    | xargs -0 javac -encoding UTF-8 --release "$javac_release" -d "$build_dir"
 
-  javac --release "$javac_release" -cp "$build_dir" -d "$build_dir" "$demo_test_source"
+  javac -encoding UTF-8 --release "$javac_release" -cp "$build_dir" -d "$build_dir" "$demo_test_source"
 
   java -ea -cp "$build_dir" -Djava.library.path="$native_lib_dir" com.boltffi.demo.DemoTest
 

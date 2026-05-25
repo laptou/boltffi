@@ -1,7 +1,7 @@
 import Demo
 import XCTest
 
-final class UnsafeSingleThreadedTests: XCTestCase {
+final class UnsafeSingleThreadedTests: DemoTestCase {
     func testStateHolderSyncAndAsyncMethods() async throws {
         let stateHolder = StateHolder(label: "local")
         let incrementer = makeIncrementingCallback(delta: 3)
@@ -27,5 +27,18 @@ final class UnsafeSingleThreadedTests: XCTestCase {
         stateHolder.clear()
         XCTAssertEqual(stateHolder.getValue(), 0)
         XCTAssertEqual(stateHolder.getItems(), [])
+
+        let counter = CounterSingleThreaded()
+        counter.set(value: 5)
+        XCTAssertEqual(counter.get(), 5)
+        counter.increment()
+        XCTAssertEqual(counter.get(), 6)
+
+        let accumulator = AccumulatorSingleThreaded()
+        accumulator.add(amount: 4)
+        accumulator.add(amount: 6)
+        XCTAssertEqual(accumulator.get(), 10)
+        accumulator.reset()
+        XCTAssertEqual(accumulator.get(), 0)
     }
 }

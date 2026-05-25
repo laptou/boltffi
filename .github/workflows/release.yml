@@ -43,7 +43,10 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -76,7 +79,7 @@ jobs:
           git push --tags
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
           name: BoltFFI v${{ inputs.version }}
@@ -112,9 +115,11 @@ jobs:
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          # caching handled by Swatinem/rust-cache below
+          cache: false
+          target: ${{ matrix.target }}
 
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -130,12 +135,12 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p boltffi_cli
+        run: cargo build --profile release-lto --target ${{ matrix.target }} -p boltffi_cli
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          cd target/${{ matrix.target }}/release
+          cd target/${{ matrix.target }}/release-lto
           tar -czvf ../../../${{ matrix.artifact }}.tar.gz boltffi
           cd ../../..
           sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
@@ -144,14 +149,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
+          cd target/${{ matrix.target }}/release-lto
           Compress-Archive -Path boltffi.exe -DestinationPath ../../../${{ matrix.artifact }}.zip
           cd ../../..
           (Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.artifact }}.zip" | Out-File -Encoding utf8 ${{ matrix.artifact }}.zip.sha256
 
       - name: Upload Release Asset (Unix)
         if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.release.outputs.version }}
           files: |
@@ -160,7 +165,7 @@ jobs:
 
       - name: Upload Release Asset (Windows)
         if: runner.os == 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.release.outputs.version }}
           files: |
@@ -177,7 +182,10 @@ jobs:
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # caching handled by Swatinem/rust-cache below
+          cache: false
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish crates

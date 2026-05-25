@@ -878,6 +878,7 @@ impl SourceScanner {
             alias_resolver,
             &self.compiler_canonical_types,
             None,
+            FfiTypePosition::Value,
         )
         .ok_or_else(|| {
             format!(
@@ -931,6 +932,7 @@ impl SourceScanner {
             alias_resolver,
             &self.compiler_canonical_types,
             None,
+            FfiTypePosition::Value,
         )
         .ok_or_else(|| {
             format!(
@@ -960,36 +962,34 @@ impl SourceScanner {
 
         for item in &syntax.items {
             match item {
-                Item::Struct(item_struct) => {
+                Item::Struct(item_struct)
                     if has_attribute(&item_struct.attrs, "ffi_record")
                         || has_attribute(&item_struct.attrs, "data")
                         || has_attribute(&item_struct.attrs, "error")
                         || has_repr_c(&item_struct.attrs)
                         || (has_attribute(&item_struct.attrs, "derive")
-                            && has_ffi_type_derive(&item_struct.attrs))
-                    {
-                        self.type_registry.register(
-                            item_struct.ident.to_string(),
-                            TypeMeta {
-                                doc: extract_doc_string(&item_struct.attrs),
-                                shape: TypeShape::Pending(PendingKind::Record),
-                            },
-                        );
-                    }
+                            && has_ffi_type_derive(&item_struct.attrs)) =>
+                {
+                    self.type_registry.register(
+                        item_struct.ident.to_string(),
+                        TypeMeta {
+                            doc: extract_doc_string(&item_struct.attrs),
+                            shape: TypeShape::Pending(PendingKind::Record),
+                        },
+                    );
                 }
-                Item::Enum(item_enum) => {
+                Item::Enum(item_enum)
                     if has_repr_int(&item_enum.attrs)
                         || has_attribute(&item_enum.attrs, "data")
-                        || has_attribute(&item_enum.attrs, "error")
-                    {
-                        self.type_registry.register(
-                            item_enum.ident.to_string(),
-                            TypeMeta {
-                                doc: extract_doc_string(&item_enum.attrs),
-                                shape: TypeShape::Pending(PendingKind::Enum),
-                            },
-                        );
-                    }
+                        || has_attribute(&item_enum.attrs, "error") =>
+                {
+                    self.type_registry.register(
+                        item_enum.ident.to_string(),
+                        TypeMeta {
+                            doc: extract_doc_string(&item_enum.attrs),
+                            shape: TypeShape::Pending(PendingKind::Enum),
+                        },
+                    );
                 }
                 Item::Impl(item_impl) => {
                     if (has_attribute(&item_impl.attrs, "ffi_class")
@@ -1063,19 +1063,17 @@ impl SourceScanner {
                     self.process_class(item_impl);
                 }
             }
-            Item::Trait(item_trait) => {
+            Item::Trait(item_trait)
                 if has_attribute(&item_trait.attrs, "ffi_trait")
-                    || has_attribute(&item_trait.attrs, "export")
-                {
-                    self.process_callback_trait(item_trait);
-                }
+                    || has_attribute(&item_trait.attrs, "export") =>
+            {
+                self.process_callback_trait(item_trait);
             }
-            Item::Fn(item_fn) => {
+            Item::Fn(item_fn)
                 if has_attribute(&item_fn.attrs, "ffi_export")
-                    || has_attribute(&item_fn.attrs, "export")
-                {
-                    self.process_function(item_fn);
-                }
+                    || has_attribute(&item_fn.attrs, "export") =>
+            {
+                self.process_function(item_fn);
             }
             Item::Enum(item_enum) => {
                 let is_error = has_attribute(&item_enum.attrs, "error");
@@ -1117,6 +1115,7 @@ impl SourceScanner {
                     &self.alias_resolver,
                     &self.compiler_canonical_types,
                     self_type,
+                    FfiTypePosition::Value,
                 )?;
                 Some((name, ty))
             })
@@ -1134,6 +1133,7 @@ impl SourceScanner {
                 &self.alias_resolver,
                 &self.compiler_canonical_types,
                 self_type,
+                FfiTypePosition::Return,
             ),
         }
     }
@@ -1166,6 +1166,7 @@ impl SourceScanner {
                         &self.alias_resolver,
                         &self.compiler_canonical_types,
                         None,
+                        FfiTypePosition::Value,
                     )?;
                     let mut record_field = RecordField::new(&field_name, field_type);
                     if let Some(doc) = extract_doc_string(&f.attrs) {
@@ -1241,6 +1242,7 @@ impl SourceScanner {
                                 &self.alias_resolver,
                                 &self.compiler_canonical_types,
                                 None,
+                                FfiTypePosition::Value,
                             )?;
                             let mut record_field = RecordField::new(&field_name, field_type);
                             if let Some(doc) = extract_doc_string(&f.attrs) {
@@ -1260,6 +1262,7 @@ impl SourceScanner {
                                 &self.alias_resolver,
                                 &self.compiler_canonical_types,
                                 None,
+                                FfiTypePosition::Value,
                             )?;
                             Some(RecordField::new(format!("value_{i}"), field_type))
                         })
@@ -2281,6 +2284,18 @@ fn has_ffi_type_derive(attrs: &[Attribute]) -> bool {
     })
 }
 
+#[derive(Clone, Copy)]
+enum FfiTypePosition {
+    Value,
+    Return,
+}
+
+impl FfiTypePosition {
+    fn allows_unit(self) -> bool {
+        matches!(self, Self::Return)
+    }
+}
+
 fn extract_stream_attr(
     attrs: &[Attribute],
     registry: &TypeRegistry,
@@ -2322,7 +2337,13 @@ fn extract_item_type(
         .unwrap_or(after_eq.find(')').unwrap_or(after_eq.len()));
     let type_str = after_eq[..type_end].trim();
 
-    string_to_ffi_type(type_str, registry, alias_resolver, compiler_canonical_types)
+    string_to_ffi_type(
+        type_str,
+        registry,
+        alias_resolver,
+        compiler_canonical_types,
+        FfiTypePosition::Value,
+    )
 }
 
 fn extract_stream_mode(tokens: &str) -> StreamMode {
@@ -2345,6 +2366,7 @@ fn rust_type_to_ffi_type(
     alias_resolver: &AliasResolver,
     compiler_canonical_types: &HashMap<String, String>,
     self_type_name: Option<&str>,
+    position: FfiTypePosition,
 ) -> Option<MType> {
     if let Some(custom_type) = registry.classify_custom_remote_type(ty) {
         return Some(custom_type);
@@ -2393,6 +2415,7 @@ fn rust_type_to_ffi_type(
                     alias_resolver,
                     compiler_canonical_types,
                     self_type_name,
+                    FfiTypePosition::Value,
                 );
             }
 
@@ -2406,6 +2429,7 @@ fn rust_type_to_ffi_type(
                         alias_resolver,
                         compiler_canonical_types,
                         self_type_name,
+                        FfiTypePosition::Value,
                     )?;
                     return Some(MType::Vec(Box::new(inner)));
                 }
@@ -2422,6 +2446,7 @@ fn rust_type_to_ffi_type(
                         alias_resolver,
                         compiler_canonical_types,
                         self_type_name,
+                        FfiTypePosition::Value,
                     )?;
                     return Some(MType::Option(Box::new(inner)));
                 }
@@ -2438,6 +2463,7 @@ fn rust_type_to_ffi_type(
                             alias_resolver,
                             compiler_canonical_types,
                             self_type_name,
+                            position,
                         )?;
                         let err = args_iter
                             .next()
@@ -2449,6 +2475,7 @@ fn rust_type_to_ffi_type(
                                         alias_resolver,
                                         compiler_canonical_types,
                                         self_type_name,
+                                        FfiTypePosition::Value,
                                     )
                                 } else {
                                     None
@@ -2477,6 +2504,7 @@ fn rust_type_to_ffi_type(
                 registry,
                 alias_resolver,
                 compiler_canonical_types,
+                position,
             )
         }
         Type::Reference(type_ref) => {
@@ -2493,6 +2521,7 @@ fn rust_type_to_ffi_type(
                     alias_resolver,
                     compiler_canonical_types,
                     self_type_name,
+                    FfiTypePosition::Value,
                 )?;
                 return if type_ref.mutability.is_some() {
                     Some(MType::MutSlice(Box::new(inner)))
@@ -2506,6 +2535,7 @@ fn rust_type_to_ffi_type(
                 alias_resolver,
                 compiler_canonical_types,
                 self_type_name,
+                FfiTypePosition::Value,
             )
         }
         Type::Slice(slice) => {
@@ -2515,9 +2545,27 @@ fn rust_type_to_ffi_type(
                 alias_resolver,
                 compiler_canonical_types,
                 self_type_name,
+                FfiTypePosition::Value,
             )?;
             Some(MType::Slice(Box::new(inner)))
         }
+        Type::Tuple(tuple) if tuple.elems.is_empty() && position.allows_unit() => Some(MType::Void),
+        Type::Paren(paren) => rust_type_to_ffi_type(
+            &paren.elem,
+            registry,
+            alias_resolver,
+            compiler_canonical_types,
+            self_type_name,
+            position,
+        ),
+        Type::Group(group) => rust_type_to_ffi_type(
+            &group.elem,
+            registry,
+            alias_resolver,
+            compiler_canonical_types,
+            self_type_name,
+            position,
+        ),
         Type::ImplTrait(impl_trait) => {
             for bound in &impl_trait.bounds {
                 if let syn::TypeParamBound::Trait(trait_bound) = bound {
@@ -2541,6 +2589,7 @@ fn rust_type_to_ffi_type(
                                     alias_resolver,
                                     compiler_canonical_types,
                                     self_type_name,
+                                    FfiTypePosition::Value,
                                 )
                             })
                             .collect();
@@ -2553,6 +2602,7 @@ fn rust_type_to_ffi_type(
                                 alias_resolver,
                                 compiler_canonical_types,
                                 self_type_name,
+                                FfiTypePosition::Return,
                             )
                             .unwrap_or(MType::Void),
                         };
@@ -2584,6 +2634,7 @@ fn string_to_ffi_type(
     registry: &TypeRegistry,
     alias_resolver: &AliasResolver,
     compiler_canonical_types: &HashMap<String, String>,
+    position: FfiTypePosition,
 ) -> Option<MType> {
     let trimmed = s.trim();
     match trimmed {
@@ -2601,6 +2652,7 @@ fn string_to_ffi_type(
         "usize" => Some(MType::Primitive(Primitive::USize)),
         "isize" => Some(MType::Primitive(Primitive::ISize)),
         "String" | "str" | "std::string::String" | "alloc::string::String" => Some(MType::String),
+        "()" if position.allows_unit() => Some(MType::Void),
         s if s.starts_with("Vec<") => {
             let inner = &s[4..s.len() - 1];
             Some(MType::Vec(Box::new(string_to_ffi_type(
@@ -2608,6 +2660,7 @@ fn string_to_ffi_type(
                 registry,
                 alias_resolver,
                 compiler_canonical_types,
+                FfiTypePosition::Value,
             )?)))
         }
         s if s.starts_with("Option<") => {
@@ -2617,6 +2670,7 @@ fn string_to_ffi_type(
                 registry,
                 alias_resolver,
                 compiler_canonical_types,
+                FfiTypePosition::Value,
             )?)))
         }
         s if s.starts_with("Result<") => {
@@ -2627,11 +2681,18 @@ fn string_to_ffi_type(
                 registry,
                 alias_resolver,
                 compiler_canonical_types,
+                position,
             )?;
             let err = parts
                 .get(1)
                 .and_then(|e| {
-                    string_to_ffi_type(e, registry, alias_resolver, compiler_canonical_types)
+                    string_to_ffi_type(
+                        e,
+                        registry,
+                        alias_resolver,
+                        compiler_canonical_types,
+                        FfiTypePosition::Value,
+                    )
                 })
                 .unwrap_or(MType::String);
             Some(MType::Result {
@@ -2977,12 +3038,7 @@ mod tests {
 
     #[test]
     fn scan_demo_crate_includes_datetime_custom_type_exports() {
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let demo_crate_path = repo_root.join("examples").join("demo");
-        let module = scan_crate(&demo_crate_path, "demo").unwrap();
+        let module = scan_demo_crate();
 
         assert!(
             module
@@ -3002,12 +3058,7 @@ mod tests {
 
     #[test]
     fn scan_demo_crate_preserves_callback_return_type() {
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let demo_crate_path = repo_root.join("examples").join("demo");
-        let module = scan_crate(&demo_crate_path, "demo").unwrap();
+        let module = scan_demo_crate();
 
         let function = module
             .functions
@@ -3466,6 +3517,15 @@ mod tests {
         module
     }
 
+    fn scan_demo_crate() -> Module {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let demo_crate_path = repo_root.join("examples").join("demo");
+        scan_crate(&demo_crate_path, "demo").unwrap()
+    }
+
     #[test]
     fn error_structs_are_scanned_as_records() {
         let source = r#"
@@ -3500,6 +3560,76 @@ mod tests {
         assert!(error_record.is_error);
         assert_eq!(error_record.fields.len(), 2);
         assert_eq!(module.functions.len(), 1);
+    }
+
+    #[test]
+    fn scan_demo_crate_preserves_result_unit_class_method_return_type() {
+        let module = scan_demo_crate();
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Counter")
+            .expect("Counter should be exported");
+        let method = class
+            .methods
+            .iter()
+            .find(|method| method.name == "try_reset_if_positive")
+            .expect("try_reset_if_positive should be exported");
+
+        assert_eq!(
+            method.returns,
+            ReturnType::fallible(MType::Void, MType::String)
+        );
+    }
+
+    #[test]
+    fn scanner_rejects_unit_parameters() {
+        let source = r#"
+            use boltffi::*;
+
+            #[export]
+            pub fn accept_unit(value: ()) -> i32 {
+                1
+            }
+        "#;
+
+        let module = scan_temp_crate(source);
+
+        assert!(module.functions.is_empty());
+    }
+
+    #[test]
+    fn scanner_rejects_wrapped_unit_returns() {
+        let source = r#"
+            use boltffi::*;
+
+            #[export]
+            pub fn boxed_unit() -> Box<()> {
+                Box::new(())
+            }
+        "#;
+
+        let module = scan_temp_crate(source);
+
+        assert!(module.functions.is_empty());
+    }
+
+    #[test]
+    fn string_type_parser_rejects_unit_items() {
+        let registry = TypeRegistry::default();
+        let alias_resolver = AliasResolver::default();
+        let compiler_canonical_types = HashMap::new();
+
+        assert!(
+            string_to_ffi_type(
+                "()",
+                &registry,
+                &alias_resolver,
+                &compiler_canonical_types,
+                FfiTypePosition::Value,
+            )
+            .is_none()
+        );
     }
 
     #[test]

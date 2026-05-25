@@ -473,7 +473,7 @@ func boltffiAsyncCallDirect<T>(
                         if status.code == 0 {
                             cont.resume(returning: value)
                         } else {
-                            cont.resume(throwing: FfiError(message: "async call failed"))
+                            cont.resume(throwing: FfiError(message: "FFI failed in async completion with code \(status.code)"))
                         }
                     case .finishWithoutContinuation, .alreadyFinished:
                         break

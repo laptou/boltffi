@@ -1,6 +1,6 @@
 {
   "name": "@boltffi/runtime",
-  "version": "0.23.0",
+  "version": "0.25.0",
   "description": "WASM runtime for BoltFFI generated TypeScript bindings",
   "author": "Ali A. Hilal <me@alihilal.com>",
   "homepage": "https://boltffi.dev",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^4.0.0"
   },
   "keywords": [
     "ffi",

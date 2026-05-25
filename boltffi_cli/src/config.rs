@@ -1,8 +1,10 @@
 use crate::target::{
-    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, JavaHostTarget, RustTarget,
-    resolve_android_targets, resolve_apple_ios_targets, resolve_apple_macos_targets,
-    resolve_apple_simulator_targets, resolve_java_host_targets,
+    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, CSharpRuntimeIdentifier,
+    DartNativeArchitecture, JavaHostTarget, RustTarget, resolve_android_targets,
+    resolve_apple_ios_targets, resolve_apple_macos_targets, resolve_apple_simulator_targets,
+    resolve_dart_native_targets, resolve_java_host_targets,
 };
+use boltffi_bindgen::render::python::NamingConvention;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,10 +13,13 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     Swift,
     Kotlin,
+    KotlinMultiplatform,
     Java,
     TypeScript,
     Header,
     Dart,
+    Python,
+    CSharp,
 }
 
 impl Target {
@@ -22,10 +27,13 @@ impl Target {
         match self {
             Target::Swift => "swift",
             Target::Kotlin => "kotlin",
+            Target::KotlinMultiplatform => "kotlin_multiplatform",
             Target::Java => "java",
             Target::TypeScript => "typescript",
             Target::Header => "header",
             Target::Dart => "dart",
+            Target::Python => "python",
+            Target::CSharp => "csharp",
         }
     }
 }
@@ -38,12 +46,13 @@ pub enum Experimental {
 
 impl Experimental {
     pub const ALL: &'static [Experimental] = &[
-        Experimental::WholeTarget(Target::Java),
         Experimental::Feature {
             target: Target::TypeScript,
             name: "async_streams",
         },
         Experimental::WholeTarget(Target::Dart),
+        Experimental::WholeTarget(Target::Python),
+        Experimental::WholeTarget(Target::KotlinMultiplatform),
     ];
 
     pub fn is_target_experimental(target: Target) -> bool {
@@ -91,11 +100,17 @@ pub struct TargetsConfig {
     #[serde(default)]
     pub android: AndroidConfig,
     #[serde(default)]
+    pub kotlin_multiplatform: KotlinMultiplatformConfig,
+    #[serde(default)]
     pub wasm: WasmConfig,
     #[serde(default)]
     pub java: JavaConfig,
     #[serde(default)]
     pub dart: DartConfig,
+    #[serde(default)]
+    pub python: PythonConfig,
+    #[serde(default)]
+    pub csharp: CSharpConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -104,12 +119,90 @@ pub struct DartConfig {
     pub output: PathBuf,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub native_architectures: Option<Vec<DartNativeArchitecture>>,
 }
 
 impl Default for DartConfig {
     fn default() -> Self {
         Self {
             output: default_dart_output(),
+            enabled: false,
+            native_architectures: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PythonConfig {
+    #[serde(default = "default_python_output")]
+    pub output: PathBuf,
+    pub module_name: Option<String>,
+    #[serde(default, alias = "pack")]
+    pub wheel: PythonWheelConfig,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for PythonConfig {
+    fn default() -> Self {
+        Self {
+            output: default_python_output(),
+            module_name: None,
+            wheel: PythonWheelConfig::default(),
+            enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PythonWheelConfig {
+    #[serde(alias = "wheel_output")]
+    pub output: Option<PathBuf>,
+    pub interpreters: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CSharpConfig {
+    #[serde(default = "default_csharp_output")]
+    pub output: PathBuf,
+    pub package_id: Option<String>,
+    pub target_framework: Option<String>,
+    pub package_output: Option<PathBuf>,
+    pub runtime_identifiers: Option<Vec<CSharpRuntimeIdentifier>>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KotlinMultiplatformConfig {
+    #[serde(default = "default_kotlin_multiplatform_output")]
+    pub output: PathBuf,
+    #[serde(default)]
+    pub enabled: bool,
+    pub package: Option<String>,
+    pub module_name: Option<String>,
+}
+
+impl Default for KotlinMultiplatformConfig {
+    fn default() -> Self {
+        Self {
+            output: default_kotlin_multiplatform_output(),
+            enabled: false,
+            package: None,
+            module_name: None,
+        }
+    }
+}
+
+impl Default for CSharpConfig {
+    fn default() -> Self {
+        Self {
+            output: default_csharp_output(),
+            package_id: None,
+            target_framework: None,
+            package_output: None,
+            runtime_identifiers: None,
             enabled: false,
         }
     }
@@ -164,6 +257,8 @@ pub struct AndroidKotlinConfig {
     pub module_name: Option<String>,
     pub library_name: Option<String>,
     #[serde(default)]
+    pub desktop_loader: KotlinDesktopLoader,
+    #[serde(default)]
     pub api_style: KotlinApiStyle,
     #[serde(default)]
     pub error_style: ErrorStyle,
@@ -179,6 +274,15 @@ pub enum KotlinApiStyle {
     #[default]
     TopLevel,
     ModuleObject,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KotlinDesktopLoader {
+    #[default]
+    Bundled,
+    System,
+    None,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -202,6 +306,8 @@ pub struct AppleConfig {
     pub xcframework: XcframeworkConfig,
     #[serde(default)]
     pub spm: SpmConfig,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -220,11 +326,38 @@ pub struct AndroidConfig {
     pub header: HeaderConfig,
     #[serde(default)]
     pub pack: AndroidPackConfig,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct HeaderConfig {
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DebugSymbolsFormat {
+    #[default]
+    Zip,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugSymbolsBundle {
+    #[default]
+    Unstripped,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct DebugSymbolsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub output: Option<PathBuf>,
+    #[serde(default)]
+    pub format: DebugSymbolsFormat,
+    #[serde(default)]
+    pub bundle: DebugSymbolsBundle,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -278,6 +411,10 @@ pub struct JavaJvmConfig {
     #[serde(default = "default_java_jvm_output")]
     pub output: PathBuf,
     pub host_targets: Option<Vec<JavaHostTarget>>,
+    #[serde(default)]
+    pub strip_symbols: bool,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 impl Default for JavaJvmConfig {
@@ -286,6 +423,8 @@ impl Default for JavaJvmConfig {
             enabled: false,
             output: default_java_jvm_output(),
             host_targets: None,
+            strip_symbols: false,
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -442,6 +581,7 @@ impl Default for AppleConfig {
             header: HeaderConfig::default(),
             xcframework: XcframeworkConfig::default(),
             spm: SpmConfig::default(),
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -457,6 +597,7 @@ impl Default for AndroidConfig {
             kotlin: AndroidKotlinConfig::default(),
             header: HeaderConfig::default(),
             pack: AndroidPackConfig::default(),
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -520,6 +661,18 @@ fn default_wasm_output() -> PathBuf {
 
 fn default_dart_output() -> PathBuf {
     PathBuf::from("dist/dart")
+}
+
+fn default_python_output() -> PathBuf {
+    PathBuf::from("dist/python")
+}
+
+fn default_csharp_output() -> PathBuf {
+    PathBuf::from("dist/csharp")
+}
+
+fn default_kotlin_multiplatform_output() -> PathBuf {
+    PathBuf::from("dist/kotlin-multiplatform")
 }
 
 fn read_toml_value(path: &Path) -> Result<toml::Value, ConfigError> {
@@ -657,13 +810,88 @@ impl Config {
             }
         }
 
-        if self.is_java_jvm_enabled()
+        if (self.is_java_jvm_enabled() || self.is_kotlin_multiplatform_enabled())
             && let Some(host_targets) = self.targets.java.jvm.host_targets.as_ref()
             && host_targets.is_empty()
         {
             return Err(ConfigError::Validation(
                 "targets.java.jvm.host_targets must be non-empty when provided".to_string(),
             ));
+        }
+
+        if self.is_python_enabled()
+            && let Some(interpreters) = self.targets.python.wheel.interpreters.as_ref()
+        {
+            if interpreters.is_empty() {
+                return Err(ConfigError::Validation(
+                    "targets.python.wheel.interpreters must be non-empty when provided".to_string(),
+                ));
+            }
+
+            let mut seen = HashSet::new();
+            for interpreter in interpreters {
+                let normalized = interpreter.trim();
+                if normalized.is_empty() {
+                    return Err(ConfigError::Validation(
+                        "targets.python.wheel.interpreters must not contain empty values"
+                            .to_string(),
+                    ));
+                }
+
+                if !seen.insert(normalized.to_string()) {
+                    return Err(ConfigError::Validation(format!(
+                        "targets.python.wheel.interpreters contains duplicate interpreter '{}'",
+                        normalized
+                    )));
+                }
+            }
+        }
+
+        if self.is_python_enabled()
+            && let Some(module_name) = self.targets.python.module_name.as_deref()
+            && !NamingConvention::is_valid_module_name(module_name)
+        {
+            return Err(ConfigError::Validation(format!(
+                "targets.python.module_name must be a valid Python identifier, got '{}'",
+                module_name
+            )));
+        }
+
+        if self.is_csharp_enabled() {
+            if let Some(runtime_identifiers) = self.targets.csharp.runtime_identifiers.as_ref() {
+                if runtime_identifiers.is_empty() {
+                    return Err(ConfigError::Validation(
+                        "targets.csharp.runtime_identifiers must be non-empty when provided"
+                            .to_string(),
+                    ));
+                }
+
+                let mut seen = HashSet::new();
+                for runtime_identifier in runtime_identifiers {
+                    if !seen.insert(*runtime_identifier) {
+                        return Err(ConfigError::Validation(format!(
+                            "targets.csharp.runtime_identifiers contains duplicate runtime identifier '{}'",
+                            runtime_identifier.canonical_name()
+                        )));
+                    }
+                }
+            }
+
+            if let Some(package_id) = self.targets.csharp.package_id.as_deref()
+                && package_id.trim().is_empty()
+            {
+                return Err(ConfigError::Validation(
+                    "targets.csharp.package_id must not be empty".to_string(),
+                ));
+            }
+
+            if let Some(target_framework) = self.targets.csharp.target_framework.as_deref()
+                && target_framework.trim().is_empty()
+            {
+                return Err(ConfigError::Validation(
+                    "targets.csharp.target_framework must not be empty".to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -677,7 +905,7 @@ impl Config {
     }
 
     pub fn crate_artifact_name(&self) -> String {
-        self.library_name().replace('-', "_")
+        boltffi_bindgen::library_name(self.library_name()).into_string()
     }
 
     pub fn swift_module_name(&self) -> String {
@@ -712,6 +940,18 @@ impl Config {
 
     pub fn is_dart_enabled(&self) -> bool {
         self.targets.dart.enabled
+    }
+
+    pub fn is_python_enabled(&self) -> bool {
+        self.targets.python.enabled
+    }
+
+    pub fn is_csharp_enabled(&self) -> bool {
+        self.targets.csharp.enabled
+    }
+
+    pub fn is_kotlin_multiplatform_enabled(&self) -> bool {
+        self.targets.kotlin_multiplatform.enabled
     }
 
     pub fn apple_include_macos(&self) -> bool {
@@ -816,6 +1056,27 @@ impl Config {
             .unwrap_or_else(|| self.targets.apple.output.clone())
     }
 
+    pub fn apple_debug_symbols_enabled(&self) -> bool {
+        self.targets.apple.debug_symbols.enabled
+    }
+
+    pub fn apple_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .apple
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.apple.output.join("symbols"))
+    }
+
+    pub fn apple_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.apple.debug_symbols.format
+    }
+
+    pub fn apple_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.apple.debug_symbols.bundle
+    }
+
     pub fn apple_spm_layout(&self) -> SpmLayout {
         self.targets.apple.spm.layout
     }
@@ -873,6 +1134,20 @@ impl Config {
         self.targets.android.kotlin.library_name.as_deref()
     }
 
+    pub fn resolved_android_kotlin_library_name(&self) -> String {
+        self.android_kotlin_library_name()
+            .unwrap_or_else(|| self.library_name())
+            .to_string()
+    }
+
+    pub fn resolved_android_kotlin_desktop_library_name(&self) -> String {
+        boltffi_bindgen::library_name(&self.resolved_android_kotlin_library_name()).into_string()
+    }
+
+    pub fn android_kotlin_desktop_loader(&self) -> KotlinDesktopLoader {
+        self.targets.android.kotlin.desktop_loader
+    }
+
     pub fn android_kotlin_api_style(&self) -> KotlinApiStyle {
         self.targets.android.kotlin.api_style
     }
@@ -908,6 +1183,27 @@ impl Config {
             .unwrap_or_else(|| self.targets.android.output.join("jniLibs"))
     }
 
+    pub fn android_debug_symbols_enabled(&self) -> bool {
+        self.targets.android.debug_symbols.enabled
+    }
+
+    pub fn android_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .android
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.android.output.join("symbols"))
+    }
+
+    pub fn android_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.android.debug_symbols.format
+    }
+
+    pub fn android_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.android.debug_symbols.bundle
+    }
+
     pub fn kotlin_class_name(&self) -> String {
         to_pascal_case(&self.package.name)
     }
@@ -940,6 +1236,26 @@ impl Config {
         &self.targets.android.kotlin.type_mappings
     }
 
+    pub fn kotlin_multiplatform_output(&self) -> PathBuf {
+        self.targets.kotlin_multiplatform.output.clone()
+    }
+
+    pub fn kotlin_multiplatform_package(&self) -> String {
+        self.targets
+            .kotlin_multiplatform
+            .package
+            .clone()
+            .unwrap_or_else(|| self.android_kotlin_package())
+    }
+
+    pub fn kotlin_multiplatform_module_name(&self) -> String {
+        self.targets
+            .kotlin_multiplatform
+            .module_name
+            .clone()
+            .unwrap_or_else(|| self.android_kotlin_module_name())
+    }
+
     pub fn is_java_jvm_enabled(&self) -> bool {
         self.targets.java.jvm.enabled
     }
@@ -952,10 +1268,13 @@ impl Config {
         match target {
             Target::Swift => self.is_apple_enabled(),
             Target::Kotlin => self.is_android_enabled(),
+            Target::KotlinMultiplatform => self.is_kotlin_multiplatform_enabled(),
             Target::Java => self.is_java_jvm_enabled(),
             Target::TypeScript => self.is_wasm_enabled(),
             Target::Header => self.is_apple_enabled() || self.is_android_enabled(),
             Target::Dart => self.is_dart_enabled(),
+            Target::Python => self.is_python_enabled(),
+            Target::CSharp => self.is_csharp_enabled(),
         }
     }
 
@@ -1024,6 +1343,32 @@ impl Config {
         self.targets.java.jvm.output.clone()
     }
 
+    pub fn java_jvm_strip_symbols(&self) -> bool {
+        self.targets.java.jvm.strip_symbols
+    }
+
+    pub fn java_jvm_debug_symbols_enabled(&self) -> bool {
+        self.targets.java.jvm.debug_symbols.enabled
+    }
+
+    pub fn java_jvm_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .java
+            .jvm
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.java.jvm.output.join("symbols"))
+    }
+
+    pub fn java_jvm_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.java.jvm.debug_symbols.format
+    }
+
+    pub fn java_jvm_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.java.jvm.debug_symbols.bundle
+    }
+
     pub fn java_jvm_requested_host_targets(&self) -> &[JavaHostTarget] {
         self.targets
             .java
@@ -1039,6 +1384,73 @@ impl Config {
 
     pub fn java_android_output(&self) -> PathBuf {
         self.targets.java.android.output.clone()
+    }
+
+    pub fn python_output(&self) -> PathBuf {
+        self.targets.python.output.clone()
+    }
+
+    pub fn python_module_name(&self) -> String {
+        self.targets
+            .python
+            .module_name
+            .clone()
+            .unwrap_or_else(|| self.crate_artifact_name())
+    }
+
+    pub fn python_wheel_output(&self) -> PathBuf {
+        self.targets
+            .python
+            .wheel
+            .output
+            .clone()
+            .unwrap_or_else(|| self.python_output().join("wheelhouse"))
+    }
+
+    pub fn python_wheel_interpreters(&self) -> Option<&[String]> {
+        self.targets.python.wheel.interpreters.as_deref()
+    }
+
+    pub fn csharp_output(&self) -> PathBuf {
+        self.targets.csharp.output.clone()
+    }
+
+    pub fn csharp_package_id(&self) -> String {
+        self.targets
+            .csharp
+            .package_id
+            .clone()
+            .unwrap_or_else(|| self.package.name.clone())
+    }
+
+    pub fn csharp_target_framework(&self) -> String {
+        self.targets
+            .csharp
+            .target_framework
+            .clone()
+            .unwrap_or_else(|| "net10.0".to_string())
+    }
+
+    pub fn csharp_package_output(&self) -> PathBuf {
+        self.targets
+            .csharp
+            .package_output
+            .clone()
+            .unwrap_or_else(|| self.csharp_output().join("packages"))
+    }
+
+    pub fn csharp_requested_runtime_identifiers(&self) -> &[CSharpRuntimeIdentifier] {
+        self.targets
+            .csharp
+            .runtime_identifiers
+            .as_deref()
+            .unwrap_or(CSharpRuntimeIdentifier::DEFAULTS)
+    }
+
+    pub fn csharp_runtime_identifiers(
+        &self,
+    ) -> std::result::Result<Vec<CSharpRuntimeIdentifier>, String> {
+        CSharpRuntimeIdentifier::resolve_requested(self.csharp_requested_runtime_identifiers())
     }
 
     pub fn wasm_triple(&self) -> &str {
@@ -1216,6 +1628,22 @@ impl Config {
             .repository
             .clone()
             .or_else(|| self.package_repository())
+    }
+
+    pub fn dart_output(&self) -> PathBuf {
+        self.targets.dart.output.clone()
+    }
+
+    pub fn dart_native_architectures(&self) -> &[DartNativeArchitecture] {
+        self.targets
+            .dart
+            .native_architectures
+            .as_deref()
+            .unwrap_or(DartNativeArchitecture::ALL)
+    }
+
+    pub fn dart_targets(&self) -> Vec<RustTarget> {
+        resolve_dart_native_targets(self.dart_native_architectures())
     }
 }
 
@@ -1666,6 +2094,106 @@ enabled = true
     }
 
     #[test]
+    fn kmp_can_reuse_java_jvm_host_targets_without_enabling_java() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+
+[targets.java.jvm]
+host_targets = ["linux-x86_64"]
+"#,
+        );
+
+        assert!(!config.is_java_jvm_enabled());
+        assert_eq!(
+            config
+                .java_jvm_requested_host_targets()
+                .iter()
+                .map(|target| target.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["linux-x86_64"]
+        );
+    }
+
+    #[test]
+    fn resolves_default_debug_symbols_outputs() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        assert_eq!(
+            config.apple_debug_symbols_output(),
+            PathBuf::from("dist/apple/symbols")
+        );
+        assert_eq!(
+            config.android_debug_symbols_output(),
+            PathBuf::from("dist/android/symbols")
+        );
+        assert_eq!(
+            config.java_jvm_debug_symbols_output(),
+            PathBuf::from("dist/java/symbols")
+        );
+    }
+
+    #[test]
+    fn parses_target_debug_symbols_configuration() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple.debug_symbols]
+enabled = true
+output = "dist/apple/debug-artifacts"
+format = "zip"
+bundle = "unstripped"
+
+[targets.android.debug_symbols]
+enabled = true
+output = "dist/android/debug-artifacts"
+
+[targets.java.jvm]
+enabled = true
+
+[targets.java.jvm.debug_symbols]
+enabled = true
+output = "dist/java/debug-artifacts"
+"#,
+        );
+
+        assert!(config.apple_debug_symbols_enabled());
+        assert!(config.android_debug_symbols_enabled());
+        assert!(config.java_jvm_debug_symbols_enabled());
+        assert_eq!(
+            config.apple_debug_symbols_output(),
+            PathBuf::from("dist/apple/debug-artifacts")
+        );
+        assert_eq!(
+            config.android_debug_symbols_output(),
+            PathBuf::from("dist/android/debug-artifacts")
+        );
+        assert_eq!(
+            config.java_jvm_debug_symbols_output(),
+            PathBuf::from("dist/java/debug-artifacts")
+        );
+        assert_eq!(config.apple_debug_symbols_format(), DebugSymbolsFormat::Zip);
+        assert_eq!(
+            config.apple_debug_symbols_bundle(),
+            DebugSymbolsBundle::Unstripped
+        );
+    }
+
+    #[test]
     fn parses_java_jvm_host_target_aliases() {
         let config = parse_config(
             r#"
@@ -1697,6 +2225,29 @@ name = "mylib"
 
 [targets.java.jvm]
 enabled = true
+host_targets = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message == "targets.java.jvm.host_targets must be non-empty when provided"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_java_jvm_host_targets_when_kmp_enabled() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+
+[targets.java.jvm]
 host_targets = []
 "#,
         )
@@ -2021,5 +2572,384 @@ package_name = "OverlayKit"
             Some("https://example.com/base.git")
         );
         assert_eq!(config.apple_spm_package_name(), Some("OverlayKit"));
+    }
+
+    #[test]
+    fn marks_python_as_experimental_target() {
+        assert!(Experimental::is_target_experimental(Target::Python));
+    }
+
+    #[test]
+    fn does_not_mark_csharp_as_experimental_target() {
+        assert!(!Experimental::is_target_experimental(Target::CSharp));
+    }
+
+    #[test]
+    fn marks_kotlin_multiplatform_as_experimental_target() {
+        assert!(Experimental::is_target_experimental(
+            Target::KotlinMultiplatform
+        ));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_should_process_requires_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        assert!(!config.should_process(Target::KotlinMultiplatform, false));
+        assert!(config.should_process(Target::KotlinMultiplatform, true));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_should_process_accepts_config_opt_in() {
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        assert!(config.should_process(Target::KotlinMultiplatform, false));
+    }
+
+    #[test]
+    fn kotlin_multiplatform_module_name_defaults_to_android_kotlin_override() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android.kotlin]
+module_name = "AndroidBindings"
+"#,
+        );
+
+        assert_eq!(config.kotlin_multiplatform_module_name(), "AndroidBindings");
+    }
+
+    #[test]
+    fn resolved_android_kotlin_library_name_defaults_to_crate_name() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+"#,
+        );
+
+        assert_eq!(config.resolved_android_kotlin_library_name(), "my-lib");
+        assert_eq!(
+            config.resolved_android_kotlin_desktop_library_name(),
+            "my_lib"
+        );
+    }
+
+    #[test]
+    fn resolved_android_kotlin_library_name_uses_override() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.android.kotlin]
+library_name = "configured-library"
+"#,
+        );
+
+        assert_eq!(
+            config.resolved_android_kotlin_library_name(),
+            "configured-library"
+        );
+        assert_eq!(
+            config.resolved_android_kotlin_desktop_library_name(),
+            "configured_library"
+        );
+    }
+
+    #[test]
+    fn python_should_process_requires_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        assert!(!config.should_process(Target::Python, false));
+        assert!(config.should_process(Target::Python, true));
+    }
+
+    #[test]
+    fn python_should_process_accepts_config_opt_in() {
+        let config = parse_config(
+            r#"
+experimental = ["python"]
+
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        assert!(config.should_process(Target::Python, false));
+    }
+
+    #[test]
+    fn python_module_name_defaults_to_crate_artifact_name() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        assert_eq!(config.python_module_name(), "my_lib");
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheelhouse")
+        );
+        assert_eq!(config.python_wheel_interpreters(), None);
+    }
+
+    #[test]
+    fn python_wheel_configuration_supports_module_override_and_interpreter_matrix() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+module_name = "demo_runtime"
+
+[targets.python.wheel]
+output = "dist/python/wheels"
+interpreters = ["python3.11", "python3.12"]
+"#,
+        );
+
+        assert_eq!(config.python_module_name(), "demo_runtime");
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheels")
+        );
+        assert_eq!(
+            config.python_wheel_interpreters(),
+            Some(["python3.11".to_string(), "python3.12".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_python_interpreter_matrix() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.wheel]
+interpreters = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.wheel.interpreters must be non-empty")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_python_interpreters() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.wheel]
+interpreters = ["python3.13", "python3.13"]
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.wheel.interpreters contains duplicate interpreter")
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_python_module_name_override() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+module_name = "demo-runtime"
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.module_name must be a valid Python identifier")
+        ));
+    }
+
+    #[test]
+    fn accepts_legacy_python_pack_table_alias() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.pack]
+wheel_output = "dist/python/wheels"
+interpreters = ["python3.11"]
+"#,
+        );
+
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheels")
+        );
+        assert_eq!(
+            config.python_wheel_interpreters(),
+            Some(["python3.11".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn csharp_configuration_defaults_for_packaging() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.csharp]
+enabled = true
+"#,
+        );
+
+        assert_eq!(config.csharp_output(), PathBuf::from("dist/csharp"));
+        assert_eq!(
+            config.csharp_package_output(),
+            PathBuf::from("dist/csharp/packages")
+        );
+        assert_eq!(config.csharp_package_id(), "my-lib");
+        assert_eq!(config.csharp_target_framework(), "net10.0");
+        assert_eq!(
+            config.csharp_requested_runtime_identifiers(),
+            crate::target::CSharpRuntimeIdentifier::DEFAULTS
+        );
+        assert!(config.should_process(Target::CSharp, false));
+    }
+
+    #[test]
+    fn csharp_configuration_supports_package_and_runtime_matrix() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.csharp]
+enabled = true
+output = "artifacts/csharp"
+package_output = "artifacts/nuget"
+package_id = "Company.MyLib"
+target_framework = "net9.0"
+runtime_identifiers = ["current", "linux-x64"]
+"#,
+        );
+
+        assert_eq!(config.csharp_output(), PathBuf::from("artifacts/csharp"));
+        assert_eq!(
+            config.csharp_package_output(),
+            PathBuf::from("artifacts/nuget")
+        );
+        assert_eq!(config.csharp_package_id(), "Company.MyLib");
+        assert_eq!(config.csharp_target_framework(), "net9.0");
+        assert_eq!(
+            config.csharp_requested_runtime_identifiers(),
+            &[
+                crate::target::CSharpRuntimeIdentifier::Current,
+                crate::target::CSharpRuntimeIdentifier::LinuxX64
+            ]
+        );
+        assert!(config.should_process(Target::CSharp, false));
+    }
+
+    #[test]
+    fn rejects_empty_csharp_runtime_identifier_matrix() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.csharp]
+enabled = true
+runtime_identifiers = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.csharp.runtime_identifiers must be non-empty")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_csharp_runtime_identifiers() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.csharp]
+enabled = true
+runtime_identifiers = ["linux-x64", "linux-x64"]
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.csharp.runtime_identifiers contains duplicate runtime identifier")
+        ));
     }
 }

@@ -12,16 +12,23 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
   );
 
 {% if return_route.is_void() %}
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  try {
+    _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
+  } finally {
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  }
 {% elif return_route.is_async_scalar() %}
-  const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
-  (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
-  return result;
+  try {
+    const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+    return result;
+  } finally {
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  }
 {% elif return_route.is_packed() %}
   const outPtr = _module.allocBufDescriptor();
   let completeCompleted = false;
   try {
-    (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+    _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, statusPtr));
     completeCompleted = true;
     const reader = _module.readerFromBuf(outPtr);
     const result = {{ return_route.decode_expr() }};
@@ -52,16 +59,23 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     );
 
 {% if return_route.is_void() %}
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    try {
+      _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
+    } finally {
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    }
 {% elif return_route.is_async_scalar() %}
-    const result = (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle){{ return_route.ts_cast() }};
-    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
-    return result;
+    try {
+      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+      return result;
+    } finally {
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    }
 {% elif return_route.is_packed() %}
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
-      (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+      _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(outPtr, awaitedHandle, statusPtr));
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
       const result = {{ return_route.decode_expr() }};

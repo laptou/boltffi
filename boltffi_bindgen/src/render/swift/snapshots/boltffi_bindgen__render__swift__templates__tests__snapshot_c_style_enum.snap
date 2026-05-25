@@ -15,7 +15,7 @@ public enum Status: Int32, Hashable, Sendable, CaseIterable {
         case 0: self = .active
         case 1: self = .inactive
         case 2: self = .pending
-        default: fatalError("Invalid Status wire tag: \\(wireTag)")
+        default: fatalError("Invalid Status wire tag: \(wireTag)")
         }
     }
     @usableFromInline var wireTag: Int32 {
@@ -23,7 +23,7 @@ public enum Status: Int32, Hashable, Sendable, CaseIterable {
         case 0: return 0
         case 1: return 1
         case 2: return 2
-        default: fatalError("Invalid Status raw value: \\(rawValue)")
+        default: fatalError("Invalid Status raw value: \(rawValue)")
         }
     }
 

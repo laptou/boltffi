@@ -5,7 +5,8 @@ use syn::Type;
 
 use crate::index::custom_types::{self, CustomTypeRegistry};
 
-use super::classify::ReturnTypeDescriptor;
+use super::classify::{option_primitive_uses_scalar_encoding, ReturnTypeDescriptor};
+
 use boltffi_ffi_rules::transport::ErrorReturnStrategy;
 
 use super::model::{
@@ -31,7 +32,14 @@ impl ResolvedReturn {
             }
             ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => {
                 quote! {
-                    return;
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        return ::boltffi::__private::FfiBuf::default();
+                    }
                 }
             }
             ValueReturnStrategy::Buffer(_) => match (
@@ -76,6 +84,49 @@ impl ResolvedReturn {
         }
     }
 
+    pub fn wasm_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self.value_return_strategy() {
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec) => quote! {
+                return;
+            },
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar) => {
+                let _ = WasmOptionScalarEncoding::from_option_rust_type(self.rust_type())
+                    .expect("OptionScalar return must have a primitive Option inner type");
+                quote! {
+                    return f64::NAN;
+                }
+            }
+            ValueReturnStrategy::Buffer(_) => match self.direct_buffer_return_method(
+                ReturnInvocationContext::SyncExport,
+                ReturnPlatform::Wasm,
+            ) {
+                Some(DirectBufferReturnMethod::Packed) => quote! {
+                    return ::boltffi::__private::FfiBuf::default().into_packed();
+                },
+                method => panic!(
+                    "unexpected wasm direct buffer return method for invalid-arg return: {:?}",
+                    method
+                ),
+            },
+            _ => self.invalid_arg_early_return_statement(),
+        }
+    }
+
+    pub fn native_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        match self.value_return_strategy() {
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::Utf8String)
+            | ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar) => quote! {
+                return ::boltffi::__private::FfiBuf::default();
+            },
+            ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar) => quote! {
+                return ::boltffi::__private::FfiBuf::default();
+            },
+            _ => self.invalid_arg_early_return_statement(),
+        }
+    }
+
     pub fn async_ffi_return_type(&self) -> proc_macro2::TokenStream {
         let rust_type = self.rust_type();
         match self.value_return_strategy() {
@@ -106,6 +157,13 @@ impl ResolvedReturn {
         match self.value_return_strategy() {
             ValueReturnStrategy::Void => quote! { () },
             _ => quote! { #rust_type },
+        }
+    }
+
+    pub fn async_invalid_arg_early_return_statement(&self) -> proc_macro2::TokenStream {
+        let rust_return_type = self.async_rust_return_type();
+        quote! {
+            return ::boltffi::__private::rustfuture::rust_future_invalid_arg::<#rust_return_type>();
         }
     }
 
@@ -181,6 +239,7 @@ impl WasmOptionScalarEncoding {
     pub fn from_option_rust_type(rust_type: &Type) -> Option<Self> {
         ReturnTypeDescriptor::parse(rust_type)
             .option_primitive()
+            .filter(|primitive| option_primitive_uses_scalar_encoding(*primitive))
             .map(|primitive| Self { primitive })
     }
 

@@ -1,5 +1,5 @@
 use crate::check::{EnvironmentCheck, install_missing_targets};
-use crate::error::Result;
+use crate::cli::Result;
 use crate::target::RustTarget;
 
 pub struct CheckOptions {

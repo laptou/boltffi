@@ -8,6 +8,7 @@ pub enum Platform {
     MacOs,
     Android,
     Wasm,
+    Linux,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,6 +110,162 @@ impl AndroidArchitecture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NativeHostPlatform {
+    DarwinArm64,
+    DarwinX86_64,
+    LinuxX86_64,
+    LinuxAarch64,
+    WindowsX86_64,
+}
+
+impl NativeHostPlatform {
+    pub const ALL: &'static [Self] = &[
+        Self::DarwinArm64,
+        Self::DarwinX86_64,
+        Self::LinuxX86_64,
+        Self::LinuxAarch64,
+        Self::WindowsX86_64,
+    ];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::DarwinArm64 => "darwin-arm64",
+            Self::DarwinX86_64 => "darwin-x86_64",
+            Self::LinuxX86_64 => "linux-x86_64",
+            Self::LinuxAarch64 => "linux-aarch64",
+            Self::WindowsX86_64 => "windows-x86_64",
+        }
+    }
+
+    pub fn current() -> Option<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => Some(Self::DarwinArm64),
+            ("macos", "x86_64") => Some(Self::DarwinX86_64),
+            ("linux", "x86_64") => Some(Self::LinuxX86_64),
+            ("linux", "aarch64") => Some(Self::LinuxAarch64),
+            ("windows", "x86_64") => Some(Self::WindowsX86_64),
+            _ => None,
+        }
+    }
+
+    pub fn shared_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}.dll"),
+        }
+    }
+
+    pub fn static_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 | Self::LinuxX86_64 | Self::LinuxAarch64 => {
+                format!("lib{artifact_name}.a")
+            }
+            Self::WindowsX86_64 => {
+                if cfg!(all(target_os = "windows", target_env = "gnu")) {
+                    format!("lib{artifact_name}.a")
+                } else {
+                    format!("{artifact_name}.lib")
+                }
+            }
+        }
+    }
+
+    pub fn jni_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}_jni.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}_jni.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}_jni.dll"),
+        }
+    }
+
+    pub fn jni_platform(self) -> &'static str {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => "darwin",
+            Self::LinuxX86_64 | Self::LinuxAarch64 => "linux",
+            Self::WindowsX86_64 => "win32",
+        }
+    }
+
+    pub fn rpath_flag(self) -> Option<&'static str> {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => Some("-Wl,-rpath,@loader_path"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("-Wl,-rpath,$ORIGIN"),
+            Self::WindowsX86_64 => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DartNativeArchitecture {
+    #[serde(rename = "android:arm64")]
+    AndroidArm64,
+    #[serde(rename = "android:armv7")]
+    AndroidArmv7,
+    #[serde(rename = "android:x86_64")]
+    AndroidX86_64,
+    #[serde(rename = "ios:arm64")]
+    IosArm64,
+    #[serde(rename = "ios_sim:arm64")]
+    IosSimArm64,
+    #[serde(rename = "ios_sim:x86_64")]
+    IosSimX86_64,
+    #[serde(rename = "linux:arm64")]
+    LinuxArm64,
+    #[serde(rename = "linux:x86_64")]
+    LinuxX86_64,
+    #[serde(rename = "macos:arm64")]
+    MacosArm64,
+    #[serde(rename = "macos:x86_64")]
+    MacosX86_64,
+}
+
+impl DartNativeArchitecture {
+    pub const ALL: &'static [Self] = &[
+        Self::AndroidArm64,
+        Self::AndroidArmv7,
+        Self::AndroidX86_64,
+        Self::IosArm64,
+        Self::IosSimArm64,
+        Self::IosSimX86_64,
+        Self::LinuxArm64,
+        Self::LinuxX86_64,
+        Self::MacosArm64,
+        Self::MacosX86_64,
+    ];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::AndroidArm64 => "android:arm64",
+            Self::AndroidArmv7 => "android:armv7",
+            Self::AndroidX86_64 => "android:x86_64",
+            Self::IosArm64 => "ios:arm64",
+            Self::IosSimArm64 => "ios_sim:arm64",
+            Self::IosSimX86_64 => "ios_sim:x86_64",
+            Self::LinuxArm64 => "linux:arm64",
+            Self::LinuxX86_64 => "linux:x86_64",
+            Self::MacosArm64 => "macos:arm64",
+            Self::MacosX86_64 => "macos:x86_64",
+        }
+    }
+
+    pub const fn rust_target(self) -> RustTarget {
+        match self {
+            Self::AndroidArm64 => RustTarget::ANDROID_ARM64,
+            Self::AndroidArmv7 => RustTarget::ANDROID_ARMV7,
+            Self::AndroidX86_64 => RustTarget::ANDROID_X86_64,
+            Self::IosArm64 => RustTarget::IOS_ARM64,
+            Self::IosSimArm64 => RustTarget::IOS_SIM_ARM64,
+            Self::IosSimX86_64 => RustTarget::IOS_SIM_X86_64,
+            Self::LinuxArm64 => RustTarget::LINUX_ARM64,
+            Self::LinuxX86_64 => RustTarget::LINUX_X86_64,
+            Self::MacosArm64 => RustTarget::MACOS_ARM64,
+            Self::MacosX86_64 => RustTarget::MACOS_X86_64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JavaHostTarget {
     #[serde(rename = "current")]
     Current,
@@ -127,26 +284,15 @@ pub enum JavaHostTarget {
 impl JavaHostTarget {
     pub const DEFAULTS: &'static [Self] = &[Self::Current];
 
-    pub const fn canonical_name(self) -> &'static str {
+    pub fn canonical_name(self) -> &'static str {
         match self {
             Self::Current => "current",
-            Self::DarwinArm64 => "darwin-arm64",
-            Self::DarwinX86_64 => "darwin-x86_64",
-            Self::LinuxX86_64 => "linux-x86_64",
-            Self::LinuxAarch64 => "linux-aarch64",
-            Self::WindowsX86_64 => "windows-x86_64",
+            resolved_target => resolved_target.native_host_platform().canonical_name(),
         }
     }
 
     pub fn current() -> Option<Self> {
-        match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("macos", "aarch64") => Some(Self::DarwinArm64),
-            ("macos", "x86_64") => Some(Self::DarwinX86_64),
-            ("linux", "x86_64") => Some(Self::LinuxX86_64),
-            ("linux", "aarch64") => Some(Self::LinuxAarch64),
-            ("windows", "x86_64") => Some(Self::WindowsX86_64),
-            _ => None,
-        }
+        NativeHostPlatform::current().map(Into::into)
     }
 
     pub fn resolve_requested(targets: &[Self]) -> Result<Vec<Self>, String> {
@@ -168,59 +314,145 @@ impl JavaHostTarget {
     }
 
     pub fn shared_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}.dylib"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}.so"),
-            Self::WindowsX86_64 => format!("{artifact_name}.dll"),
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .shared_library_filename(artifact_name)
     }
 
     pub fn static_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 | Self::LinuxX86_64 | Self::LinuxAarch64 => {
-                format!("lib{artifact_name}.a")
-            }
-            Self::WindowsX86_64 => {
-                if cfg!(all(target_os = "windows", target_env = "gnu")) {
-                    format!("lib{artifact_name}.a")
-                } else {
-                    format!("{artifact_name}.lib")
-                }
-            }
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .static_library_filename(artifact_name)
     }
 
     pub fn jni_library_filename(self, artifact_name: &str) -> String {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}_jni.dylib"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}_jni.so"),
-            Self::WindowsX86_64 => format!("{artifact_name}_jni.dll"),
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform()
+            .jni_library_filename(artifact_name)
     }
 
     pub fn jni_platform(self) -> &'static str {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => "darwin",
-            Self::LinuxX86_64 | Self::LinuxAarch64 => "linux",
-            Self::WindowsX86_64 => "win32",
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform().jni_platform()
     }
 
     pub fn rpath_flag(self) -> Option<&'static str> {
-        match self {
-            Self::DarwinArm64 | Self::DarwinX86_64 => Some("-Wl,-rpath,@loader_path"),
-            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("-Wl,-rpath,$ORIGIN"),
-            Self::WindowsX86_64 => None,
-            Self::Current => unreachable!("resolved host target required"),
-        }
+        self.native_host_platform().rpath_flag()
     }
 
     fn unsupported_host_message() -> String {
         "JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64 hosts".to_string()
+    }
+
+    fn native_host_platform(self) -> NativeHostPlatform {
+        match self {
+            Self::Current => unreachable!("resolved host target required"),
+            Self::DarwinArm64 => NativeHostPlatform::DarwinArm64,
+            Self::DarwinX86_64 => NativeHostPlatform::DarwinX86_64,
+            Self::LinuxX86_64 => NativeHostPlatform::LinuxX86_64,
+            Self::LinuxAarch64 => NativeHostPlatform::LinuxAarch64,
+            Self::WindowsX86_64 => NativeHostPlatform::WindowsX86_64,
+        }
+    }
+}
+
+impl From<NativeHostPlatform> for JavaHostTarget {
+    fn from(value: NativeHostPlatform) -> Self {
+        match value {
+            NativeHostPlatform::DarwinArm64 => Self::DarwinArm64,
+            NativeHostPlatform::DarwinX86_64 => Self::DarwinX86_64,
+            NativeHostPlatform::LinuxX86_64 => Self::LinuxX86_64,
+            NativeHostPlatform::LinuxAarch64 => Self::LinuxAarch64,
+            NativeHostPlatform::WindowsX86_64 => Self::WindowsX86_64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CSharpRuntimeIdentifier {
+    #[serde(rename = "current")]
+    Current,
+    #[serde(rename = "osx-arm64", alias = "darwin-arm64", alias = "osx-aarch64")]
+    OsxArm64,
+    #[serde(rename = "osx-x64", alias = "darwin-x86_64", alias = "osx-x86_64")]
+    OsxX64,
+    #[serde(rename = "linux-x64", alias = "linux-x86_64")]
+    LinuxX64,
+    #[serde(rename = "linux-arm64", alias = "linux-aarch64")]
+    LinuxArm64,
+    #[serde(rename = "win-x64", alias = "windows-x86_64", alias = "win-x86_64")]
+    WinX64,
+}
+
+impl CSharpRuntimeIdentifier {
+    pub const DEFAULTS: &'static [Self] = &[Self::Current];
+    pub const EXPLICIT_TARGETS: &'static [Self] = &[
+        Self::OsxArm64,
+        Self::OsxX64,
+        Self::LinuxX64,
+        Self::LinuxArm64,
+        Self::WinX64,
+    ];
+
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::OsxArm64 => "osx-arm64",
+            Self::OsxX64 => "osx-x64",
+            Self::LinuxX64 => "linux-x64",
+            Self::LinuxArm64 => "linux-arm64",
+            Self::WinX64 => "win-x64",
+        }
+    }
+
+    pub fn current() -> Option<Self> {
+        NativeHostPlatform::current().map(Into::into)
+    }
+
+    pub fn resolve_requested(targets: &[Self]) -> Result<Vec<Self>, String> {
+        let current_host = Self::current().ok_or_else(Self::unsupported_host_message)?;
+        let mut resolved = Vec::new();
+
+        targets.iter().copied().for_each(|target| {
+            let target = match target {
+                Self::Current => current_host,
+                explicit => explicit,
+            };
+
+            if !resolved.contains(&target) {
+                resolved.push(target);
+            }
+        });
+
+        Ok(resolved)
+    }
+
+    pub fn native_host_platform(self) -> NativeHostPlatform {
+        match self {
+            Self::Current => unreachable!("resolved C# runtime identifier required"),
+            Self::OsxArm64 => NativeHostPlatform::DarwinArm64,
+            Self::OsxX64 => NativeHostPlatform::DarwinX86_64,
+            Self::LinuxX64 => NativeHostPlatform::LinuxX86_64,
+            Self::LinuxArm64 => NativeHostPlatform::LinuxAarch64,
+            Self::WinX64 => NativeHostPlatform::WindowsX86_64,
+        }
+    }
+
+    pub fn native_library_filename(self, artifact_name: &str) -> String {
+        self.native_host_platform()
+            .shared_library_filename(artifact_name)
+    }
+
+    fn unsupported_host_message() -> String {
+        "C# packaging is only supported on osx-arm64, osx-x64, linux-x64, linux-arm64, and win-x64 hosts".to_string()
+    }
+}
+
+impl From<NativeHostPlatform> for CSharpRuntimeIdentifier {
+    fn from(value: NativeHostPlatform) -> Self {
+        match value {
+            NativeHostPlatform::DarwinArm64 => Self::OsxArm64,
+            NativeHostPlatform::DarwinX86_64 => Self::OsxX64,
+            NativeHostPlatform::LinuxX86_64 => Self::LinuxX64,
+            NativeHostPlatform::LinuxAarch64 => Self::LinuxArm64,
+            NativeHostPlatform::WindowsX86_64 => Self::WinX64,
+        }
     }
 }
 
@@ -292,6 +524,18 @@ impl RustTarget {
         architecture: Architecture::Wasm32,
     };
 
+    pub const LINUX_X86_64: Self = Self {
+        triple: "x86_64-unknown-linux-gnu",
+        platform: Platform::Linux,
+        architecture: Architecture::X86_64,
+    };
+
+    pub const LINUX_ARM64: Self = Self {
+        triple: "aarch64-unknown-linux-gnu",
+        platform: Platform::Linux,
+        architecture: Architecture::Arm64,
+    };
+
     pub const ALL_IOS: &'static [Self] =
         &[Self::IOS_ARM64, Self::IOS_SIM_ARM64, Self::IOS_SIM_X86_64];
 
@@ -335,6 +579,7 @@ impl RustTarget {
             // into the generated JNI glue. Using the Rust cdylib here leaves a DT_NEEDED
             // entry on the build-machine path, which breaks on-device loading.
             Platform::Android => format!("lib{}.a", lib_name),
+            Platform::Linux => format!("lib{}.so", lib_name),
         };
 
         target_dir
@@ -380,6 +625,14 @@ pub fn resolve_java_host_targets(
     targets: &[JavaHostTarget],
 ) -> Result<Vec<JavaHostTarget>, String> {
     JavaHostTarget::resolve_requested(targets)
+}
+
+pub fn resolve_dart_native_targets(architectures: &[DartNativeArchitecture]) -> Vec<RustTarget> {
+    architectures
+        .iter()
+        .copied()
+        .map(DartNativeArchitecture::rust_target)
+        .collect()
 }
 
 impl Platform {
@@ -432,6 +685,8 @@ impl BuiltLibrary {
 
 #[cfg(test)]
 mod tests {
+    use crate::target::{DartNativeArchitecture, resolve_dart_native_targets};
+
     use super::{
         AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, BuiltLibrary, JavaHostTarget,
         Platform, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
@@ -593,5 +848,40 @@ mod tests {
         );
 
         fs::remove_dir_all(&temp_root).expect("cleanup temp target dir");
+    }
+
+    #[test]
+    fn resolves_dart_native_architectures_to_targets() {
+        let targets = resolve_dart_native_targets(&[
+            DartNativeArchitecture::AndroidArm64,
+            DartNativeArchitecture::AndroidArmv7,
+            DartNativeArchitecture::AndroidX86_64,
+            DartNativeArchitecture::IosArm64,
+            DartNativeArchitecture::IosSimArm64,
+            DartNativeArchitecture::IosSimX86_64,
+            DartNativeArchitecture::LinuxArm64,
+            DartNativeArchitecture::LinuxX86_64,
+            DartNativeArchitecture::MacosArm64,
+            DartNativeArchitecture::MacosX86_64,
+        ]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-linux-android",
+                "armv7-linux-androideabi",
+                "x86_64-linux-android",
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-unknown-linux-gnu",
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin"
+            ]
+        );
     }
 }

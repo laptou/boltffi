@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::callable::{CallableForm, ExecutionKind};
+use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::transport::{
     EncodedReturnStrategy, EnumTagStrategy, ReturnInvocationContext, ReturnPlatform,
     ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
@@ -11,7 +12,7 @@ use super::mappings;
 use super::names::NamingConvention;
 use super::plan::{
     JavaAsyncCall, JavaAsyncCallbackInvoker, JavaAsyncCallbackMethod, JavaAsyncMode,
-    JavaBlittableField, JavaBlittableLayout, JavaBridgeParam, JavaBridgeReturn,
+    JavaBlittableField, JavaBlittableLayout, JavaBridgeParam, JavaBridgeReturn, JavaBuiltinSet,
     JavaCallbackErrorCapture, JavaCallbackProxyAsyncMethod, JavaCallbackProxySyncMethod,
     JavaCallbackTrait, JavaClass, JavaClassMethod, JavaClosureInterface, JavaConstructor,
     JavaConstructorKind, JavaDirectCompositeInput, JavaEnum, JavaEnumField, JavaEnumKind,
@@ -47,6 +48,13 @@ pub struct JavaLowerer<'a> {
     module_name: String,
     options: JavaOptions,
     supported_types: HashSet<String>,
+}
+
+#[derive(Default)]
+struct WireEncodableVisit {
+    records: HashSet<RecordId>,
+    enums: HashSet<EnumId>,
+    custom_types: HashSet<CustomTypeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +119,36 @@ impl<'a> JavaValueTypeDef<'a> {
     }
 }
 
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+struct JavaValueTypeMemberSignature {
+    name: String,
+    param_types: Vec<String>,
+}
+
+impl JavaValueTypeMemberSignature {
+    fn constructor(constructor: &JavaValueTypeConstructor) -> Self {
+        Self {
+            name: constructor.name.clone(),
+            param_types: constructor
+                .params
+                .iter()
+                .map(|param| param.java_type.clone())
+                .collect(),
+        }
+    }
+
+    fn method(method: &JavaValueTypeMethod) -> Self {
+        Self {
+            name: method.name.clone(),
+            param_types: method
+                .params
+                .iter()
+                .map(|param| param.java_type.clone())
+                .collect(),
+        }
+    }
+}
+
 impl<'a> JavaLowerer<'a> {
     pub fn new(
         ffi: &'a FfiContract,
@@ -139,6 +177,7 @@ impl<'a> JavaLowerer<'a> {
                 .catalog
                 .resolve_custom(id)
                 .is_some_and(|custom| Self::is_leaf_supported(ffi, &custom.repr, supported)),
+            TypeExpr::Builtin(_) => true,
             TypeExpr::Option(inner) => Self::is_leaf_supported(ffi, inner, supported),
             TypeExpr::Vec(inner) => Self::is_leaf_supported(ffi, inner, supported),
             TypeExpr::Callback(_) => true,
@@ -211,10 +250,16 @@ impl<'a> JavaLowerer<'a> {
             .options
             .library_name
             .clone()
-            .unwrap_or_else(|| self.module_name.clone())
-            .replace('-', "_");
+            .unwrap_or_else(|| naming::library_name(&self.module_name));
 
         let prefix = boltffi_ffi_rules::naming::ffi_prefix().to_string();
+        let builtins = JavaBuiltinSet::from_kinds(
+            self.ffi
+                .catalog
+                .all_builtins()
+                .map(|builtin| builtin.kind)
+                .collect(),
+        );
 
         let enums: Vec<JavaEnum> = self
             .ffi
@@ -273,6 +318,7 @@ impl<'a> JavaLowerer<'a> {
             desktop_loader: self.options.desktop_loader,
             java_version: self.options.min_java_version,
             async_mode: JavaAsyncMode::from_version(self.options.min_java_version),
+            builtins,
             prefix,
             records,
             enums,
@@ -288,7 +334,7 @@ impl<'a> JavaLowerer<'a> {
         let params_ok = func
             .params
             .iter()
-            .all(|p| self.is_supported_type(&p.type_expr));
+            .all(|p| self.is_supported_param_type(&p.type_expr));
         let return_ok = match &func.returns {
             ReturnDef::Void => true,
             ReturnDef::Value(ty) => self.is_supported_type(ty),
@@ -309,6 +355,95 @@ impl<'a> JavaLowerer<'a> {
 
     fn is_supported_type(&self, ty: &TypeExpr) -> bool {
         Self::is_leaf_supported(self.ffi, ty, &self.supported_types)
+    }
+
+    fn is_supported_param_type(&self, ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Custom(id) => self.is_supported_param_type(self.custom_repr_type(id)),
+            TypeExpr::Result { ok, err } => {
+                self.is_supported_result_param_branch(ok)
+                    && self.is_supported_result_param_branch(err)
+            }
+            _ => self.is_supported_type(ty),
+        }
+    }
+
+    fn is_supported_result_param_branch(&self, ty: &TypeExpr) -> bool {
+        self.is_wire_encodable_result_param_branch(ty, &mut WireEncodableVisit::default())
+    }
+
+    fn is_wire_encodable_result_param_branch(
+        &self,
+        ty: &TypeExpr,
+        visit: &mut WireEncodableVisit,
+    ) -> bool {
+        match ty {
+            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Bytes | TypeExpr::Builtin(_) => {
+                true
+            }
+            TypeExpr::Option(inner) | TypeExpr::Vec(inner) => {
+                self.is_wire_encodable_result_param_branch(inner, visit)
+            }
+            TypeExpr::Custom(id) => {
+                visit.custom_types.insert(id.clone())
+                    && self.ffi.catalog.resolve_custom(id).is_some_and(|custom| {
+                        let supported =
+                            self.is_wire_encodable_result_param_branch(&custom.repr, visit);
+                        visit.custom_types.remove(id);
+                        supported
+                    })
+            }
+            TypeExpr::Record(id) => {
+                self.supported_types.contains(id.as_str())
+                    && visit.records.insert(id.clone())
+                    && self.ffi.catalog.resolve_record(id).is_some_and(|record| {
+                        let supported = record.fields.iter().all(|field| {
+                            self.is_wire_encodable_result_param_branch(&field.type_expr, visit)
+                        });
+                        visit.records.remove(id);
+                        supported
+                    })
+            }
+            TypeExpr::Enum(id) => {
+                self.supported_types.contains(id.as_str())
+                    && visit.enums.insert(id.clone())
+                    && self
+                        .ffi
+                        .catalog
+                        .resolve_enum(id)
+                        .is_some_and(|enumeration| {
+                            let supported = match &enumeration.repr {
+                                EnumRepr::CStyle { .. } => true,
+                                EnumRepr::Data { variants, .. } => {
+                                    variants.iter().all(|variant| match &variant.payload {
+                                        VariantPayload::Unit => true,
+                                        VariantPayload::Tuple(fields) => {
+                                            fields.iter().all(|field| {
+                                                self.is_wire_encodable_result_param_branch(
+                                                    field, visit,
+                                                )
+                                            })
+                                        }
+                                        VariantPayload::Struct(fields) => {
+                                            fields.iter().all(|field| {
+                                                self.is_wire_encodable_result_param_branch(
+                                                    &field.type_expr,
+                                                    visit,
+                                                )
+                                            })
+                                        }
+                                    })
+                                }
+                            };
+                            visit.enums.remove(id);
+                            supported
+                        })
+            }
+            TypeExpr::Void
+            | TypeExpr::Result { .. }
+            | TypeExpr::Handle(_)
+            | TypeExpr::Callback(_) => false,
+        }
     }
 
     fn resolve_custom_type(&self, id: &CustomTypeId) -> &CustomTypeDef {
@@ -516,6 +651,8 @@ impl<'a> JavaLowerer<'a> {
             JavaRecordShape::ClassicClass
         };
         let value_type = JavaValueTypeDef::Record(record);
+        let methods = self.lower_value_type_methods(value_type);
+        let constructors = self.lower_value_type_constructors(value_type, &methods);
         JavaRecord {
             doc: record.doc.clone(),
             shape,
@@ -524,8 +661,8 @@ impl<'a> JavaLowerer<'a> {
             fields,
             default_constructors: self.lower_record_default_constructors(record),
             blittable_layout,
-            constructors: self.lower_value_type_constructors(value_type),
-            methods: self.lower_value_type_methods(value_type),
+            constructors,
+            methods,
         }
     }
 
@@ -670,15 +807,42 @@ impl<'a> JavaLowerer<'a> {
     fn lower_value_type_constructors(
         &self,
         owner: JavaValueTypeDef<'_>,
+        methods: &[JavaValueTypeMethod],
     ) -> Vec<JavaValueTypeConstructor> {
-        owner
+        let lowered_constructors = owner
             .constructors()
             .iter()
             .enumerate()
-            .filter(|(_, constructor)| constructor.name().is_some())
             .map(|(index, constructor)| {
                 let call = self.find_abi_call(&owner.constructor_call_id(index));
-                JavaValueTypeConstructor::lower(self, owner, constructor, call)
+                (
+                    constructor.name().is_none(),
+                    JavaValueTypeConstructor::lower(self, owner, constructor, call),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut occupied_signatures = methods
+            .iter()
+            .map(JavaValueTypeMemberSignature::method)
+            .collect::<HashSet<_>>();
+
+        occupied_signatures.extend(
+            lowered_constructors
+                .iter()
+                .filter(|(is_default, _)| !is_default)
+                .map(|(_, constructor)| JavaValueTypeMemberSignature::constructor(constructor)),
+        );
+
+        lowered_constructors
+            .into_iter()
+            .filter_map(|(is_default, lowered)| {
+                let signature = JavaValueTypeMemberSignature::constructor(&lowered);
+                if is_default && occupied_signatures.contains(&signature) {
+                    return None;
+                }
+                occupied_signatures.insert(signature);
+                Some(lowered)
             })
             .collect()
     }
@@ -903,7 +1067,7 @@ impl<'a> JavaLowerer<'a> {
                 format!("Double.compare({left}, {right}) == 0")
             }
             TypeExpr::Primitive(_) => format!("{left} == {right}"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
                 format!("java.util.Objects.equals({left}, {right})")
             }
             TypeExpr::Bytes => format!("java.util.Arrays.equals({left}, {right})"),
@@ -965,7 +1129,7 @@ impl<'a> JavaLowerer<'a> {
             | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({value})"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Builtin(_) => {
                 format!("java.util.Objects.hashCode({value})")
             }
             TypeExpr::Bytes => format!("java.util.Arrays.hashCode({value})"),
@@ -1166,7 +1330,12 @@ impl<'a> JavaLowerer<'a> {
                     (java_type.clone(), field_name.to_string())
                 }
             }
-            TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Option(_) | TypeExpr::Custom(_) => {
+            TypeExpr::Record(_)
+            | TypeExpr::Enum(_)
+            | TypeExpr::Option(_)
+            | TypeExpr::Custom(_)
+            | TypeExpr::Builtin(_)
+            | TypeExpr::Result { .. } => {
                 let binding_name = input_bindings
                     .binding_name_for(source_name)
                     .expect("encoded input binding must exist");
@@ -1351,7 +1520,12 @@ impl<'a> JavaLowerer<'a> {
             Some(ReadOp::Result { ok, err, .. }) => (ok.as_ref(), err.as_ref()),
             _ => panic!("expected ReadOp::Result in decode ops"),
         };
-        let ok_decode_expr = self.emit_reader_read(ok_seq);
+        let ok_decode_expr = match returns {
+            ReturnDef::Result {
+                ok: TypeExpr::Void, ..
+            } => "null".to_string(),
+            _ => self.emit_reader_read(ok_seq),
+        };
         let err_decode_expr = self.emit_reader_read(err_seq);
         let err_is_string =
             matches!(returns, ReturnDef::Result { err, .. } if matches!(err, TypeExpr::String));
@@ -1506,6 +1680,13 @@ impl<'a> JavaLowerer<'a> {
                 Some(decode_seq) => self.emit_reader_read(decode_seq),
                 None => panic!(
                     "unsupported direct Option return transport for Java backend: {:?}",
+                    ty
+                ),
+            },
+            TypeExpr::Builtin(_) => match &ret_shape.decode_ops {
+                Some(decode_seq) => self.emit_reader_read(decode_seq),
+                None => panic!(
+                    "unsupported direct builtin return transport for Java backend: {:?}",
                     ty
                 ),
             },
@@ -1787,7 +1968,7 @@ impl<'a> JavaLowerer<'a> {
         let params_ok = method
             .params
             .iter()
-            .all(|p| self.is_supported_type(&p.type_expr));
+            .all(|p| self.is_supported_param_type(&p.type_expr));
         let return_ok = match &method.returns {
             ReturnDef::Void => true,
             ReturnDef::Value(ty) => self.is_supported_method_return_type(ty),
@@ -2042,6 +2223,7 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
             TypeExpr::String => "String".to_string(),
             TypeExpr::Bytes => "byte[]".to_string(),
+            TypeExpr::Builtin(id) => mappings::java_builtin_type(id).to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Custom(id) => self.java_type(self.custom_repr_type(id)),
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
@@ -2049,6 +2231,13 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Callback(id) => self.callback_java_type(id),
             TypeExpr::Option(inner) => {
                 format!("java.util.Optional<{}>", self.java_boxed_type(inner))
+            }
+            TypeExpr::Result { ok, err } => {
+                format!(
+                    "BoltFFIResult<{}, {}>",
+                    self.java_boxed_type(ok),
+                    self.java_boxed_type(err)
+                )
             }
             TypeExpr::Vec(inner) => self.java_vec_type(inner),
             _ => "Object".to_string(),
@@ -2068,6 +2257,7 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Primitive(p) => mappings::java_boxed_type(*p).to_string(),
             TypeExpr::String => "String".to_string(),
             TypeExpr::Bytes => "byte[]".to_string(),
+            TypeExpr::Builtin(id) => mappings::java_builtin_type(id).to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Custom(id) => self.java_boxed_type(self.custom_repr_type(id)),
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
@@ -2075,6 +2265,13 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Callback(id) => self.callback_java_type(id),
             TypeExpr::Option(inner) => {
                 format!("java.util.Optional<{}>", self.java_boxed_type(inner))
+            }
+            TypeExpr::Result { ok, err } => {
+                format!(
+                    "BoltFFIResult<{}, {}>",
+                    self.java_boxed_type(ok),
+                    self.java_boxed_type(err)
+                )
             }
             TypeExpr::Vec(inner) => self.java_vec_type(inner),
             _ => "Object".to_string(),
@@ -2126,14 +2323,25 @@ impl<'a> JavaLowerer<'a> {
             })
             .collect();
         let owner = JavaValueTypeDef::Enum(enumeration);
+        let mut methods = self.lower_value_type_methods(owner);
+        if matches!(enumeration.repr, EnumRepr::Data { .. }) {
+            for method in &mut methods {
+                self.qualify_collisions_in_type(&mut method.return_type, &variant_names);
+                if let JavaReturnRender::Decode { decode_expr } = &mut method.return_plan.render {
+                    self.qualify_colliding_names(decode_expr, &variant_names);
+                    self.qualify_collisions_in_type(decode_expr, &variant_names);
+                }
+            }
+        }
+        let constructors = self.lower_value_type_constructors(owner, &methods);
         JavaEnum {
             doc: enumeration.doc.clone(),
             class_name,
             kind,
             value_type,
             variants,
-            constructors: self.lower_value_type_constructors(owner),
-            methods: self.lower_value_type_methods(owner),
+            constructors,
+            methods,
         }
     }
 
@@ -2219,9 +2427,7 @@ impl<'a> JavaLowerer<'a> {
         let mut decode_expr = self.emit_reader_read(&field.decode);
         let mut size_expr = self.emit_size_expr(&prefixed.size);
         let mut encode_expr = self.emit_write_expr(&prefixed, "wire");
-        if sibling_names.contains(&java_type) {
-            java_type = format!("{}.{}", self.package_name, java_type);
-        }
+        self.qualify_collisions_in_type(&mut java_type, sibling_names);
         self.qualify_colliding_names(&mut decode_expr, sibling_names);
         self.qualify_colliding_names(&mut size_expr, sibling_names);
         self.qualify_colliding_names(&mut encode_expr, sibling_names);
@@ -2238,21 +2444,51 @@ impl<'a> JavaLowerer<'a> {
     }
 
     fn qualify_colliding_names(&self, expr: &mut String, sibling_names: &HashSet<String>) {
+        let static_call_suffixes = [
+            ".decode(",
+            ".wireEncodeTo(",
+            ".wireEncodedSize(",
+            ".decodeBlittableVec(",
+            ".encodeBlittableVec(",
+        ];
         for name in sibling_names {
-            let pattern = format!("{}.decode(", name);
-            if expr.contains(&pattern) {
-                let qualified = format!("{}.{}.decode(", self.package_name, name);
-                *expr = expr.replace(&pattern, &qualified);
+            for suffix in static_call_suffixes {
+                let pattern = format!("{name}{suffix}");
+                if expr.contains(&pattern) {
+                    let qualified = format!("{}.{name}{suffix}", self.package_name);
+                    *expr = expr.replace(&pattern, &qualified);
+                }
             }
-            let pattern = format!("{}.wireEncodeTo(", name);
-            if expr.contains(&pattern) {
-                let qualified = format!("{}.{}.wireEncodeTo(", self.package_name, name);
-                *expr = expr.replace(&pattern, &qualified);
-            }
-            let pattern = format!("{}.wireEncodedSize(", name);
-            if expr.contains(&pattern) {
-                let qualified = format!("{}.{}.wireEncodedSize(", self.package_name, name);
-                *expr = expr.replace(&pattern, &qualified);
+        }
+    }
+
+    /// Rewrites a Java type string so any bare occurrence of a shadowed
+    /// sibling name becomes fully qualified. Handles bare `Point`,
+    /// `Optional<Point>`, `List<Point>`, `Map<Point, Foo>`, etc. Boundary
+    /// detection uses type-syntax delimiters: a sibling name is
+    /// "bare" when neither neighbor is a Java identifier character or
+    /// `.`.
+    fn qualify_collisions_in_type(&self, ty: &mut String, sibling_names: &HashSet<String>) {
+        for name in sibling_names {
+            let qualified = format!("{}.{name}", self.package_name);
+            let mut search_from = 0;
+            while let Some(idx_in_rest) = ty[search_from..].find(name.as_str()) {
+                let idx = search_from + idx_in_rest;
+                let end = idx + name.len();
+                let left_ok = match ty[..idx].chars().next_back() {
+                    None => true,
+                    Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '.',
+                };
+                let right_ok = match ty[end..].chars().next() {
+                    None => true,
+                    Some(c) => !c.is_ascii_alphanumeric() && c != '_',
+                };
+                if left_ok && right_ok {
+                    ty.replace_range(idx..end, &qualified);
+                    search_from = idx + qualified.len();
+                } else {
+                    search_from = end;
+                }
             }
         }
     }
@@ -3139,12 +3375,7 @@ impl JavaValueTypeConstructor {
 
         Self {
             doc: constructor.doc().map(str::to_string),
-            name: NamingConvention::method_name(
-                constructor
-                    .name()
-                    .expect("value type constructors must be named")
-                    .as_str(),
-            ),
+            name: Self::java_method_name(constructor),
             params,
             native_params,
             return_type: lowerer.return_java_type(&constructor_return),
@@ -3152,6 +3383,15 @@ impl JavaValueTypeConstructor {
             input_bindings,
             ffi_name: call.symbol.as_str().to_string(),
         }
+    }
+
+    fn java_method_name(constructor: &ConstructorDef) -> String {
+        NamingConvention::method_name(
+            constructor
+                .name()
+                .map(|name| name.as_str())
+                .unwrap_or("new"),
+        )
     }
 }
 
@@ -3296,8 +3536,8 @@ mod tests {
         ParamPassing, Receiver, RecordDef, ReturnDef, VariantPayload,
     };
     use crate::ir::ids::{
-        CallbackId, ClassId, ConverterPath, CustomTypeId, EnumId, FieldName, FunctionId, MethodId,
-        ParamName, QualifiedName, RecordId, VariantName,
+        BuiltinId, CallbackId, ClassId, ConverterPath, CustomTypeId, EnumId, FieldName, FunctionId,
+        MethodId, ParamName, QualifiedName, RecordId, VariantName,
     };
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::render::java::JavaVersion;
@@ -3332,6 +3572,24 @@ mod tests {
             options,
         )
         .module()
+    }
+
+    fn is_java_param_type_supported(contract: &FfiContract, ty: &TypeExpr) -> bool {
+        let abi = IrLowerer::new(contract).to_abi_contract();
+        let options = JavaOptions {
+            library_name: None,
+            min_java_version: JavaVersion::JAVA_8,
+            desktop_loader: true,
+        };
+        let lowerer = JavaLowerer::new(
+            contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            options,
+        );
+
+        lowerer.is_supported_param_type(ty)
     }
 
     fn record_def(id: &str, fields: Vec<FieldDef>) -> RecordDef {
@@ -4018,6 +4276,114 @@ mod tests {
     }
 
     #[test]
+    fn function_builtin_param_and_return_are_wire_encoded() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "echo_duration",
+            vec![param(
+                "duration",
+                TypeExpr::Builtin(BuiltinId::new("Duration")),
+            )],
+            ReturnDef::Value(TypeExpr::Builtin(BuiltinId::new("Duration"))),
+        ));
+
+        let module = lower(&contract);
+        let func = &module.functions[0];
+        let duration_param = &func.params[0];
+
+        assert_eq!(func.return_type, "java.time.Duration");
+        assert_eq!(duration_param.java_type, "java.time.Duration");
+        assert_eq!(duration_param.native_type, "ByteBuffer");
+        assert_eq!(func.return_plan.native_return_type, "byte[]");
+        assert!(func.return_plan.is_decode());
+        assert_eq!(func.return_plan.decode_expr(), "reader.readDuration()");
+        assert_eq!(func.input_bindings.wire_writers.len(), 1);
+    }
+
+    #[test]
+    fn function_result_param_is_wire_encoded() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "result_to_string",
+            vec![param(
+                "input",
+                TypeExpr::Result {
+                    ok: Box::new(TypeExpr::Primitive(PrimitiveType::I32)),
+                    err: Box::new(TypeExpr::String),
+                },
+            )],
+            ReturnDef::Value(TypeExpr::String),
+        ));
+
+        let module = lower(&contract);
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        let result_param = &func.params[0];
+
+        assert_eq!(result_param.java_type, "BoltFFIResult<Integer, String>");
+        assert_eq!(result_param.native_type, "ByteBuffer");
+        assert_eq!(func.input_bindings.wire_writers.len(), 1);
+    }
+
+    #[test]
+    fn function_result_param_support_rejects_nested_handle_branch() {
+        let mut contract = empty_contract();
+        contract
+            .catalog
+            .insert_class(class_def("Store", vec![], vec![]));
+        let ty = TypeExpr::Result {
+            ok: Box::new(TypeExpr::Option(Box::new(TypeExpr::Handle(ClassId::new(
+                "Store",
+            ))))),
+            err: Box::new(TypeExpr::String),
+        };
+
+        assert!(!is_java_param_type_supported(&contract, &ty));
+    }
+
+    #[test]
+    fn function_result_param_support_rejects_nested_callback_branch() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("Progress"),
+            methods: vec![],
+            kind: CallbackKind::Trait,
+            doc: None,
+        });
+        let ty = TypeExpr::Result {
+            ok: Box::new(TypeExpr::Vec(Box::new(TypeExpr::Callback(
+                CallbackId::new("Progress"),
+            )))),
+            err: Box::new(TypeExpr::String),
+        };
+
+        assert!(!is_java_param_type_supported(&contract, &ty));
+    }
+
+    #[test]
+    fn record_builtin_field_uses_object_equality_and_hash() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(record_def(
+            "Timing",
+            vec![field(
+                "duration",
+                TypeExpr::Builtin(BuiltinId::new("Duration")),
+            )],
+        ));
+
+        let module = lower(&contract);
+        let field = &module.records[0].fields[0];
+
+        assert_eq!(field.java_type, "java.time.Duration");
+        assert_eq!(
+            field.equals_expr,
+            "java.util.Objects.equals(this.duration, other.duration)"
+        );
+        assert_eq!(field.hash_expr, "java.util.Objects.hashCode(duration)");
+    }
+
+    #[test]
     fn function_bytes_return_is_buffer_decode() {
         let mut contract = empty_contract();
         contract.functions.push(function(
@@ -4190,6 +4556,27 @@ mod tests {
         assert_eq!(func.return_type, "java.util.Optional<Integer>");
         assert!(func.return_plan.is_decode());
         assert!(func.return_plan.decode_expr().contains("Optional"));
+    }
+
+    #[test]
+    fn function_result_unit_return_does_not_read_ok_payload() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "try_reset",
+            vec![],
+            ReturnDef::Result {
+                ok: TypeExpr::Void,
+                err: TypeExpr::String,
+            },
+        ));
+
+        let module = lower(&contract);
+        let func = &module.functions[0];
+
+        assert_eq!(func.return_type, "void");
+        assert!(func.return_plan.is_result());
+        assert_eq!(func.return_plan.result_ok_decode(), "null");
+        assert_eq!(func.return_plan.result_err_decode(), "reader.readString()");
     }
 
     #[test]
@@ -5343,6 +5730,122 @@ mod tests {
     }
 
     #[test]
+    fn record_default_constructor_is_exposed_with_keyword_safe_name() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("point"),
+            fields: vec![
+                field("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                field("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ],
+            constructors: vec![default_ctor(vec![
+                param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ])],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let record = module
+            .records
+            .iter()
+            .find(|record| record.class_name == "Point")
+            .unwrap();
+
+        assert_eq!(record.constructors.len(), 1);
+        assert_eq!(record.constructors[0].name, "_new");
+        assert_eq!(record.constructors[0].return_type, "Point");
+        assert_eq!(record.constructors[0].params.len(), 2);
+    }
+
+    #[test]
+    fn record_default_constructor_skips_named_constructor_collision() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("point"),
+            fields: vec![
+                field("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                field("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ],
+            constructors: vec![
+                default_ctor(vec![
+                    param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                    param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+                ]),
+                named_init(
+                    "new_",
+                    vec![
+                        param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                        param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+                    ],
+                ),
+            ],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let record = module
+            .records
+            .iter()
+            .find(|record| record.class_name == "Point")
+            .unwrap();
+
+        assert_eq!(record.constructors.len(), 1);
+        assert_eq!(record.constructors[0].name, "_new");
+        assert_eq!(record.constructors[0].return_type, "Point");
+        assert_eq!(record.constructors[0].params.len(), 2);
+    }
+
+    #[test]
+    fn record_default_constructor_skips_static_method_collision() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            is_error: false,
+            id: RecordId::new("point"),
+            fields: vec![
+                field("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                field("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ],
+            constructors: vec![default_ctor(vec![
+                param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ])],
+            methods: vec![static_method(
+                "new_",
+                vec![
+                    param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                    param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+                ],
+                ReturnDef::Value(TypeExpr::Record(RecordId::new("point"))),
+            )],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let record = module
+            .records
+            .iter()
+            .find(|record| record.class_name == "Point")
+            .unwrap();
+
+        assert!(record.constructors.is_empty());
+        assert_eq!(record.methods.len(), 1);
+        assert_eq!(record.methods[0].name, "_new");
+        assert_eq!(record.methods[0].return_type, "Point");
+        assert_eq!(record.methods[0].params.len(), 2);
+    }
+
+    #[test]
     fn record_field_defaults_generate_java_overloads() {
         let mut contract = empty_contract();
         contract.catalog.insert_record(RecordDef {
@@ -5507,6 +6010,85 @@ mod tests {
         assert!(enumeration.has_constructors());
         assert!(enumeration.has_static_methods());
         assert!(enumeration.has_instance_methods());
+    }
+
+    #[test]
+    fn data_enum_default_constructor_is_exposed_with_keyword_safe_name() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("shape"),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::I32,
+                variants: vec![DataVariant {
+                    name: VariantName::new("Circle"),
+                    discriminant: 0,
+                    payload: VariantPayload::Tuple(vec![TypeExpr::Primitive(PrimitiveType::F64)]),
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![default_ctor(vec![param_def(
+                "radius",
+                TypeExpr::Primitive(PrimitiveType::F64),
+            )])],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let enumeration = module
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.class_name == "Shape")
+            .unwrap();
+
+        assert_eq!(enumeration.constructors.len(), 1);
+        assert_eq!(enumeration.constructors[0].name, "_new");
+        assert_eq!(enumeration.constructors[0].return_type, "Shape");
+        assert_eq!(enumeration.constructors[0].params.len(), 1);
+    }
+
+    #[test]
+    fn data_enum_default_constructor_skips_static_method_collision() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("shape"),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::I32,
+                variants: vec![DataVariant {
+                    name: VariantName::new("Circle"),
+                    discriminant: 0,
+                    payload: VariantPayload::Tuple(vec![TypeExpr::Primitive(PrimitiveType::F64)]),
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![default_ctor(vec![param_def(
+                "radius",
+                TypeExpr::Primitive(PrimitiveType::F64),
+            )])],
+            methods: vec![static_method(
+                "new_",
+                vec![param_def("radius", TypeExpr::Primitive(PrimitiveType::F64))],
+                ReturnDef::Value(TypeExpr::Enum(EnumId::new("shape"))),
+            )],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let enumeration = module
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.class_name == "Shape")
+            .unwrap();
+
+        assert!(enumeration.constructors.is_empty());
+        assert_eq!(enumeration.methods.len(), 1);
+        assert_eq!(enumeration.methods[0].name, "_new");
+        assert_eq!(enumeration.methods[0].return_type, "Shape");
+        assert_eq!(enumeration.methods[0].params.len(), 1);
     }
 
     #[test]

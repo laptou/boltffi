@@ -3,10 +3,10 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::android::AndroidToolchain;
+use crate::cli::Result;
 use crate::config::Config;
-use crate::error::{CliError, Result};
 use crate::target::{Platform, RustTarget};
+use crate::toolchain::{AndroidToolchain, AndroidToolchainError};
 
 pub type OutputCallback = Box<dyn Fn(&str) + Send>;
 
@@ -18,6 +18,14 @@ pub enum CargoBuildProfile {
 }
 
 impl CargoBuildProfile {
+    pub fn cargo_profile_name(&self) -> &str {
+        match self {
+            Self::Debug => "dev",
+            Self::Release => "release",
+            Self::Named(profile_name) => profile_name,
+        }
+    }
+
     pub fn resolve(default_release: bool, cargo_args: &[String]) -> Self {
         let default_profile = if default_release {
             Self::Release
@@ -199,7 +207,7 @@ impl<'a> Builder<'a> {
 
         if target.platform() == Platform::Android {
             android_toolchain
-                .ok_or(CliError::AndroidNdkNotFound)
+                .ok_or(AndroidToolchainError::NdkNotFound.into())
                 .and_then(|toolchain| toolchain.configure_cargo_for_target(&mut cmd, target))?;
         }
 

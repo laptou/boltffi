@@ -60,8 +60,11 @@ pub struct PreambleTemplate<'a> {
 #[derive(Template)]
 #[template(path = "render_kotlin/native.txt", escape = "none")]
 pub struct NativeTemplate<'a> {
-    pub lib_name: &'a str,
-    pub desktop_loader: bool,
+    pub android_lib_name: &'a str,
+    pub desktop_jni_lib_name: &'a str,
+    pub desktop_fallback_lib_name: &'a str,
+    pub desktop_loader_bundled: bool,
+    pub desktop_loader_system: bool,
     pub prefix: &'a str,
     pub functions: &'a [super::plan::KotlinNativeFunction],
     pub wire_functions: &'a [super::plan::KotlinNativeWireFunction],
@@ -149,6 +152,7 @@ pub struct WireFunctionTemplate<'a> {
     pub ffi_name: &'a str,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: &'a str,
     pub decode_expr: &'a str,
     pub is_blittable_return: bool,
@@ -174,6 +178,7 @@ pub struct AsyncFunctionTemplate<'a> {
     pub ffi_free: &'a str,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: &'a str,
     pub decode_expr: &'a str,
     pub is_blittable_return: bool,
@@ -209,6 +214,7 @@ pub struct WireMethodTemplate<'a> {
     pub ffi_name: &'a str,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: &'a str,
     pub decode_expr: &'a str,
     pub is_blittable_return: bool,
@@ -236,6 +242,7 @@ pub struct AsyncMethodTemplate<'a> {
     pub ffi_free: &'a str,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: &'a str,
     pub decode_expr: &'a str,
     pub is_blittable_return: bool,
@@ -398,6 +405,7 @@ impl KotlinEmitter {
                     ffi_free: &async_call.free,
                     return_is_unit: async_call.return_is_unit,
                     return_is_direct: async_call.return_is_direct,
+                    direct_return_is_nullable: async_call.direct_return_is_nullable,
                     return_cast: &async_call.return_cast,
                     decode_expr: &async_call.decode_expr,
                     is_blittable_return: async_call.is_blittable_return,
@@ -418,6 +426,7 @@ impl KotlinEmitter {
                     ffi_name: &function.ffi_name,
                     return_is_unit: function.return_is_unit,
                     return_is_direct: function.return_is_direct,
+                    direct_return_is_nullable: function.direct_return_is_nullable,
                     return_cast: &function.return_cast,
                     decode_expr: &function.decode_expr,
                     is_blittable_return: function.is_blittable_return,
@@ -468,8 +477,11 @@ impl KotlinEmitter {
         });
 
         let native = NativeTemplate {
-            lib_name: &module.native.lib_name,
-            desktop_loader: module.native.desktop_loader,
+            android_lib_name: module.native.android_lib_name.as_str(),
+            desktop_jni_lib_name: module.native.desktop_jni_lib_name.as_str(),
+            desktop_fallback_lib_name: module.native.desktop_fallback_lib_name.as_str(),
+            desktop_loader_bundled: module.native.desktop_loader_bundled,
+            desktop_loader_system: module.native.desktop_loader_system,
             prefix: &module.native.prefix,
             functions: &module.native.functions,
             wire_functions: &module.native.wire_functions,
@@ -843,6 +855,7 @@ mod tests {
             ffi_name: "boltffi_add",
             return_is_unit: false,
             return_is_direct: true,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "",
             is_blittable_return: false,
@@ -872,6 +885,7 @@ mod tests {
             ffi_name: "boltffi_greet",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "reader.readString()",
             is_blittable_return: false,
@@ -906,6 +920,7 @@ mod tests {
             ffi_free: "boltffi_fetch_data_free",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "reader.readString()",
             is_blittable_return: false,
@@ -939,8 +954,11 @@ mod tests {
     #[test]
     fn native_without_async_runtime_omits_future_continuation_callback() {
         let rendered = NativeTemplate {
-            lib_name: "repro",
-            desktop_loader: false,
+            android_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
+            desktop_loader_bundled: false,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -958,8 +976,11 @@ mod tests {
     #[test]
     fn native_template_keeps_android_safe_runtime_branch() {
         let rendered = NativeTemplate {
-            lib_name: "repro",
-            desktop_loader: true,
+            android_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
+            desktop_loader_bundled: true,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -972,14 +993,17 @@ mod tests {
         .unwrap();
 
         assert!(rendered.contains("if (isAndroidRuntime) {"));
-        assert!(rendered.contains("System.loadLibrary(fallbackLibrary)"));
+        assert!(rendered.contains("System.loadLibrary(androidLibrary)"));
     }
 
     #[test]
     fn native_template_keeps_desktop_loader_for_non_android_runtime() {
         let rendered = NativeTemplate {
-            lib_name: "repro",
-            desktop_loader: true,
+            android_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
+            desktop_loader_bundled: true,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -991,7 +1015,10 @@ mod tests {
         .render()
         .unwrap();
 
-        assert!(rendered.contains("loadDesktopLibraries(preferredLibrary, fallbackLibrary)"));
+        assert!(
+            rendered
+                .contains("loadDesktopLibraries(desktopPreferredLibrary, desktopFallbackLibrary)")
+        );
         assert!(rendered.contains("bundledLibraryResourceCandidates"));
         assert!(rendered.contains("tryLoadDesktopLibrary(preferredLibrary)"));
         assert!(rendered.contains("preferredFailure = tryLoadDesktopLibrary(preferredLibrary)"));
@@ -1000,6 +1027,64 @@ mod tests {
                 .contains("if (preferredFailure == null) {\n                return\n            }")
         );
         assert!(rendered.contains("throw preferredFailure"));
+    }
+
+    #[test]
+    fn native_template_can_use_system_loader_for_desktop_runtime() {
+        let rendered = NativeTemplate {
+            android_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
+            desktop_loader_bundled: false,
+            desktop_loader_system: true,
+            prefix: "boltffi",
+            functions: &[],
+            wire_functions: &[],
+            classes: &[],
+            callbacks: &[],
+            async_callback_invokers: &[],
+            has_async_runtime: false,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("if (isAndroidRuntime) {"));
+        assert!(
+            rendered.contains("} else {\n            System.loadLibrary(desktopFallbackLibrary)")
+        );
+        assert!(
+            !rendered
+                .contains("loadDesktopLibraries(desktopPreferredLibrary, desktopFallbackLibrary)")
+        );
+        assert!(!rendered.contains("bundledLibraryResourceCandidates"));
+    }
+
+    #[test]
+    fn native_template_can_skip_desktop_loading() {
+        let rendered = NativeTemplate {
+            android_lib_name: "repro",
+            desktop_jni_lib_name: "repro",
+            desktop_fallback_lib_name: "repro",
+            desktop_loader_bundled: false,
+            desktop_loader_system: false,
+            prefix: "boltffi",
+            functions: &[],
+            wire_functions: &[],
+            classes: &[],
+            callbacks: &[],
+            async_callback_invokers: &[],
+            has_async_runtime: false,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("if (isAndroidRuntime) {"));
+        assert!(!rendered.contains("} else {"));
+        assert!(
+            !rendered
+                .contains("loadDesktopLibraries(desktopPreferredLibrary, desktopFallbackLibrary)")
+        );
+        assert!(!rendered.contains("bundledLibraryResourceCandidates"));
     }
 
     #[test]
@@ -1766,6 +1851,7 @@ mod tests {
             ffi_name: "boltffi_process_point",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "PointReader.read(reader)",
             is_blittable_return: true,
@@ -1813,6 +1899,7 @@ mod tests {
             ffi_name: "boltffi_concat",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "reader.readString()",
             is_blittable_return: false,
@@ -1838,6 +1925,7 @@ mod tests {
             ffi_name: "boltffi_find_user",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "reader.readOption { it.readString() }",
             is_blittable_return: false,
@@ -1898,6 +1986,7 @@ mod tests {
             ffi_free: "boltffi_send_request_free",
             return_is_unit: false,
             return_is_direct: false,
+            direct_return_is_nullable: false,
             return_cast: "",
             decode_expr: "reader.readBytes()",
             is_blittable_return: false,

@@ -1,14 +1,16 @@
 use crate::build::{
-    BuildOptions, BuildResult, Builder, all_successful, count_successful, failed_target_details,
-    failed_targets, resolve_build_profile,
+    BuildOptions, BuildResult, Builder, all_successful, count_successful, failed_targets,
+    resolve_build_profile,
 };
+use crate::cli::Result;
 use crate::config::Config;
-use crate::error::{CliError, Result};
+use crate::pack::PackError;
 
 pub enum BuildPlatform {
     Apple,
     Android,
     Wasm,
+    Dart,
     All,
 }
 
@@ -66,6 +68,13 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
             println!("Building for wasm ({})...", profile);
             builder.build_wasm_with_triple(config.wasm_triple())?
         }
+        BuildPlatform::Dart => {
+            if !config.is_dart_enabled() {
+                return Ok(Vec::new());
+            }
+            println!("Building for dart ({})...", profile);
+            builder.build_targets(&config.dart_targets())?
+        }
         BuildPlatform::All => {
             println!("Building all targets ({})...", profile);
             let mut all_results = Vec::new();
@@ -77,6 +86,9 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
             }
             if config.is_wasm_enabled() {
                 all_results.extend(builder.build_wasm_with_triple(config.wasm_triple())?);
+            }
+            if config.is_dart_enabled() {
+                all_results.extend(builder.build_targets(&config.dart_targets())?);
             }
             all_results
         }
@@ -92,10 +104,10 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
     if all_successful(&results) {
         Ok(results)
     } else {
-        Err(CliError::BuildFailed {
+        Err(PackError::BuildFailed {
             targets: failed_targets(&results),
-            details: failed_target_details(&results),
-        })
+        }
+        .into())
     }
 }
 

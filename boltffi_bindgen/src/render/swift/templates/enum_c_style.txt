@@ -10,7 +10,7 @@
 {%- for variant in variants %}
         case {{ loop.index0 }}: self = .{{ variant.swift_name }}
 {%- endfor %}
-        default: fatalError("Invalid {{ class_name }} wire tag: \\(wireTag)")
+        default: fatalError("Invalid {{ class_name }} wire tag: \(wireTag)")
         }
     }
     @usableFromInline var wireTag: Int32 {
@@ -18,7 +18,7 @@
 {%- for variant in variants %}
         case {{ variant.discriminant }}: return {{ loop.index0 }}
 {%- endfor %}
-        default: fatalError("Invalid {{ class_name }} raw value: \\(rawValue)")
+        default: fatalError("Invalid {{ class_name }} raw value: \(rawValue)")
         }
     }
 

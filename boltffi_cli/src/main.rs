@@ -1,36 +1,37 @@
-mod android;
 mod build;
+mod cargo;
 mod check;
+mod cli;
 mod commands;
 mod config;
-mod desktop;
-mod error;
-mod pack;
+pub mod pack;
 mod reporter;
 mod target;
+mod toolchain;
 
 use clap::{Parser, Subcommand};
 use std::{fmt, path::PathBuf};
 
+use cli::{CliError, Result};
 use commands::build::{BuildCommandOptions, BuildPlatform};
 use commands::check::CheckOptions;
 use commands::doctor::{ConfigSummary, DoctorOptions};
 use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use commands::init::InitOptions;
 use commands::pack::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCSharpOptions, PackCommand,
+    PackDartOptions, PackExecutionOptions, PackJavaOptions, PackKmpOptions, PackPythonOptions,
     PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
 use config::{Config, Target};
-use error::{CliError, Result};
 
 #[derive(Parser)]
 #[command(name = "boltffi")]
 #[command(about = "BoltFFI - Rust FFI toolchain (Apple + Android + WASM)")]
 #[command(
-    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*]\n"
+    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi generate kmp --experimental\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi pack csharp\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.kotlin_multiplatform.*], [targets.wasm.*], [targets.java.*], [targets.dart.*], [targets.python.*], and [targets.csharp.*]\n"
 )]
 #[command(version)]
 struct Cli {
@@ -104,8 +105,8 @@ enum Commands {
     },
 
     #[command(
-        about = "Generate bindings (Swift/Kotlin/header)",
-        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n"
+        about = "Generate bindings",
+        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate kmp --experimental\n  boltffi generate header\n  boltffi generate python --experimental\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -135,8 +136,8 @@ enum Commands {
     },
 
     #[command(
-        about = "Package platform artifacts (xcframework/SPM/jniLibs/npm)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n"
+        about = "Package platform artifacts (xcframework/SPM/jniLibs/KMP/npm/NuGet)",
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack kmp --experimental\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n  boltffi pack csharp\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -164,14 +165,23 @@ enum GenerateTargetArg {
     Swift,
     #[value(help = "Generate Kotlin bindings + JNI glue")]
     Kotlin,
+    #[value(
+        alias = "kotlin-multiplatform",
+        help = "Generate experimental Kotlin Multiplatform sources"
+    )]
+    Kmp,
     #[value(help = "Generate Java bindings + JNI glue")]
     Java,
     #[value(help = "Generate C header")]
     Header,
     #[value(help = "Generate TypeScript bindings for WASM")]
     Typescript,
-    #[value(help = "Generate Dart Bindings")]
+    #[value(help = "Generate experimental Dart bindings")]
     Dart,
+    #[value(help = "Generate experimental Python bindings")]
+    Python,
+    #[value(help = "Generate C# bindings")]
+    Csharp,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -184,6 +194,8 @@ enum BuildPlatformArg {
     Android,
     #[value(help = "Build wasm target")]
     Wasm,
+    #[value(help = "Build dart target")]
+    Dart,
     #[value(help = "Build all configured targets")]
     All,
 }
@@ -203,6 +215,14 @@ enum PackTargetArg {
 
         #[arg(long, help = "Include experimental targets/features")]
         experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path for Python packaging (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 
     #[command(
@@ -245,6 +265,28 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+    },
+
+    #[command(
+        alias = "kotlin-multiplatform",
+        about = "Build + package Kotlin Multiplatform native resources",
+        long_about = "Build + package Kotlin Multiplatform native resources.\n\nOutputs:\n  - KMP project:           {targets.kotlin_multiplatform.output}\n  - Android jniLibs:       {targets.kotlin_multiplatform.output}/src/androidMain/jniLibs\n  - JVM native resources:  {targets.kotlin_multiplatform.output}/src/jvmMain/resources/native\n"
+    )]
+    Kmp {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
     },
 
     #[command(
@@ -267,6 +309,65 @@ enum PackTargetArg {
         long_about = "Build + package Java artifacts.\n\nOutputs:\n  - Java bindings: {targets.java.jvm.output}\n"
     )]
     Java {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+    },
+
+    #[command(
+        about = "Build + package Python artifacts",
+        long_about = "Build + package Python artifacts.\n\nOutputs:\n  - Python source package: {targets.python.output}\n  - Wheel output:          defaults to {targets.python.output}/wheelhouse\n\nConfig:\n  - [targets.python].module_name overrides the generated package module\n  - [targets.python.wheel].output overrides the wheel directory\n  - [targets.python.wheel].interpreters or repeated --python values select the Python build matrix\n"
+    )]
+    Python {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
+    },
+
+    #[command(
+        about = "Build + package Dart artifacts",
+        long_about = "Build + package Dart artifacts.\n\nOutputs:\n  - Dart package: {targets.dart.output}\n"
+    )]
+    Dart {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+    },
+
+    #[command(
+        about = "Build + package C# artifacts",
+        long_about = "Build + package C# artifacts.\n\nOutputs:\n  - C# package project: {targets.csharp.output}\n  - NuGet package:      {targets.csharp.package_output}\n  - Native assets:      runtimes/<rid>/native inside the .nupkg\n"
+    )]
+    Csharp {
         #[arg(long)]
         release: bool,
 
@@ -405,10 +506,13 @@ fn execute_command(
                     .map(|t| match t {
                         GenerateTargetArg::Swift => GenerateTarget::Swift,
                         GenerateTargetArg::Kotlin => GenerateTarget::Kotlin,
+                        GenerateTargetArg::Kmp => GenerateTarget::KotlinMultiplatform,
                         GenerateTargetArg::Java => GenerateTarget::Java,
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
                         GenerateTargetArg::Dart => GenerateTarget::Dart,
+                        GenerateTargetArg::Python => GenerateTarget::Python,
+                        GenerateTargetArg::Csharp => GenerateTarget::CSharp,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
@@ -426,6 +530,7 @@ fn execute_command(
                         BuildPlatformArg::Apple => BuildPlatform::Apple,
                         BuildPlatformArg::Android => BuildPlatform::Android,
                         BuildPlatformArg::Wasm => BuildPlatform::Wasm,
+                        BuildPlatformArg::Dart => BuildPlatform::Dart,
                         BuildPlatformArg::All => BuildPlatform::All,
                     })
                     .unwrap_or(BuildPlatform::All),
@@ -443,12 +548,16 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                 } => PackCommand::All(PackAllOptions {
-                    release,
-                    regenerate,
-                    no_build,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     experimental,
-                    cargo_args: cargo_args.clone(),
+                    python_interpreters,
                 }),
                 PackTargetArg::Apple {
                     release,
@@ -459,10 +568,13 @@ fn execute_command(
                     xcframework_only,
                     layout,
                 } => PackCommand::Apple(PackAppleOptions {
-                    release,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     version,
-                    regenerate,
-                    no_build,
                     spm_only,
                     xcframework_only,
                     layout: layout.map(|l| match l {
@@ -470,38 +582,90 @@ fn execute_command(
                         PackLayoutArg::Split => crate::config::SpmLayout::Split,
                         PackLayoutArg::FfiOnly => crate::config::SpmLayout::FfiOnly,
                     }),
-                    cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Android {
                     release,
                     regenerate,
                     no_build,
+                    experimental: _,
                 } => PackCommand::Android(PackAndroidOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                }),
+                PackTargetArg::Kmp {
                     release,
                     regenerate,
                     no_build,
-                    cargo_args: cargo_args.clone(),
+                    experimental,
+                } => PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental,
                 }),
                 PackTargetArg::Wasm {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Wasm(PackWasmOptions {
-                    release,
-                    regenerate,
-                    no_build,
-                    cargo_args: cargo_args.clone(),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                 }),
                 PackTargetArg::Java {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Java(PackJavaOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental: false,
+                }),
+                PackTargetArg::Python {
                     release,
                     regenerate,
                     no_build,
-                    experimental: false,
-                    cargo_args: cargo_args.clone(),
+                    experimental,
+                    python_interpreters,
+                } => PackCommand::Python(PackPythonOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental,
+                    python_interpreters,
+                }),
+                PackTargetArg::Dart {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                } => PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(release, regenerate, no_build, cargo_args),
+                    experimental,
+                }),
+                PackTargetArg::Csharp {
+                    release,
+                    regenerate,
+                    no_build,
+                } => PackCommand::CSharp(PackCSharpOptions {
+                    execution: pack_execution_options(release, regenerate, no_build, cargo_args),
                 }),
             };
             run_pack(&config, command, reporter)
@@ -520,6 +684,20 @@ fn execute_command(
                 }
             })
         }
+    }
+}
+
+fn pack_execution_options(
+    release: bool,
+    regenerate: bool,
+    no_build: bool,
+    cargo_args: Vec<String>,
+) -> PackExecutionOptions {
+    PackExecutionOptions {
+        release,
+        regenerate,
+        no_build,
+        cargo_args,
     }
 }
 
@@ -690,6 +868,7 @@ fn run_release(
                 BuildPlatformArg::Apple => BuildPlatform::Apple,
                 BuildPlatformArg::Android => BuildPlatform::Android,
                 BuildPlatformArg::Wasm => BuildPlatform::Wasm,
+                BuildPlatformArg::Dart => BuildPlatform::Dart,
                 BuildPlatformArg::All => BuildPlatform::All,
             })
             .unwrap_or(BuildPlatform::All),
@@ -733,73 +912,86 @@ fn release_pack_commands(
         Some(BuildPlatformArg::Apple) => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
         }
         Some(BuildPlatformArg::Android) => {
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
         }
         Some(BuildPlatformArg::Wasm) => {
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                }));
+            }
+        }
+        Some(BuildPlatformArg::Dart) => {
+            if config.is_dart_enabled() {
+                commands.push(PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    experimental: true,
                 }));
             }
         }
         Some(BuildPlatformArg::All) | None => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                }));
+            }
+            if config.should_process(Target::KotlinMultiplatform, false) {
+                commands.push(PackCommand::Kmp(PackKmpOptions {
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    experimental: false,
                 }));
             }
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                }));
+            }
+            if config.should_process(Target::Python, false) {
+                commands.push(PackCommand::Python(PackPythonOptions {
+                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
+                    experimental: false,
+                    python_interpreters: Vec::new(),
                 }));
             }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
-                    release: true,
-                    regenerate: true,
-                    no_build: false,
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
                     experimental: false,
-                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+
+            if config.should_process(Target::Dart, false) {
+                commands.push(PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
+                    experimental: false,
+                }));
+            }
+
+            if config.is_csharp_enabled() {
+                commands.push(PackCommand::CSharp(PackCSharpOptions {
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
                 }));
             }
         }
@@ -819,15 +1011,17 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, ConfigPaths, configured_android_targets_for_diagnostics,
-        configured_apple_targets_for_diagnostics, configured_wasm_target_triple_for_diagnostics,
-        load_config_if_present, release_pack_commands,
-        release_requires_java_environment_validation, resolve_doctor_config, resolve_init_options,
+        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg, PackTargetArg,
+        configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
+        configured_wasm_target_triple_for_diagnostics, load_config_if_present,
+        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
+        resolve_init_options,
     };
     use crate::commands::doctor::ConfigSummary;
     use crate::commands::pack::PackCommand;
     use crate::target::RustTarget;
-    use crate::{config::Config, error::CliError};
+    use crate::{cli::CliError, config::Config};
+    use clap::Parser;
     use std::path::PathBuf;
 
     fn parse_config(input: &str) -> Config {
@@ -974,8 +1168,6 @@ triple = "wasm32-wasip1"
     fn release_all_includes_java_packaging_without_no_build() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -998,22 +1190,22 @@ enabled = true
         assert_eq!(commands.len(), 4);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[1],
-            PackCommand::Android(options) if options.no_build
+            PackCommand::Android(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[2],
-            PackCommand::Wasm(options) if options.no_build
+            PackCommand::Wasm(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[3],
             PackCommand::Java(options)
-                if !options.no_build
-                    && options.release
-                    && options.regenerate
+                if !options.execution.no_build
+                    && options.execution.release
+                    && options.execution.regenerate
                     && !options.experimental
         ));
     }
@@ -1022,8 +1214,6 @@ enabled = true
     fn release_platform_filter_does_not_add_java_for_non_all_platforms() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -1040,12 +1230,12 @@ enabled = true
         assert_eq!(commands.len(), 1);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
     }
 
     #[test]
-    fn release_all_skips_java_when_experimental_gate_is_not_enabled() {
+    fn release_all_includes_java_when_enabled() {
         let config = parse_config(
             r#"
 [package]
@@ -1059,13 +1249,240 @@ enabled = true
         let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
 
         assert!(
-            !commands
+            commands
                 .iter()
                 .any(|command| matches!(command, PackCommand::Java(_)))
         );
-        assert!(!release_requires_java_environment_validation(
+        assert!(release_requires_java_environment_validation(
             &config,
             Some(BuildPlatformArg::All)
+        ));
+    }
+
+    #[test]
+    fn release_all_includes_kmp_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["kotlin_multiplatform"]
+
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Kmp(options)
+                if options.execution.release
+                    && options.execution.regenerate
+                    && !options.execution.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
+    fn release_all_does_not_include_kmp_without_experimental_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.kotlin_multiplatform]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, PackCommand::Kmp(_)))
+        );
+    }
+
+    #[test]
+    fn release_all_includes_python_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["python"]
+
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Python(options)
+                if options.execution.release
+                    && !options.execution.regenerate
+                    && !options.execution.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
+    fn release_all_includes_csharp_packaging_when_enabled() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.csharp]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::CSharp(options)
+                if options.execution.release
+                    && options.execution.regenerate
+                    && !options.execution.no_build
+        )));
+    }
+
+    #[test]
+    fn cli_parses_generate_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Python),
+                experimental: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_generate_csharp_target_without_experimental_flag() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "csharp"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Csharp),
+                experimental: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_generate_kmp_target() {
+        let cli = Cli::try_parse_from(["boltffi", "generate", "kmp", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Generate {
+                target: Some(GenerateTargetArg::Kmp),
+                experimental: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_csharp_target() {
+        let cli =
+            Cli::try_parse_from(["boltffi", "pack", "csharp"]).expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Csharp { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_android_experimental_flag() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "android", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Android {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_kmp_experimental_flag() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "kmp", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Kmp {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_interpreter_matrix() {
+        let cli = Cli::try_parse_from([
+            "boltffi",
+            "pack",
+            "python",
+            "--experimental",
+            "--python",
+            "python3.12",
+            "--python",
+            "python3.13",
+        ])
+        .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    python_interpreters,
+                    ..
+                }
+            } if python_interpreters == vec!["python3.12".to_string(), "python3.13".to_string()]
         ));
     }
 
@@ -1073,8 +1490,6 @@ enabled = true
     fn release_all_requires_java_environment_validation_when_enabled() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 
@@ -1094,8 +1509,6 @@ enabled = true
     fn release_platform_filter_skips_java_environment_validation_for_non_all_platforms() {
         let config = parse_config(
             r#"
-experimental = ["java"]
-
 [package]
 name = "mylib"
 

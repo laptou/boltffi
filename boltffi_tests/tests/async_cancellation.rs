@@ -4,7 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 
-use boltffi::__private::rustfuture::{self, RustFuturePoll};
+use boltffi::__private::{
+    FfiStatus,
+    rustfuture::{self, RustFuturePoll},
+};
 
 struct YieldingFuture {
     polls_remaining: u32,
@@ -51,11 +54,11 @@ mod complete_returns_result_only_if_future_finished {
     fn unpolled_future_has_no_result() {
         let handle = rustfuture::rust_future_new(make_instant_future());
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(handle) };
+        let result = unsafe { rustfuture::rust_future_complete::<i32>(handle) };
 
         assert!(
-            result.is_none(),
-            "complete() returns None when future was never polled to completion"
+            matches!(result, Err(FfiStatus::INTERNAL_ERROR)),
+            "complete() returns INTERNAL_ERROR when future was never polled to completion"
         );
 
         unsafe { rustfuture::rust_future_free::<i32>(handle) };
@@ -68,12 +71,12 @@ mod complete_returns_result_only_if_future_finished {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(handle, noop, 0) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(handle) };
+        let result = unsafe { rustfuture::rust_future_complete::<i32>(handle) };
 
         assert_eq!(
             result,
-            Some(99),
-            "complete() returns Some when future ran to completion"
+            Ok(99),
+            "complete() returns the ready value when future ran to completion"
         );
 
         unsafe { rustfuture::rust_future_free::<i32>(handle) };
@@ -95,11 +98,11 @@ mod complete_returns_result_only_if_future_finished {
         assert!(started.load(Ordering::SeqCst), "future started executing");
         assert!(!completed.load(Ordering::SeqCst), "future not yet complete");
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(handle) };
+        let result = unsafe { rustfuture::rust_future_complete::<i32>(handle) };
 
         assert!(
-            result.is_none(),
-            "complete() returns None when future started but didn't finish"
+            matches!(result, Err(FfiStatus::INTERNAL_ERROR)),
+            "complete() returns INTERNAL_ERROR when future started but didn't finish"
         );
 
         unsafe { rustfuture::rust_future_free::<i32>(handle) };
@@ -183,11 +186,11 @@ mod cancel_does_not_discard_completed_work {
 
         unsafe { rustfuture::rust_future_cancel::<i32>(handle) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(handle) };
+        let result = unsafe { rustfuture::rust_future_complete(handle) };
 
         assert_eq!(
             result,
-            Some(99),
+            Ok(99),
             "cancel() does not discard already-computed result (efficiency: don't throw away completed work)"
         );
 
