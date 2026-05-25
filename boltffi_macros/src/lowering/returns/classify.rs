@@ -1,3 +1,4 @@
+use boltffi_ffi_rules::primitive::Primitive;
 use syn::Type;
 
 use super::callback_return::try_resolve_callback_handle_return;
@@ -9,6 +10,10 @@ use crate::lowering::transport::{
 use super::model::{
     EncodedReturnStrategy, ReturnLoweringContext, ScalarReturnStrategy, ValueReturnStrategy,
 };
+
+pub(super) fn option_primitive_uses_scalar_encoding(primitive: Primitive) -> bool {
+    !matches!(primitive, Primitive::I64 | Primitive::U64)
+}
 
 #[derive(Clone, Copy)]
 pub struct ReturnTypeDescriptor<'a> {
@@ -22,12 +27,24 @@ impl<'a> ReturnTypeDescriptor<'a> {
         }
     }
 
-    pub fn option_primitive(&self) -> Option<boltffi_ffi_rules::primitive::Primitive> {
+    pub fn option_primitive(&self) -> Option<Primitive> {
         match self.type_descriptor.standard_container() {
             Some(StandardContainer::Option(inner_type)) => {
                 TypeDescriptor::new(inner_type).primitive()
             }
             _ => None,
+        }
+    }
+
+    pub fn option_encoded_return_strategy(&self) -> EncodedReturnStrategy {
+        let Some(primitive) = self.option_primitive() else {
+            return EncodedReturnStrategy::WireEncoded;
+        };
+
+        if option_primitive_uses_scalar_encoding(primitive) {
+            EncodedReturnStrategy::OptionScalar
+        } else {
+            EncodedReturnStrategy::WireEncoded
         }
     }
 
@@ -75,7 +92,9 @@ pub fn classify_value_return_strategy(
         }
         RustTypeShape::StandardContainer(StandardContainer::Option(inner_type)) => {
             if ReturnTypeDescriptor::parse(inner_type).is_primitive() {
-                Ok(ValueReturnStrategy::Buffer(EncodedReturnStrategy::OptionScalar))
+                Ok(ValueReturnStrategy::Buffer(
+                    return_type.option_encoded_return_strategy(),
+                ))
             } else if return_lowering
                 .exported_classes()
                 .is_exported_class_type(inner_type)

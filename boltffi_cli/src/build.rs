@@ -18,6 +18,14 @@ pub enum CargoBuildProfile {
 }
 
 impl CargoBuildProfile {
+    pub fn cargo_profile_name(&self) -> &str {
+        match self {
+            Self::Debug => "dev",
+            Self::Release => "release",
+            Self::Named(profile_name) => profile_name,
+        }
+    }
+
     pub fn resolve(default_release: bool, cargo_args: &[String]) -> Self {
         let default_profile = if default_release {
             Self::Release

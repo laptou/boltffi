@@ -157,6 +157,9 @@ mod tests {
             &[JvmPackagedNativeOutput {
                 host_target: requested_host,
                 has_shared_library_copy: false,
+                jni_library_path: temp_root.join(requested_host.jni_library_filename("demo")),
+                shared_library_path: None,
+                debug_info_sidecars: Vec::new(),
             }],
             "demo",
         )

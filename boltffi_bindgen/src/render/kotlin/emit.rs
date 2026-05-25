@@ -127,7 +127,7 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
         SizeExpr::OptionSize { value, inner } => {
             let inner_expr = emit_size_expr(inner);
             format!(
-                "({}?.let {{ v -> 1 + {} }} ?: 1)",
+                "({}?.let {{ v -> 1 + {} }} ?: 1.toInt())",
                 render_value(value),
                 inner_expr
             )
@@ -244,32 +244,28 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
 }
 
 fn emit_reader_vec(element_type: &TypeExpr, element: &ReadSeq, layout: &VecLayout) -> String {
+    if let TypeExpr::Primitive(primitive) = element_type {
+        return format!("reader.{}()", primitive_array_read_method(*primitive));
+    }
     match layout {
-        VecLayout::Blittable { .. } => match element_type {
-            TypeExpr::Primitive(primitive) => {
-                let method = match primitive {
-                    PrimitiveType::I32 | PrimitiveType::U32 => "readIntArray",
-                    PrimitiveType::I16 | PrimitiveType::U16 => "readShortArray",
-                    PrimitiveType::I64
-                    | PrimitiveType::U64
-                    | PrimitiveType::ISize
-                    | PrimitiveType::USize => "readLongArray",
-                    PrimitiveType::F32 => "readFloatArray",
-                    PrimitiveType::F64 => "readDoubleArray",
-                    PrimitiveType::U8 | PrimitiveType::I8 => "readBytes",
-                    PrimitiveType::Bool => "readBooleanArray",
-                };
-                format!("reader.{}()", method)
-            }
-            _ => {
-                let inner = emit_reader_read(element);
-                format!("reader.readList {{ {} }}", inner)
-            }
-        },
-        VecLayout::Encoded => {
+        VecLayout::Blittable { .. } | VecLayout::Encoded => {
             let inner = emit_reader_read(element);
             format!("reader.readList {{ {} }}", inner)
         }
+    }
+}
+
+fn primitive_array_read_method(primitive: PrimitiveType) -> &'static str {
+    match primitive {
+        PrimitiveType::I32 | PrimitiveType::U32 => "readIntArray",
+        PrimitiveType::I16 | PrimitiveType::U16 => "readShortArray",
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::ISize | PrimitiveType::USize => {
+            "readLongArray"
+        }
+        PrimitiveType::F32 => "readFloatArray",
+        PrimitiveType::F64 => "readDoubleArray",
+        PrimitiveType::U8 | PrimitiveType::I8 => "readBytes",
+        PrimitiveType::Bool => "readBooleanArray",
     }
 }
 
@@ -360,13 +356,13 @@ pub fn emit_write_expr(seq: &WriteSeq) -> String {
 }
 
 fn emit_vec_size(value: &str, inner: &SizeExpr, layout: &VecLayout) -> String {
-    match layout {
-        VecLayout::Blittable { .. } => {
+    match (layout, inner) {
+        (VecLayout::Blittable { .. }, _) | (_, SizeExpr::Fixed(_)) => {
             format!("(4 + {}.size * {})", value, emit_size_expr(inner))
         }
-        VecLayout::Encoded => {
+        (VecLayout::Encoded, _) => {
             format!(
-                "(4 + {}.sumOf {{ item -> ({}).toInt() }})",
+                "(4 + {}.sumOf {{ item -> {} }})",
                 value,
                 emit_size_expr(inner)
             )
@@ -404,24 +400,15 @@ fn emit_write_vec(
     element: &WriteSeq,
     layout: &VecLayout,
 ) -> String {
-    match layout {
-        VecLayout::Blittable { .. } => match element_type {
-            TypeExpr::Primitive(_) => format!("wire.writePrimitiveList({})", value),
-            TypeExpr::Record(id) => format!(
-                "wire.writeU32({}.size.toUInt()); {}Writer.writeAllToWire(wire, {})",
-                value,
-                id.as_str(),
-                value
-            ),
-            _ => {
-                let inner = emit_write_expr(element);
-                format!(
-                    "wire.writeU32({}.size.toUInt()); {}.forEach {{ item -> {} }}",
-                    value, value, inner
-                )
-            }
-        },
-        VecLayout::Encoded => {
+    match (layout, element_type) {
+        (_, TypeExpr::Primitive(_)) => format!("wire.writePrimitiveList({})", value),
+        (VecLayout::Blittable { .. }, TypeExpr::Record(id)) => format!(
+            "wire.writeU32({}.size.toUInt()); {}Writer.writeAllToWire(wire, {})",
+            value,
+            id.as_str(),
+            value
+        ),
+        _ => {
             let inner = emit_write_expr(element);
             format!(
                 "wire.writeU32({}.size.toUInt()); {}.forEach {{ item -> {} }}",
@@ -438,5 +425,29 @@ fn emit_write_builtin(id: &BuiltinId, value: &str) -> String {
         "Uuid" => format!("wire.writeUuid({})", value),
         "Url" => format!("wire.writeUri({})", value),
         _ => format!("wire.writeString({})", value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ids::RecordId;
+    use crate::ir::ops::WireSizeOwner;
+
+    #[test]
+    fn encoded_vec_size_does_not_emit_redundant_int_conversion() {
+        let size = SizeExpr::VecSize {
+            value: ValueExpr::Var("items".to_string()),
+            inner: Box::new(SizeExpr::WireSize {
+                value: ValueExpr::Var("item".to_string()),
+                owner: Some(WireSizeOwner::Record(RecordId::new("Item"))),
+            }),
+            layout: VecLayout::Encoded,
+        };
+
+        assert_eq!(
+            emit_size_expr(&size),
+            "(4 + items.sumOf { item -> item.wireEncodedSize() })"
+        );
     }
 }

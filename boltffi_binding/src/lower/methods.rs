@@ -1,0 +1,272 @@
+//! Method and initializer lowering for declaration-owned callables.
+//!
+//! Records and classes can promote static `Self`-returning methods to
+//! [`InitializerDecl<S>`]. Records, enums, and classes keep every other
+//! method as a [`MethodDecl<S, NativeSymbol>`]. The callable body is
+//! lowered by [`super::callable`]; this module owns the initializer
+//! discriminator, target symbol allocation, and owner-specific constructed
+//! type recorded on an initializer.
+//!
+//! `Result<Self, E>` initializers are not recognised yet. They become
+//! initializers when fallible return lowering lands, so this pass never
+//! produces an initializer whose callable shape cannot be represented.
+
+use boltffi_ast::{ClassDef, EnumDef, MethodDef, Receiver, RecordDef, ReturnDef, TypeExpr};
+
+use crate::{
+    CanonicalName, InitializerDecl, InitializerId, MethodDecl, MethodId, NativeSymbol,
+    ReturnTypeRef, TypeRef,
+};
+
+use super::{
+    LowerError, callable,
+    error::UnsupportedType,
+    ids::DeclarationIds,
+    index::Index,
+    metadata,
+    surface::SurfaceLower,
+    symbol::{SymbolAllocator, SymbolOwner, initializer_symbol_name, member_symbol_name},
+};
+
+/// Lowers every initializer-shaped method on `record`.
+///
+/// Initializer ids are assigned after non-initializer methods are removed,
+/// so the initializer table is dense in the exact order renderers observe.
+pub(super) fn lower_record_initializers<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    record: &RecordDef,
+) -> Result<Vec<InitializerDecl<S>>, LowerError> {
+    let owner = callable::CallableOwner::Record(record);
+    let record_id = ids.record(&record.id)?;
+    lower_initializers(
+        idx,
+        ids,
+        allocator,
+        owner,
+        &record.methods,
+        TypeRef::Record(record_id),
+    )
+}
+
+/// Lowers every non-initializer method on `record`.
+///
+/// Method ids are assigned after initializer-shaped methods are removed,
+/// so the method table is dense in the exact order renderers observe.
+pub(super) fn lower_record_methods<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    record: &RecordDef,
+) -> Result<Vec<MethodDecl<S, NativeSymbol>>, LowerError> {
+    let owner = callable::CallableOwner::Record(record);
+    record
+        .methods
+        .iter()
+        .filter(|method| !is_initializer(method))
+        .enumerate()
+        .map(|(index, method)| {
+            lower_method::<S>(
+                idx,
+                ids,
+                allocator,
+                owner,
+                method,
+                MethodId::from_raw(index as u32),
+            )
+        })
+        .collect()
+}
+
+/// Lowers every method on `enumeration`.
+///
+/// Enums do not expose initializer declarations in this IR slice, so every
+/// attached method remains a method.
+pub(super) fn lower_enum_methods<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    enumeration: &EnumDef,
+) -> Result<Vec<MethodDecl<S, NativeSymbol>>, LowerError> {
+    let owner = callable::CallableOwner::Enum(enumeration);
+    enumeration
+        .methods
+        .iter()
+        .enumerate()
+        .map(|(index, method)| {
+            lower_method::<S>(
+                idx,
+                ids,
+                allocator,
+                owner,
+                method,
+                MethodId::from_raw(index as u32),
+            )
+        })
+        .collect()
+}
+
+/// Lowers every initializer-shaped method on `class`.
+///
+/// Class initializers construct the class handle target rather than a
+/// value-shaped record. The callable still carries the native crossing
+/// selected for the `Self` return.
+pub(super) fn lower_class_initializers<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    class: &ClassDef,
+) -> Result<Vec<InitializerDecl<S>>, LowerError> {
+    let owner = callable::CallableOwner::Class(class);
+    let class_id = ids.class(&class.id)?;
+    lower_initializers(
+        idx,
+        ids,
+        allocator,
+        owner,
+        &class.methods,
+        TypeRef::Class(class_id),
+    )
+}
+
+/// Lowers every non-initializer method on `class`.
+///
+/// Owned class receivers are rejected until the handle ownership-transfer
+/// protocol is represented in the binding IR.
+pub(super) fn lower_class_methods<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    class: &ClassDef,
+) -> Result<Vec<MethodDecl<S, NativeSymbol>>, LowerError> {
+    let owner = callable::CallableOwner::Class(class);
+    class
+        .methods
+        .iter()
+        .filter(|method| !is_initializer(method))
+        .enumerate()
+        .map(|(index, method)| {
+            reject_owned_class_receiver(method)?;
+            lower_method::<S>(
+                idx,
+                ids,
+                allocator,
+                owner,
+                method,
+                MethodId::from_raw(index as u32),
+            )
+        })
+        .collect()
+}
+
+fn is_initializer(method: &MethodDef) -> bool {
+    matches!(method.receiver, Receiver::None)
+        && matches!(method.returns, ReturnDef::Value(TypeExpr::SelfType))
+}
+
+fn lower_initializers<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    owner: callable::CallableOwner<'_>,
+    methods: &[MethodDef],
+    returns: TypeRef,
+) -> Result<Vec<InitializerDecl<S>>, LowerError> {
+    methods
+        .iter()
+        .filter(|method| is_initializer(method))
+        .enumerate()
+        .map(|(index, method)| {
+            lower_initializer(
+                idx,
+                ids,
+                allocator,
+                owner,
+                method,
+                InitializerId::from_raw(index as u32),
+                returns.clone(),
+            )
+        })
+        .collect()
+}
+
+fn lower_initializer<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    owner: callable::CallableOwner<'_>,
+    method: &MethodDef,
+    id: InitializerId,
+    returns: TypeRef,
+) -> Result<InitializerDecl<S>, LowerError> {
+    let callable_decl = callable::lower_method::<S>(idx, ids, owner, method)?;
+    let symbol = mint_initializer_symbol(allocator, owner, method)?;
+    Ok(InitializerDecl::new(
+        id,
+        CanonicalName::from(&method.name),
+        metadata::decl_meta(method.doc.as_ref(), method.deprecated.as_ref()),
+        symbol,
+        callable_decl,
+        ReturnTypeRef::Value(returns),
+    ))
+}
+
+fn lower_method<S: SurfaceLower>(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    allocator: &mut SymbolAllocator,
+    owner: callable::CallableOwner<'_>,
+    method: &MethodDef,
+    id: MethodId,
+) -> Result<MethodDecl<S, NativeSymbol>, LowerError> {
+    let callable_decl = callable::lower_method::<S>(idx, ids, owner, method)?;
+    let symbol = mint_method_symbol(allocator, owner, method)?;
+    Ok(MethodDecl::new(
+        id,
+        CanonicalName::from(&method.name),
+        metadata::decl_meta(method.doc.as_ref(), method.deprecated.as_ref()),
+        symbol,
+        callable_decl,
+    ))
+}
+
+fn mint_method_symbol(
+    allocator: &mut SymbolAllocator,
+    owner: callable::CallableOwner<'_>,
+    method: &MethodDef,
+) -> Result<NativeSymbol, LowerError> {
+    let method_name = method.name.parts().last().map_or("", |part| part.as_str());
+    let symbol_name = member_symbol_name(symbol_owner(owner), method_name);
+    allocator.mint(symbol_name)
+}
+
+fn mint_initializer_symbol(
+    allocator: &mut SymbolAllocator,
+    owner: callable::CallableOwner<'_>,
+    method: &MethodDef,
+) -> Result<NativeSymbol, LowerError> {
+    let method_name = method.name.parts().last().map_or("", |part| part.as_str());
+    let symbol_name = initializer_symbol_name(symbol_owner(owner), method_name);
+    allocator.mint(symbol_name)
+}
+
+fn symbol_owner(owner: callable::CallableOwner<'_>) -> SymbolOwner<'_> {
+    match owner {
+        callable::CallableOwner::Record(record) => SymbolOwner::record(record.id.as_str()),
+        callable::CallableOwner::Enum(enumeration) => {
+            SymbolOwner::enumeration(enumeration.id.as_str())
+        }
+        callable::CallableOwner::Class(class) => SymbolOwner::class(class.id.as_str()),
+    }
+}
+
+fn reject_owned_class_receiver(method: &MethodDef) -> Result<(), LowerError> {
+    if matches!(method.receiver, Receiver::Owned) {
+        Err(LowerError::unsupported_type(
+            UnsupportedType::OwnedClassReceiver,
+        ))
+    } else {
+        Ok(())
+    }
+}

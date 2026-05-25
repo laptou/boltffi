@@ -242,6 +242,16 @@ fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_pat
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            println!("  targets.dart.output: {}", config.dart_output().display());
+            println!(
+                "  targets.dart.native_architectures: {}",
+                config
+                    .dart_native_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             println!("  targets.wasm.output: {}", config.wasm_output().display());
             println!(
                 "  targets.wasm.typescript.output: {}",

@@ -90,6 +90,33 @@ impl AbiIndex {
     }
 }
 
+enum TsReturnSemantics<'a> {
+    AbiOnly,
+    Source(&'a ReturnDef),
+}
+
+impl TsReturnSemantics<'_> {
+    fn result_unit_route(self, decode_ops: &ReadSeq) -> Option<(Option<String>, TsOutputRoute)> {
+        if !matches!(
+            self,
+            Self::Source(ReturnDef::Result {
+                ok: TypeExpr::Void,
+                ..
+            })
+        ) {
+            return None;
+        }
+
+        let Some(ReadOp::Result { err, .. }) = decode_ops.ops.first() else {
+            return None;
+        };
+
+        Some((
+            Some("void".to_string()),
+            TsOutputRoute::packed(emit::emit_result_void_ok_reader_read(err)),
+        ))
+    }
+}
 #[derive(Clone, Copy)]
 enum TsExecutionModel {
     Sync,
@@ -656,7 +683,11 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (_, return_route) = self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+        let (_, return_route) = self.select_output_route(
+            &abi_call.returns,
+            TsReturnSemantics::AbiOnly,
+            TsExecutionModel::Sync,
+        );
         let return_route =
             self.refine_value_type_output_route(return_route, Some(&owner.type_expr()));
         let return_type = if constructor.is_optional() {
@@ -723,8 +754,11 @@ impl<'a> TypeScriptLowerer<'a> {
                     ReturnDef::Result { ok, .. } => Some(ok),
                     ReturnDef::Void => None,
                 };
-                let (_, return_route) =
-                    self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+                let (_, return_route) = self.select_output_route(
+                    &abi_call.returns,
+                    TsReturnSemantics::Source(&method_def.returns),
+                    TsExecutionModel::Sync,
+                );
                 let return_route =
                     self.refine_value_type_output_route(return_route, return_type_expr);
                 TsValueTypeMethodMode::Sync(TsValueTypeSyncMethod { return_route })
@@ -736,8 +770,11 @@ impl<'a> TypeScriptLowerer<'a> {
                     ReturnDef::Result { ok, .. } => Some(ok),
                     ReturnDef::Void => None,
                 };
-                let (_, return_route) =
-                    self.select_output_route(&async_call.result, TsExecutionModel::AsyncMethod);
+                let (_, return_route) = self.select_output_route(
+                    &async_call.result,
+                    TsReturnSemantics::Source(&method_def.returns),
+                    TsExecutionModel::AsyncMethod,
+                );
                 let return_route =
                     self.refine_value_type_output_route(return_route, return_type_expr);
                 TsValueTypeMethodMode::Async(TsValueTypeAsyncMethod {
@@ -852,8 +889,11 @@ impl<'a> TypeScriptLowerer<'a> {
 
         let (return_type, return_handle, return_callback, mode) = match &abi_call.mode {
             CallMode::Sync => {
-                let (return_type, return_route) =
-                    self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+                let (return_type, return_route) = self.select_output_route(
+                    &abi_call.returns,
+                    TsReturnSemantics::Source(&method_def.returns),
+                    TsExecutionModel::Sync,
+                );
                 let return_handle = match &abi_call.returns.transport {
                     Some(Transport::Handle { class_id, nullable }) => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
@@ -871,8 +911,11 @@ impl<'a> TypeScriptLowerer<'a> {
             }
             CallMode::Async(async_call) => {
                 let entry_ffi_name = abi_call.symbol.as_str().to_string();
-                let (return_type, return_route) =
-                    self.select_output_route(&async_call.result, TsExecutionModel::AsyncMethod);
+                let (return_type, return_route) = self.select_output_route(
+                    &async_call.result,
+                    TsReturnSemantics::Source(&method_def.returns),
+                    TsExecutionModel::AsyncMethod,
+                );
                 let return_handle = match &async_call.result.transport {
                     Some(Transport::Handle { class_id, nullable }) => Some(TsHandleReturn {
                         class_name: naming::to_upper_camel_case(class_id.as_str()),
@@ -1065,8 +1108,11 @@ impl<'a> TypeScriptLowerer<'a> {
                         _ => (None, TsCallbackImportReturn::Void),
                     },
                 };
-                let (_, proxy_return_route) =
-                    self.select_output_route(&abi_method.returns, TsExecutionModel::Sync);
+                let (_, proxy_return_route) = self.select_output_route(
+                    &abi_method.returns,
+                    TsReturnSemantics::Source(&method_def.returns),
+                    TsExecutionModel::Sync,
+                );
 
                 Some(TsCallbackMethod {
                     ts_name,
@@ -1281,8 +1327,11 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (return_type, return_route) =
-            self.select_output_route(&abi_call.returns, TsExecutionModel::Sync);
+        let (return_type, return_route) = self.select_output_route(
+            &abi_call.returns,
+            TsReturnSemantics::Source(&def.returns),
+            TsExecutionModel::Sync,
+        );
         let (throws, err_type) = self.lower_error(&abi_call.error);
         let return_callback = self.callback_return(&abi_call.returns);
 
@@ -1325,8 +1374,11 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
-        let (return_type, return_route) =
-            self.select_output_route(&async_call.result, TsExecutionModel::AsyncFunction);
+        let (return_type, return_route) = self.select_output_route(
+            &async_call.result,
+            TsReturnSemantics::Source(&def.returns),
+            TsExecutionModel::AsyncFunction,
+        );
         let (throws, err_type) = self.lower_error(&async_call.error);
         let return_callback = self.callback_return(&async_call.result);
 
@@ -1513,6 +1565,7 @@ impl<'a> TypeScriptLowerer<'a> {
     fn select_output_route(
         &self,
         returns: &ReturnShape,
+        semantics: TsReturnSemantics<'_>,
         execution_model: TsExecutionModel,
     ) -> (Option<String>, TsOutputRoute) {
         match returns.value_return_strategy() {
@@ -1579,7 +1632,9 @@ impl<'a> TypeScriptLowerer<'a> {
                     )
                 }
                 _ => match &returns.decode_ops {
-                    Some(decode_ops) => self.encoded_output_route(decode_ops, execution_model),
+                    Some(decode_ops) => {
+                        self.encoded_output_route(decode_ops, semantics, execution_model)
+                    }
                     None => (None, TsOutputRoute::void()),
                 },
             },
@@ -1588,7 +1643,9 @@ impl<'a> TypeScriptLowerer<'a> {
             | ValueReturnStrategy::Buffer(EncodedReturnStrategy::ResultScalar)
             | ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded) => {
                 match &returns.decode_ops {
-                    Some(decode_ops) => self.encoded_output_route(decode_ops, execution_model),
+                    Some(decode_ops) => {
+                        self.encoded_output_route(decode_ops, semantics, execution_model)
+                    }
                     None => (None, TsOutputRoute::void()),
                 }
             }
@@ -1700,13 +1757,9 @@ impl<'a> TypeScriptLowerer<'a> {
                 Some(ts_type),
                 TsOutputRoute::direct(ts_direct_cast(&abi_type)),
             ),
-            TsExecutionModel::AsyncFunction => (
+            TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
                 Some(ts_type),
                 TsOutputRoute::async_scalar(ts_direct_cast(&abi_type)),
-            ),
-            TsExecutionModel::AsyncMethod => (
-                Some(ts_type),
-                TsOutputRoute::packed(scalar_async_decode_expr(&abi_type)),
             ),
         }
     }
@@ -1813,22 +1866,30 @@ impl<'a> TypeScriptLowerer<'a> {
     fn encoded_output_route(
         &self,
         decode_ops: &ReadSeq,
+        semantics: TsReturnSemantics<'_>,
         execution_model: TsExecutionModel,
     ) -> (Option<String>, TsOutputRoute) {
         match execution_model {
-            TsExecutionModel::Sync => self.sync_encoded_output_route(decode_ops),
+            TsExecutionModel::Sync => self.sync_encoded_output_route(decode_ops, semantics),
             TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => {
-                self.async_encoded_output_route(decode_ops)
+                self.async_encoded_output_route(decode_ops, semantics)
             }
         }
     }
 
-    fn sync_encoded_output_route(&self, decode_ops: &ReadSeq) -> (Option<String>, TsOutputRoute) {
+    fn sync_encoded_output_route(
+        &self,
+        decode_ops: &ReadSeq,
+        semantics: TsReturnSemantics<'_>,
+    ) -> (Option<String>, TsOutputRoute) {
+        if let Some(route) = semantics.result_unit_route(decode_ops) {
+            return route;
+        }
         let ts_type_str = infer_ts_type_from_read_ops(decode_ops);
         if let Some(optional_decode) = emit_raw_optional_primitive_read(decode_ops) {
             return (
                 Some(ts_type_str),
-                TsOutputRoute::f64_optional(optional_decode),
+                TsOutputRoute::nan_boxed_optional(optional_decode),
             );
         }
         match decode_ops.ops.first() {
@@ -1866,7 +1927,14 @@ impl<'a> TypeScriptLowerer<'a> {
         }
     }
 
-    fn async_encoded_output_route(&self, decode_ops: &ReadSeq) -> (Option<String>, TsOutputRoute) {
+    fn async_encoded_output_route(
+        &self,
+        decode_ops: &ReadSeq,
+        semantics: TsReturnSemantics<'_>,
+    ) -> (Option<String>, TsOutputRoute) {
+        if let Some(route) = semantics.result_unit_route(decode_ops) {
+            return route;
+        }
         let ts_type = infer_ts_type_from_read_ops(decode_ops);
         let decode_expr = emit::emit_reader_read(decode_ops);
         (Some(ts_type), TsOutputRoute::packed(decode_expr))
@@ -1889,7 +1957,11 @@ impl<'a> TypeScriptLowerer<'a> {
                 })
                 .collect();
 
-            let (_, return_route) = self.select_output_route(&call.returns, TsExecutionModel::Sync);
+            let (_, return_route) = self.select_output_route(
+                &call.returns,
+                TsReturnSemantics::AbiOnly,
+                TsExecutionModel::Sync,
+            );
             let mut wasm_params = wasm_params;
             if return_route.is_struct_return_slot() {
                 wasm_params.insert(
@@ -1911,7 +1983,7 @@ impl<'a> TypeScriptLowerer<'a> {
                     Some(Transport::Callback { .. }) => Some("number".to_string()),
                     _ => None,
                 }
-            } else if return_route.is_f64_optional() {
+            } else if return_route.is_nan_boxed_optional() {
                 Some("number".to_string())
             } else if return_route.is_struct_return_slot() || return_route.is_void_slot() {
                 None
@@ -2154,7 +2226,8 @@ fn emit_raw_optional_primitive_read(seq: &ReadSeq) -> Option<String> {
         PrimitiveType::I64 | PrimitiveType::U64 => return None,
         PrimitiveType::F32 => "unpackOptionF32",
         PrimitiveType::F64 => "unpackOptionF64",
-        PrimitiveType::ISize | PrimitiveType::USize => return None,
+        PrimitiveType::ISize => "unpackOptionI32",
+        PrimitiveType::USize => "unpackOptionU32",
     };
 
     Some(format!("_module.{method}(packed)"))
@@ -2748,6 +2821,82 @@ mod tests {
     }
 
     #[test]
+    fn result_unit_class_method_returns_void_and_does_not_read_ok_payload() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![ConstructorDef::Default {
+                params: vec![],
+                is_fallible: false,
+                is_optional: false,
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            methods: vec![MethodDef {
+                id: MethodId::new("try_reset_if_positive"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Result {
+                    ok: TypeExpr::Void,
+                    err: TypeExpr::String,
+                },
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let method = module.classes[0]
+            .methods
+            .iter()
+            .find(|method| method.ts_name == "tryResetIfPositive")
+            .expect("result unit class method should lower");
+        let TsClassMethodMode::Sync(sync_method) = &method.mode else {
+            panic!("result unit class method should be sync");
+        };
+
+        assert_eq!(method.return_type.as_deref(), Some("void"));
+        assert_eq!(
+            sync_method.return_route.decode_expr(),
+            "reader.readResult(() => undefined, () => new Error(reader.readString()))"
+        );
+        assert!(!sync_method.return_route.decode_expr().contains("readU8()"));
+    }
+
+    #[test]
+    fn result_unit_async_function_returns_void_and_does_not_read_ok_payload() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "try_reset_async",
+            vec![],
+            ReturnDef::Result {
+                ok: TypeExpr::Void,
+                err: TypeExpr::String,
+            },
+            ExecutionKind::Async,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .async_functions
+            .iter()
+            .find(|function| function.name == "tryResetAsync")
+            .expect("result unit async function should lower");
+
+        assert_eq!(function.return_type.as_deref(), Some("void"));
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "reader.readResult(() => undefined, () => new Error(reader.readString()))"
+        );
+        assert!(!function.return_route.decode_expr().contains("readU8()"));
+    }
+
+    #[test]
     fn wasm_imports_skip_async_calls() {
         let mut contract = empty_contract();
         contract.functions.push(function(
@@ -2844,7 +2993,7 @@ mod tests {
             .find(|function| function.name == "findEven")
             .expect("findEven should be lowered");
 
-        assert!(function.return_route.is_f64_optional());
+        assert!(function.return_route.is_nan_boxed_optional());
         assert_eq!(
             function.return_route.decode_expr(),
             "_module.unpackOptionI32(packed)"
@@ -2875,12 +3024,78 @@ mod tests {
             .find(|import| import.ffi_name == "boltffi_safe_sqrt")
             .expect("wasm import should exist");
 
-        assert!(function.return_route.is_f64_optional());
+        assert!(function.return_route.is_nan_boxed_optional());
         assert_eq!(
             function.return_route.decode_expr(),
             "_module.unpackOptionF64(packed)"
         );
         assert_eq!(import.return_wasm_type.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn option_i64_return_uses_packed_wire_decode() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "find_positive_i64",
+            vec![primitive_param("value", PrimitiveType::I64)],
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
+                PrimitiveType::I64,
+            )))),
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "findPositiveI64")
+            .expect("findPositiveI64 should be lowered");
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|import| import.ffi_name == "boltffi_find_positive_i64")
+            .expect("wasm import should exist");
+
+        assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
+        assert!(function.return_route.is_packed());
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "reader.readOptional(() => reader.readI64())"
+        );
+        assert_eq!(import.return_wasm_type.as_deref(), Some("bigint"));
+    }
+
+    #[test]
+    fn option_u64_return_uses_packed_wire_decode() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "find_positive_u64",
+            vec![primitive_param("value", PrimitiveType::U64)],
+            ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Primitive(
+                PrimitiveType::U64,
+            )))),
+            ExecutionKind::Sync,
+        ));
+
+        let module = lower_contract(&contract);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "findPositiveU64")
+            .expect("findPositiveU64 should be lowered");
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|import| import.ffi_name == "boltffi_find_positive_u64")
+            .expect("wasm import should exist");
+
+        assert_eq!(function.return_type.as_deref(), Some("bigint | null"));
+        assert!(function.return_route.is_packed());
+        assert_eq!(
+            function.return_route.decode_expr(),
+            "reader.readOptional(() => reader.readU64())"
+        );
+        assert_eq!(import.return_wasm_type.as_deref(), Some("bigint"));
     }
 
     #[test]
@@ -4136,7 +4351,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm_async_class_scalar_return_uses_packed_completion() {
+    fn wasm_async_class_scalar_return_uses_direct_completion() {
         let mut contract = empty_contract();
         contract.catalog.insert_class(ClassDef {
             id: ClassId::new("SharedCounter"),
@@ -4170,8 +4385,8 @@ mod tests {
         assert_eq!(method.return_type.as_deref(), Some("number"));
         match &method.mode {
             TsClassMethodMode::Async(async_method) => {
-                assert!(async_method.return_route.is_packed());
-                assert_eq!(async_method.return_route.decode_expr(), "reader.readI32()");
+                assert!(async_method.return_route.is_async_scalar());
+                assert_eq!(async_method.return_route.ts_cast(), "");
             }
             _ => panic!("expected async method"),
         }

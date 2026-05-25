@@ -16,6 +16,10 @@ impl NamingConvention {
         Self::escape_keyword(&naming::to_snake_case(name))
     }
 
+    pub fn record_field_name(name: &str) -> String {
+        Self::escape_keyword(&naming::to_snake_case(name))
+    }
+
     pub fn class_name(name: &str) -> String {
         Self::escape_keyword(&name.to_upper_camel_case())
     }
@@ -40,6 +44,18 @@ impl NamingConvention {
         Self::reserved_int_enum_member_names().contains(&name)
             || Self::is_dunder_name(name)
             || Self::is_sunder_name(name)
+    }
+
+    pub fn is_reserved_record_callable_name(name: &str) -> bool {
+        Self::is_dunder_name(name)
+    }
+
+    pub fn is_reserved_record_field_name(name: &str) -> bool {
+        Self::is_dunder_name(name)
+    }
+
+    pub fn int_enum_base_name() -> &'static str {
+        "IntEnum"
     }
 
     pub fn native_loader_name() -> &'static str {
@@ -139,6 +155,7 @@ mod tests {
         assert_eq!(NamingConvention::function_name("match"), "match_");
         assert_eq!(NamingConvention::param_name("from"), "from_");
         assert_eq!(NamingConvention::param_name("type"), "type_");
+        assert_eq!(NamingConvention::record_field_name("class"), "class_");
     }
 
     #[test]
@@ -193,6 +210,34 @@ mod tests {
         assert!(!NamingConvention::is_reserved_int_enum_callable_name(
             "_private"
         ));
+    }
+
+    #[test]
+    fn rejects_reserved_record_callable_names() {
+        assert!(NamingConvention::is_reserved_record_callable_name(
+            "__init__"
+        ));
+        assert!(NamingConvention::is_reserved_record_callable_name(
+            "__new__"
+        ));
+        assert!(!NamingConvention::is_reserved_record_callable_name(
+            "distance"
+        ));
+        assert!(!NamingConvention::is_reserved_record_callable_name(
+            "_private"
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_record_field_names() {
+        assert!(NamingConvention::is_reserved_record_field_name("__dict__"));
+        assert!(NamingConvention::is_reserved_record_field_name("__repr__"));
+        assert!(!NamingConvention::is_reserved_record_field_name("x"));
+    }
+
+    #[test]
+    fn exposes_int_enum_base_name() {
+        assert_eq!(NamingConvention::int_enum_base_name(), "IntEnum");
     }
 
     #[test]

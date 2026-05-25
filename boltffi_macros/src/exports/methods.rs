@@ -10,7 +10,7 @@ use quote::{quote, quote_spanned};
 use syn::{FnArg, ReturnType, Type};
 
 use crate::exports::async_export::{
-    wasm_complete_export_for_async, AsyncExportNames, AsyncRuntimeExports,
+    AsyncExportNames, AsyncRuntimeExports, AsyncWasmCompleteExport,
 };
 use crate::exports::callable::MethodCallable;
 use crate::exports::callback_return::resolve_sync_callback_return;
@@ -18,14 +18,14 @@ use crate::exports::extern_export::{
     DirectBufferCarrier, DualPlatformExternExport, ExportBody, ExportCondition, ExportSafety,
     ExternExport, ReceiverParameter,
 };
-use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::index::CrateIndex;
+use crate::index::callback_traits::CallbackTraitRegistry;
 use crate::lowering::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::lowering::returns::classify::option_inner_type;
 use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
-    normalize_return_type_for_self, ResolvedReturn, ReturnInvocationContext,
-    ReturnLoweringContext, ReturnPlatform, ValueReturnStrategy, WasmOptionScalarEncoding,
+    ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
+    ValueReturnStrategy, WasmOptionScalarEncoding, normalize_return_type_for_self,
 };
 use boltffi_ffi_rules::transport::{EncodedReturnStrategy, ErrorReturnStrategy};
 
@@ -561,12 +561,8 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             let method_ident = &exportable_method.method.sig.ident;
             if let Some(item_type) = exportable_method.stream_item_type() {
                 let callable = exportable_method.callable();
-                let tokens = generate_stream_exports(
-                    &type_name,
-                    &type_name_str,
-                    callable,
-                    &item_type,
-                );
+                let tokens =
+                    generate_stream_exports(&type_name, &type_name_str, callable, &item_type);
                 return Some(wrap_cfg_gated_method_exports(
                     cfg_tokens,
                     &type_name_str,
@@ -605,12 +601,7 @@ pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 (CallableForm::Function, _) => None,
             };
             generated.map(|tokens| {
-                wrap_cfg_gated_method_exports(
-                    cfg_tokens,
-                    &type_name_str,
-                    method_ident,
-                    tokens,
-                )
+                wrap_cfg_gated_method_exports(cfg_tokens, &type_name_str, method_ident, tokens)
             })
         })
         .collect();
@@ -774,11 +765,10 @@ fn generate_sync_method_export(
     }
 
     let fn_output = normalize_return_type_for_self(&method.sig.output, type_name);
-    let sync_callback_return =
-        match resolve_sync_callback_return(&fn_output, callback_registry) {
-            Ok(resolved_return) => resolved_return,
-            Err(error) => return Some(error.to_compile_error()),
-        };
+    let sync_callback_return = match resolve_sync_callback_return(&fn_output, callback_registry) {
+        Ok(resolved_return) => resolved_return,
+        Err(error) => return Some(error.to_compile_error()),
+    };
     let return_abi = match return_lowering.lower_output(&fn_output) {
         Ok(r) => r,
         Err(e) => return Some(e.to_compile_error()),
@@ -1123,11 +1113,10 @@ fn generate_static_method_export(
     let visibility: syn::Visibility = syn::parse_quote! { pub };
 
     let fn_output = normalize_return_type_for_self(&method.sig.output, type_name);
-    let sync_callback_return =
-        match resolve_sync_callback_return(&fn_output, callback_registry) {
-            Ok(resolved_return) => resolved_return,
-            Err(error) => return Some(error.to_compile_error()),
-        };
+    let sync_callback_return = match resolve_sync_callback_return(&fn_output, callback_registry) {
+        Ok(resolved_return) => resolved_return,
+        Err(error) => return Some(error.to_compile_error()),
+    };
     let return_abi = match return_lowering.lower_output(&fn_output) {
         Ok(r) => r,
         Err(e) => return Some(e.to_compile_error()),
@@ -1497,10 +1486,14 @@ fn generate_async_method_export(
     let base_name = naming::method_ffi_name(class_name, &method_name_str);
     let export_names = AsyncExportNames::new(base_name.as_str(), method_name.span());
     let visibility: syn::Visibility = syn::parse_quote! { pub };
+    let fn_output = &method.sig.output;
+    let return_abi = match return_lowering.lower_output(fn_output) {
+        Ok(return_abi) => return_abi,
+        Err(error) => return Some(error.to_compile_error()),
+    };
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
-    // wire decode failures already called set_last_error; return null future handle (invalid).
-    let on_wire_record_error = quote! { return ::core::ptr::null(); };
+    let on_wire_record_error = return_abi.async_invalid_arg_early_return_statement();
     let params = match transform_method_params_async(
         other_inputs,
         return_lowering,
@@ -1551,7 +1544,8 @@ fn generate_async_method_export(
         InstanceMethodExport::new(&visibility, export_names.entry(), type_name, ffi_params)
             .render_async_entry(entry_body);
 
-    let wasm_complete = wasm_complete_export_for_async(&return_abi, &quote! { #rust_return_type });
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: &visibility,
         names: &export_names,
@@ -1639,11 +1633,11 @@ fn generate_async_static_method_export(
             #future_body
         })
     };
-    let entry_fn =
-        StaticMethodExport::new(&visibility, export_names.entry(), ffi_params)
-            .render_async_entry(entry_body);
+    let entry_fn = StaticMethodExport::new(&visibility, export_names.entry(), ffi_params)
+        .render_async_entry(entry_body);
 
-    let wasm_complete = wasm_complete_export_for_async(&return_abi, &quote! { #rust_return_type });
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: &visibility,
         names: &export_names,
@@ -1816,7 +1810,7 @@ mod tests {
     use super::*;
     use crate::index::callback_traits::CallbackTraitRegistry;
     use crate::index::custom_types::CustomTypeRegistry;
-    use crate::index::data_types::DataTypeRegistry;
+    use crate::index::data_types::{DataTypeCategory, DataTypeRegistry};
     use crate::lowering::returns::model::ReturnLoweringContext;
 
     fn parse_impl(code: &str) -> syn::ItemImpl {
@@ -1829,7 +1823,10 @@ mod tests {
 
     fn return_lowering() -> ReturnLoweringContext<'static> {
         let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
-        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::with_entries(&[
+            ("UserProfile", DataTypeCategory::WireEncoded),
+            ("Filter", DataTypeCategory::WireEncoded),
+        ])));
         let mut exported_classes = crate::index::exported_classes::ExportedClassRegistry::default();
         exported_classes.register_simple_name_for_test("Transfer");
         let exported_classes = Box::leak(Box::new(exported_classes));

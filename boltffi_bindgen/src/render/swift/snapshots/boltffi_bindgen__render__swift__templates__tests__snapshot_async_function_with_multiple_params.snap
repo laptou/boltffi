@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
+assertion_line: 1776
 expression: "render_function(&func, \"boltffi\")"
 ---
 public func uploadFile(path: String, to destination: String) async throws -> String {
@@ -13,7 +14,7 @@ public func uploadFile(path: String, to destination: String) async throws -> Str
         cancelFn: boltffi_upload_file_cancel,
         freeFn: boltffi_upload_file_free
     ) { buf, status in
-        guard status.code == 0 else { boltffi_free_buf(buf); throw FfiError(message: "ffi call failed") }
+        guard status.code == 0 else { boltffi_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
         defer { boltffi_free_buf(buf) }
         return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readString() }
     }

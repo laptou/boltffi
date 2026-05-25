@@ -1,15 +1,17 @@
 use boltffi_bindgen::render::jni::{JniEmitter, JniLowerer, JvmBindingStyle};
-use boltffi_bindgen::render::kotlin::{KotlinEmitter, KotlinLowerer};
-use boltffi_bindgen::{
-    FactoryStyle as BindgenFactoryStyle, KotlinApiStyle as BindgenKotlinApiStyle, KotlinOptions,
+use boltffi_bindgen::render::kotlin::{
+    KotlinApiStyle as BindgenKotlinApiStyle, KotlinDesktopLoader as BindgenKotlinDesktopLoader,
+    KotlinEmitter, KotlinLowerer,
 };
+use boltffi_bindgen::{FactoryStyle as BindgenFactoryStyle, KotlinOptions};
 
 use crate::cli::{CliError, Result};
 use crate::commands::generate::generator::{
     GenerateRequest, LanguageGenerator, ScanPointerWidth, bindgen_type_mappings,
 };
 use crate::config::{
-    FactoryStyle as ConfigFactoryStyle, KotlinApiStyle as ConfigKotlinApiStyle, Target,
+    FactoryStyle as ConfigFactoryStyle, KotlinApiStyle as ConfigKotlinApiStyle,
+    KotlinDesktopLoader as ConfigKotlinDesktopLoader, Target,
 };
 
 pub struct KotlinGenerator;
@@ -28,11 +30,16 @@ impl KotlinGenerator {
                 ConfigKotlinApiStyle::ModuleObject => BindgenKotlinApiStyle::ModuleObject,
             },
             module_object_name: Some(module_name.to_string()),
-            library_name: request
-                .config()
-                .android_kotlin_library_name()
-                .map(boltffi_bindgen::library_name),
-            desktop_loader: true,
+            library_name: Some(boltffi_bindgen::load_library_name(
+                &request.config().resolved_android_kotlin_library_name(),
+            )),
+            desktop_jni_library_name: None,
+            desktop_fallback_library_name: None,
+            desktop_loader: match request.config().android_kotlin_desktop_loader() {
+                ConfigKotlinDesktopLoader::Bundled => BindgenKotlinDesktopLoader::Bundled,
+                ConfigKotlinDesktopLoader::System => BindgenKotlinDesktopLoader::System,
+                ConfigKotlinDesktopLoader::None => BindgenKotlinDesktopLoader::None,
+            },
         }
     }
 }

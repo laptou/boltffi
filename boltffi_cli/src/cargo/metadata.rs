@@ -4,6 +4,7 @@ use std::process::Command;
 use serde::Deserialize;
 
 use crate::cli::{CliError, Result};
+use crate::target::{BuiltLibrary, Platform, RustTarget};
 
 use super::Cargo;
 
@@ -11,6 +12,8 @@ use super::Cargo;
 pub(crate) struct CargoMetadata {
     pub(crate) packages: Vec<CargoMetadataPackage>,
     pub(crate) target_directory: PathBuf,
+    #[serde(default)]
+    pub(crate) workspace_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +110,66 @@ impl CargoMetadata {
             status: None,
         })
     }
+
+    pub(crate) fn resolve_built_libraries_for_targets(
+        &self,
+        cargo_manifest_path: &Path,
+        profile_directory_name: &str,
+        preferred_artifact_name: &str,
+        package_selector: Option<&str>,
+        package_targets: &[RustTarget],
+    ) -> Result<Vec<BuiltLibrary>> {
+        let package = self.find_package(cargo_manifest_path, package_selector)?;
+        let artifact_name = package
+            .resolve_library_artifact_name(preferred_artifact_name, cargo_manifest_path)?
+            .to_string();
+        let library_target = package.resolve_library_target(&artifact_name, cargo_manifest_path)?;
+
+        let mut libraries = vec![];
+
+        for t in package_targets {
+            for crate_type in &library_target.crate_types {
+                let prefix = if crate_type.is_staticlib() {
+                    "lib"
+                } else {
+                    match t.platform() {
+                        Platform::Wasm => "",
+                        Platform::Android
+                        | Platform::Ios
+                        | Platform::IosSimulator
+                        | Platform::Linux
+                        | Platform::MacOs => "lib",
+                    }
+                };
+                let suffix = if crate_type.is_cdylib() {
+                    match t.platform() {
+                        Platform::Wasm => "wasm",
+                        Platform::Android | Platform::Linux => "so",
+                        Platform::MacOs | Platform::Ios | Platform::IosSimulator => "dylib",
+                    }
+                } else if crate_type.is_staticlib() {
+                    "a"
+                } else {
+                    continue;
+                };
+
+                let library_filename = format!("{}{}.{}", prefix, artifact_name, suffix);
+
+                let library_filepath = self
+                    .target_directory
+                    .join(t.triple())
+                    .join(profile_directory_name)
+                    .join(library_filename);
+
+                libraries.push(BuiltLibrary {
+                    target: *t,
+                    path: library_filepath,
+                })
+            }
+        }
+
+        Ok(libraries)
+    }
 }
 
 impl CargoMetadataPackage {
@@ -192,11 +255,11 @@ impl CargoMetadataPackageTarget {
 }
 
 impl CargoCrateType {
-    fn is_staticlib(&self) -> bool {
+    pub(crate) fn is_staticlib(&self) -> bool {
         matches!(self, Self::StaticLib)
     }
 
-    fn is_cdylib(&self) -> bool {
+    pub(crate) fn is_cdylib(&self) -> bool {
         matches!(self, Self::Cdylib)
     }
 }
@@ -240,7 +303,13 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::CargoMetadata;
-    use crate::cargo::fixture::{CargoMetadataFixture, CargoPackageFixture};
+    use crate::{
+        cargo::{
+            CargoCrateType,
+            fixture::{CargoMetadataFixture, CargoPackageFixture, CargoTargetFixture},
+        },
+        target::RustTarget,
+    };
 
     fn metadata_fixture() -> CargoMetadataFixture {
         CargoMetadataFixture::new("/tmp/boltffi-target")
@@ -253,6 +322,18 @@ mod tests {
                 .expect("expected target directory");
 
         assert_eq!(target_directory, PathBuf::from("/tmp/boltffi-target"));
+    }
+
+    #[test]
+    fn parses_workspace_root_from_cargo_metadata() {
+        let metadata = metadata_fixture()
+            .workspace_root("/tmp/workspace")
+            .metadata();
+
+        assert_eq!(
+            metadata.workspace_root,
+            Some(PathBuf::from("/tmp/workspace"))
+        );
     }
 
     #[test]
@@ -322,5 +403,88 @@ mod tests {
             .expect("package lookup");
 
         assert_eq!(package.id, "path+file:///tmp/workspace#workspace-b@1.2.3");
+    }
+
+    #[test]
+    fn metadata_resolves_built_libraries_for_targets() {
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "my-workspace",
+                    "/tmp/my-workspace/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "my_workspace",
+                    [
+                        CargoCrateType::Cdylib,
+                        CargoCrateType::StaticLib,
+                        CargoCrateType::Bin,
+                    ],
+                )),
+            )
+            .metadata();
+
+        let targets = [
+            RustTarget::IOS_ARM64,
+            RustTarget::WASM32_UNKNOWN_UNKNOWN,
+            RustTarget::LINUX_X86_64,
+        ];
+        let expected_library_paths_for_targets = [
+            [
+                format!(
+                    "/tmp/boltffi-target/{}/release/libmy_workspace.dylib",
+                    targets[0].triple()
+                ),
+                format!(
+                    "/tmp/boltffi-target/{}/release/libmy_workspace.a",
+                    targets[0].triple()
+                ),
+            ],
+            [
+                format!(
+                    "/tmp/boltffi-target/{}/release/my_workspace.wasm",
+                    targets[1].triple()
+                ),
+                format!(
+                    "/tmp/boltffi-target/{}/release/libmy_workspace.a",
+                    targets[1].triple()
+                ),
+            ],
+            [
+                format!(
+                    "/tmp/boltffi-target/{}/release/libmy_workspace.so",
+                    targets[2].triple()
+                ),
+                format!(
+                    "/tmp/boltffi-target/{}/release/libmy_workspace.a",
+                    targets[2].triple()
+                ),
+            ],
+        ];
+
+        let libraries = metadata
+            .resolve_built_libraries_for_targets(
+                Path::new("/tmp/my-workspace/Cargo.toml"),
+                "release",
+                "my_workspace",
+                None,
+                &targets,
+            )
+            .unwrap();
+
+        let matches_any_expected_path = |i: usize, p: &Path| {
+            expected_library_paths_for_targets[i]
+                .iter()
+                .any(|ex| ex == p)
+        };
+
+        for l in libraries {
+            for (i, target) in targets.into_iter().enumerate() {
+                if l.target == target {
+                    assert!(matches_any_expected_path(i, &l.path));
+                }
+            }
+        }
     }
 }

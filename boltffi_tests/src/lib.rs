@@ -24,6 +24,14 @@ pub enum FixtureStatus {
     Failed = 3,
 }
 
+#[data]
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct FixtureMessageRecord {
+    pub label: String,
+    pub anchor: FixturePoint,
+    pub status: FixtureStatus,
+}
+
 #[export]
 pub trait SyncValueCallback {
     fn on_value(&self, value: i32) -> i32;
@@ -251,7 +259,9 @@ pub async fn invoke_async_option_impl(fetcher: impl AsyncOptionFetcher, key: i32
     fetcher.find(key).await
 }
 
-#[export]
+pub async fn async_echo_message_record(record: FixtureMessageRecord) -> FixtureMessageRecord {
+    record
+}
 pub async fn invoke_async_multi_impl(
     callback: impl AsyncMultiMethod,
     id: i64,
@@ -831,6 +841,13 @@ impl ClassTestFixture {
 
     pub async fn async_get_name(&self) -> String {
         self.name.clone()
+    }
+
+    pub async fn async_echo_message_record(
+        &self,
+        record: FixtureMessageRecord,
+    ) -> FixtureMessageRecord {
+        record
     }
 
     pub async fn async_set_id(&mut self, id: i32) {

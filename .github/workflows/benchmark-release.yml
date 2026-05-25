@@ -88,7 +88,7 @@ jobs:
           cp benchmarks/harnesses/wasm-bench/build/results/benchmarkjs/benchmark_run.json benchmark-artifacts/wasm-node-benchmarkjs_benchmark_run.json
           cp benchmarks/harnesses/dotnet-bench/build/results/dotnet/benchmark_run.json benchmark-artifacts/csharp-dotnet-benchmarkdotnet_benchmark_run.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: benchmark-run-documents
           path: benchmark-artifacts/*.json
@@ -127,7 +127,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
           path: benchmark-archive
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: benchmark-run-documents
           path: benchmark-run-documents

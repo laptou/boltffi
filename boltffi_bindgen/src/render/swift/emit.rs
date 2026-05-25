@@ -296,6 +296,14 @@ pub fn emit_read_value_at(seq: &ReadSeq, offset_expr: &str) -> String {
 
 pub fn emit_result_ok_throw(ok: &ReadSeq, err: &ReadSeq, err_is_string: bool) -> String {
     let ok_expr = emit_read_value_at(ok, "pos");
+    emit_result_ok_throw_with_ok_expr(&ok_expr, err, err_is_string)
+}
+
+pub fn emit_result_ok_throw_with_ok_expr(
+    ok_expr: &str,
+    err: &ReadSeq,
+    err_is_string: bool,
+) -> String {
     let err_expr = emit_read_value_at(err, "pos");
     let err_body = if err_is_string {
         format!("FfiError(message: {})", err_expr)
@@ -307,7 +315,6 @@ pub fn emit_result_ok_throw(ok: &ReadSeq, err: &ReadSeq, err_is_string: bool) ->
         ok_expr, err_body
     )
 }
-
 pub fn emit_read_with_offset(seq: &ReadSeq, base: &str, offset_expr: &str) -> String {
     let (reader, decode_return) = emit_read_expr(seq, base, offset_expr);
     match decode_return {

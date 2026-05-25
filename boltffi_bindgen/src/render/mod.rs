@@ -22,6 +22,7 @@ pub mod dart;
 pub mod error;
 pub mod java;
 pub mod jni;
+pub mod kmp;
 pub mod kotlin;
 pub mod python;
 pub mod swift;

@@ -62,3 +62,7 @@ host_targets = ["current"]
 [targets.csharp]
 enabled = true
 output = "../../benchmarks/generated/boltffi/dist/csharp"
+
+[targets.python]
+enabled = true
+output = "../../benchmarks/generated/boltffi/dist/python"
