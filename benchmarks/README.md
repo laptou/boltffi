@@ -48,6 +48,7 @@ benchmarks/
 │   ├── android-app/
 │   ├── kotlin-jvm-bench/
 │   ├── java-jvm-bench/
+│   ├── python-bench/
 │   ├── wasm-bench/
 │   └── dotnet-bench/
 └── scripts/               # Catalog, inventory, audit, normalization, publishing
@@ -64,6 +65,7 @@ Locally, each harness writes a raw report plus a normalized `benchmark_run.json`
 | Swift          | `harnesses/swift-macos-bench/build/results/swift-benchmark/` | `.../benchmark_run.json` |
 | Kotlin JMH     | `harnesses/kotlin-jvm-bench/build/results/jmh/report.txt`    | `.../benchmark_run.json` |
 | Java JMH       | `harnesses/java-jvm-bench/build/results/jmh/results.json`    | `.../benchmark_run.json` |
+| Python pyperf  | `harnesses/python-bench/build/results/pyperf/results.json`   | `.../benchmark_run.json` |
 | WASM           | `harnesses/wasm-bench/build/results/benchmarkjs/`            | `.../benchmark_run.json` |
 | .NET           | `harnesses/dotnet-bench/build/results/dotnet/results.json`   | `.../benchmark_run.json` |
 
@@ -88,6 +90,7 @@ The release workflow calls the `run-*.sh` scripts directly; you can do the same 
 ./benchmarks/harnesses/swift-macos-bench/run-bench.sh
 ./benchmarks/harnesses/kotlin-jvm-bench/run-jmh.sh
 ./benchmarks/harnesses/java-jvm-bench/run-jmh.sh
+./benchmarks/harnesses/python-bench/run-bench.sh
 ./benchmarks/harnesses/wasm-bench/run-bench.sh
 ./benchmarks/harnesses/dotnet-bench/run-bench.sh
 ```
@@ -99,6 +102,7 @@ The release workflow calls the `run-*.sh` scripts directly; you can do the same 
 | Swift (macOS CLI)   | `just bench-swift`          | Builds xcframework, runs Swift Package bench          |
 | Kotlin JMH (JVM)    | `just bench-kotlin`         | Builds Android-arch JNI libs, runs JMH                |
 | Java FFM JMH (JVM)  | `just bench-java`           | Builds uniffi-bindgen-java bindings, runs JMH         |
+| Python (pyperf)     | `just bench-python`         | Builds BoltFFI + UniFFI Python bindings, runs pyperf  |
 | WASM (Node.js)      | `just bench-wasm`           | Builds both BoltFFI and wasm-bindgen wasm outputs     |
 | C# (.NET)           | `just bench-csharp`         | BenchmarkDotNet; pass filters after `--`              |
 | iOS                 | `just bench-build-ios`      | Produces xcframework; open the Xcode project to run   |
@@ -134,8 +138,9 @@ Benchmarks are defined in Rust in `examples/demo`. You do **not** touch separate
    - Swift: [`harnesses/swift-macos-bench/Sources/{BoltFFI,Uniffi,AsyncRunner}/main.swift`](./harnesses/swift-macos-bench/Sources)
    - Kotlin (JNI + JNA/UniFFI): [`harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt`](./harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt)
    - Java FFM: [`harnesses/java-jvm-bench/src/main/java/com/example/bench_compare/{BoltffiJavaBench,UniffiJavaBench}.java`](./harnesses/java-jvm-bench/src/main/java/com/example/bench_compare)
+   - Python: [`harnesses/python-bench/bench.py`](./harnesses/python-bench/bench.py)
    - WASM: [`harnesses/wasm-bench/bench.mjs`](./harnesses/wasm-bench/bench.mjs)
-   - .NET: [`harnesses/dotnet-bench/WireReaderBenchmarks.cs`](./harnesses/dotnet-bench/WireReaderBenchmarks.cs)
+   - .NET: [`harnesses/dotnet-bench/{WireReaderBenchmarks,EnumWireBenchmarks}.cs`](./harnesses/dotnet-bench)
    - iOS / Android: the harness apps under [`harnesses/ios-app`](./harnesses/ios-app) and [`harnesses/android-app`](./harnesses/android-app)
 5. **Verify discovery and coverage**:
 

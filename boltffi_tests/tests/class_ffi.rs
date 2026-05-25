@@ -105,8 +105,8 @@ mod async_ref_self_methods {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(42));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok(42));
 
         unsafe { boltffi_test_counter_async_get_free(future) };
         unsafe { boltffi_test_counter_free(handle) };
@@ -133,8 +133,8 @@ mod async_ref_mut_self_methods {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(17));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok(17));
 
         unsafe { boltffi_test_counter_async_add_free(future) };
 
@@ -152,14 +152,14 @@ mod async_ref_mut_self_methods {
 
         let f1 = unsafe { boltffi_test_counter_async_add(handle, 10) };
         unsafe { rustfuture::rust_future_poll::<i32>(f1, noop, 0) };
-        let r1: Option<i32> = unsafe { rustfuture::rust_future_complete(f1) };
-        assert_eq!(r1, Some(10));
+        let r1 = unsafe { rustfuture::rust_future_complete(f1) };
+        assert_eq!(r1, Ok(10));
         unsafe { boltffi_test_counter_async_add_free(f1) };
 
         let f2 = unsafe { boltffi_test_counter_async_add(handle, 20) };
         unsafe { rustfuture::rust_future_poll::<i32>(f2, noop, 0) };
-        let r2: Option<i32> = unsafe { rustfuture::rust_future_complete(f2) };
-        assert_eq!(r2, Some(30));
+        let r2 = unsafe { rustfuture::rust_future_complete(f2) };
+        assert_eq!(r2, Ok(30));
         unsafe { boltffi_test_counter_async_add_free(f2) };
 
         let final_value = unsafe { boltffi_test_counter_get(handle) };
@@ -366,8 +366,8 @@ mod fixture_async_ref_self {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(123));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok(123));
 
         unsafe { boltffi_class_test_fixture_async_get_id_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -384,8 +384,8 @@ mod fixture_async_ref_self {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
 
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(20));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok(20));
 
         unsafe { boltffi_class_test_fixture_async_compute_sum_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -402,7 +402,7 @@ mod fixture_async_ref_mut_self {
 
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<()>(future, noop, 0) };
-        let _: Option<()> = unsafe { rustfuture::rust_future_complete(future) };
+        let _ = unsafe { rustfuture::rust_future_complete::<()>(future) };
         unsafe { boltffi_class_test_fixture_async_set_id_free(future) };
 
         assert_eq!(unsafe { boltffi_class_test_fixture_get_id(handle) }, 999);
@@ -417,14 +417,14 @@ mod fixture_async_ref_mut_self {
 
         let f1 = unsafe { boltffi_class_test_fixture_async_add_value(handle, 10) };
         unsafe { rustfuture::rust_future_poll::<i32>(f1, noop, 0) };
-        let r1: Option<i32> = unsafe { rustfuture::rust_future_complete(f1) };
-        assert_eq!(r1, Some(1));
+        let r1 = unsafe { rustfuture::rust_future_complete(f1) };
+        assert_eq!(r1, Ok(1));
         unsafe { boltffi_class_test_fixture_async_add_value_free(f1) };
 
         let f2 = unsafe { boltffi_class_test_fixture_async_add_value(handle, 20) };
         unsafe { rustfuture::rust_future_poll::<i32>(f2, noop, 0) };
-        let r2: Option<i32> = unsafe { rustfuture::rust_future_complete(f2) };
-        assert_eq!(r2, Some(2));
+        let r2 = unsafe { rustfuture::rust_future_complete(f2) };
+        assert_eq!(r2, Ok(2));
         unsafe { boltffi_class_test_fixture_async_add_value_free(f2) };
 
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -439,7 +439,7 @@ mod fixture_async_ref_mut_self {
         for i in 1..=5 {
             let future = unsafe { boltffi_class_test_fixture_async_add_value(handle, i * 10) };
             unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
-            let _: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
+            let _ = unsafe { rustfuture::rust_future_complete::<i32>(future) };
             unsafe { boltffi_class_test_fixture_async_add_value_free(future) };
         }
 
@@ -1013,8 +1013,8 @@ mod fixture_wire_encoded_async {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<String>(future, noop, 0) };
 
-        let result: Option<String> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some("async_test".to_string()));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok("async_test".to_string()));
 
         unsafe { boltffi_class_test_fixture_async_get_name_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -1029,7 +1029,7 @@ mod fixture_wire_encoded_async {
             unsafe { boltffi_class_test_fixture_async_set_name(handle, name.as_ptr(), name.len()) };
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<()>(future, noop, 0) };
-        let _: Option<()> = unsafe { rustfuture::rust_future_complete(future) };
+        let _ = unsafe { rustfuture::rust_future_complete::<()>(future) };
         unsafe { boltffi_class_test_fixture_async_set_name_free(future) };
 
         let buf = unsafe { boltffi_class_test_fixture_get_name(handle) };
@@ -1049,8 +1049,8 @@ mod fixture_wire_encoded_async {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<Option<i32>>(future, noop, 0) };
 
-        let result: Option<Option<i32>> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(Some(1)));
+        let result = unsafe { rustfuture::rust_future_complete::<Option<i32>>(future) };
+        assert_eq!(result, Ok(Some(1)));
 
         unsafe { boltffi_class_test_fixture_async_find_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -1065,8 +1065,8 @@ mod fixture_wire_encoded_async {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<Option<i32>>(future, noop, 0) };
 
-        let result: Option<Option<i32>> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(None));
+        let result = unsafe { rustfuture::rust_future_complete::<Option<i32>>(future) };
+        assert_eq!(result, Ok(None));
 
         unsafe { boltffi_class_test_fixture_async_find_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -1081,9 +1081,8 @@ mod fixture_wire_encoded_async {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<Result<i32, String>>(future, noop, 0) };
 
-        let result: Option<Result<i32, String>> =
-            unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(Ok(77)));
+        let result = unsafe { rustfuture::rust_future_complete::<Result<i32, String>>(future) };
+        assert_eq!(result, Ok(Ok(77)));
 
         unsafe { boltffi_class_test_fixture_async_try_get_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -1097,9 +1096,8 @@ mod fixture_wire_encoded_async {
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<Result<i32, String>>(future, noop, 0) };
 
-        let result: Option<Result<i32, String>> =
-            unsafe { rustfuture::rust_future_complete(future) };
-        assert!(matches!(result, Some(Err(_))));
+        let result = unsafe { rustfuture::rust_future_complete::<Result<i32, String>>(future) };
+        assert!(matches!(result, Ok(Err(_))));
 
         unsafe { boltffi_class_test_fixture_async_try_get_free(future) };
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -1217,8 +1215,8 @@ mod cancellable_task_ffi {
         let future = unsafe { boltffi_cancellable_task_instant_task(handle) };
         extern "C" fn noop(_: u64, _: RustFuturePoll) {}
         unsafe { rustfuture::rust_future_poll::<i32>(future, noop, 0) };
-        let result: Option<i32> = unsafe { rustfuture::rust_future_complete(future) };
-        assert_eq!(result, Some(99));
+        let result = unsafe { rustfuture::rust_future_complete(future) };
+        assert_eq!(result, Ok(99));
         unsafe { boltffi_cancellable_task_instant_task_free(future) };
 
         assert!(unsafe { boltffi_cancellable_task_was_started(handle) });

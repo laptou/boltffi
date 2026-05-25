@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use boltffi_bindgen::render::python::PythonRuntimeVersion;
 use serde::Deserialize;
 
 use crate::build::{OutputCallback, run_command_streaming};
@@ -36,6 +37,10 @@ struct PythonInterpreterIdentity {
     prefix: PathBuf,
 }
 
+struct PythonInterpreterRuntime {
+    identity: PythonInterpreterIdentity,
+    version: PythonRuntimeVersion,
+}
 impl PythonInterpreter {
     fn discover_default() -> Result<Self> {
         ["python3", "python"]
@@ -53,7 +58,8 @@ impl PythonInterpreter {
 
     fn discover(selection: &PythonInterpreterSelection) -> Result<Self> {
         let executable = resolve_interpreter_executable(selection.command())?;
-        let identity = Self::probe_identity(&executable)?;
+        let runtime = Self::probe_runtime(&executable)?;
+        Self::ensure_supported_version(selection.command(), runtime.version)?;
         let status = Command::new(&executable)
             .args(["-m", "pip", "--version"])
             .stdout(Stdio::null())
@@ -69,7 +75,7 @@ impl PythonInterpreter {
             .then_some(Self {
                 command: selection.command().to_string(),
                 executable,
-                identity,
+                identity: runtime.identity,
             })
             .ok_or_else(|| CliError::CommandFailed {
                 command: format!(
@@ -80,17 +86,19 @@ impl PythonInterpreter {
             })
     }
 
-    fn probe_identity(executable: &Path) -> Result<PythonInterpreterIdentity> {
+    fn probe_runtime(executable: &Path) -> Result<PythonInterpreterRuntime> {
         #[derive(Deserialize)]
         struct InterpreterIdentityProbe {
             resolved_executable: PathBuf,
             prefix: PathBuf,
+            version_major: u8,
+            version_minor: u8,
         }
 
         let output = Command::new(executable)
             .args([
                 "-c",
-                "import json, pathlib, sys; print(json.dumps({'resolved_executable': str(pathlib.Path(sys.executable).resolve()), 'prefix': sys.prefix}))",
+                "import json, pathlib, sys; print(json.dumps({'resolved_executable': str(pathlib.Path(sys.executable).resolve()), 'prefix': sys.prefix, 'version_major': sys.version_info[0], 'version_minor': sys.version_info[1]}))",
             ])
             .output()
             .map_err(|source| CliError::CommandFailed {
@@ -106,14 +114,30 @@ impl PythonInterpreter {
         }
 
         serde_json::from_slice::<InterpreterIdentityProbe>(&output.stdout)
-            .map(|probe| PythonInterpreterIdentity {
-                resolved_executable: probe.resolved_executable,
-                prefix: probe.prefix,
+            .map(|probe| PythonInterpreterRuntime {
+                identity: PythonInterpreterIdentity {
+                    resolved_executable: probe.resolved_executable,
+                    prefix: probe.prefix,
+                },
+                version: PythonRuntimeVersion::new(probe.version_major, probe.version_minor),
             })
             .map_err(|source| CliError::CommandFailed {
                 command: format!(
                     "{} -c <python identity probe>: failed to parse interpreter identity: {source}",
                     executable.display()
+                ),
+                status: None,
+            })
+    }
+
+    fn ensure_supported_version(command: &str, version: PythonRuntimeVersion) -> Result<()> {
+        let minimum_supported_version = PythonRuntimeVersion::minimum_supported();
+
+        (version >= minimum_supported_version)
+            .then_some(())
+            .ok_or_else(|| CliError::CommandFailed {
+                command: format!(
+                    "python packaging requires Python >= {minimum_supported_version}; interpreter '{command}' resolved to Python {version}"
                 ),
                 status: None,
             })
@@ -335,7 +359,27 @@ fn absolutize_interpreter_path(path: &Path) -> PathBuf {
 mod tests {
     use std::path::PathBuf;
 
+    use boltffi_bindgen::render::python::PythonRuntimeVersion;
+
     use super::{PythonInterpreter, PythonInterpreterIdentity, PythonWheelBuilder};
+    use crate::cli::CliError;
+
+    #[test]
+    fn rejects_interpreters_older_than_supported_python_floor() {
+        let error = PythonInterpreter::ensure_supported_version(
+            "python3.9",
+            PythonRuntimeVersion::new(3, 9),
+        )
+        .expect_err("expected unsupported Python interpreter version");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command.contains("requires Python >= 3.10")
+                    && command.contains("interpreter 'python3.9'")
+                    && command.contains("resolved to Python 3.9")
+        ));
+    }
 
     #[test]
     fn deduplicates_interpreter_aliases_after_resolution() {

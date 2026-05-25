@@ -1,0 +1,108 @@
+use boltffi_ast::TypeExpr;
+
+use crate::{CodecNode, CodecPlan, FieldKey, Op, Primitive, ReadPlan, ValueRef, WritePlan};
+
+use super::{LowerError, enums, ids::DeclarationIds, index::Index, records, types};
+
+/// Lowers a source type expression into one [`CodecNode`] in the
+/// codec tree.
+///
+/// `value` names the already-bound value the resulting plan will read
+/// or write. The pass threads it through container nodes so a
+/// `Vec<T>` measures its element count from the outer value while the
+/// element codec recurses with [`ValueRef::self_value`] for the
+/// per-element binding.
+pub(super) fn node(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+    value: ValueRef,
+) -> Result<CodecNode, LowerError> {
+    Ok(match type_expr {
+        TypeExpr::Primitive(primitive) => CodecNode::Primitive(Primitive::from(*primitive)),
+        TypeExpr::String => CodecNode::String,
+        TypeExpr::Bytes => CodecNode::Bytes,
+        TypeExpr::Record(id) => {
+            let record = idx
+                .record(id)
+                .ok_or_else(|| LowerError::unknown_record(id))?;
+            let id = ids.record(id)?;
+            if records::is_direct(record) {
+                CodecNode::DirectRecord(id)
+            } else {
+                CodecNode::EncodedRecord(id)
+            }
+        }
+        TypeExpr::Enum(id) => {
+            let enumeration = idx
+                .enumeration(id)
+                .ok_or_else(|| LowerError::unknown_enum(id))?;
+            let id = ids.enumeration(id)?;
+            if enums::is_c_style(enumeration) {
+                CodecNode::CStyleEnum(id)
+            } else {
+                CodecNode::DataEnum(id)
+            }
+        }
+        TypeExpr::Class(id) => CodecNode::ClassHandle(ids.class(id)?),
+        TypeExpr::Callback(id) => CodecNode::CallbackHandle(ids.callback(id)?),
+        TypeExpr::Closure(closure) => CodecNode::ClosureHandle(types::lower_closure(ids, closure)?),
+        TypeExpr::Custom(id) => CodecNode::Custom(ids.custom(id)?),
+        TypeExpr::Vec(element) => {
+            let element = node(idx, ids, element, ValueRef::self_value())?;
+            CodecNode::Sequence {
+                len: Op::sequence_len(value),
+                element: Box::new(element),
+            }
+        }
+        TypeExpr::Option(inner) => CodecNode::Optional(Box::new(node(idx, ids, inner, value)?)),
+        TypeExpr::Tuple(elements) => CodecNode::Tuple(
+            elements
+                .iter()
+                .enumerate()
+                .map(|(index, element)| {
+                    let field = FieldKey::position(index)
+                        .ok_or_else(LowerError::field_position_overflow)?;
+                    node(idx, ids, element, value.clone().field(field))
+                })
+                .collect::<Result<Vec<_>, LowerError>>()?,
+        ),
+        TypeExpr::Map { key, value: item } => CodecNode::Map {
+            key: Box::new(node(idx, ids, key, ValueRef::self_value())?),
+            value: Box::new(node(idx, ids, item, ValueRef::self_value())?),
+        },
+        TypeExpr::Result { .. } => {
+            return Err(LowerError::unsupported_type(
+                super::error::UnsupportedType::NestedResult,
+            ));
+        }
+        TypeExpr::SelfType => {
+            return Err(LowerError::unsupported_type(
+                super::error::UnsupportedType::SelfType,
+            ));
+        }
+        TypeExpr::Parameter(_) => {
+            return Err(LowerError::unsupported_type(
+                super::error::UnsupportedType::TypeParameter,
+            ));
+        }
+    })
+}
+
+/// Lowers a source type expression into a bidirectional [`CodecPlan`].
+///
+/// Wraps [`node`] with the read/write framing every encoded field and
+/// whole-record codec carries. `value` is reused for the [`WritePlan`]
+/// so generated code does not have to re-derive the path expression.
+pub(super) fn plan(
+    idx: &Index<'_>,
+    ids: &DeclarationIds,
+    type_expr: &TypeExpr,
+    value: ValueRef,
+) -> Result<CodecPlan, LowerError> {
+    let root = node(idx, ids, type_expr, value.clone())?;
+    Ok(CodecPlan::new(
+        ReadPlan::new(root.clone()),
+        WritePlan::new(value, root),
+    ))
+}

@@ -1,4 +1,4 @@
-final class $$Native {
+final class _$$Native {
 {%- for cfunc in cfuncs %}
   @$$ffi.Native<
     {{ cfunc.return_type.native_type() }} Function(
@@ -13,14 +13,14 @@ final class $$Native {
   {%- endfor %}
   );
 {% endfor %}
-  @$$ffi.Native<$$ffi.Void Function(FfiString)>()
-  external static void boltffi_free_string(FfiString s);
+  @$$ffi.Native<$$ffi.Void Function(_$$FFIString)>()
+  external static void boltffi_free_string(_$$FFIString s);
 
-  @$$ffi.Native<$$ffi.Void Function(FfiBuf_u8)>()
-  external static void boltffi_free_buf(FfiBuf_u8 buf);
+  @$$ffi.Native<$$ffi.Void Function(_$$FFIBuf)>()
+  external static void boltffi_free_buf(_$$FFIBuf buf);
 
-  @$$ffi.Native<FfiStatus Function($$ffi.Pointer<FfiString>)>()
-  external static FfiStatus boltffi_last_error_message($$ffi.Pointer<FfiString> out);
+  @$$ffi.Native<_$$FFIStatus Function($$ffi.Pointer<_$$FFIString>)>()
+  external static _$$FFIStatus boltffi_last_error_message($$ffi.Pointer<_$$FFIString> out);
 
   @$$ffi.Native<$$ffi.Void Function()>()
   external static void boltffi_clear_last_error();

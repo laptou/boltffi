@@ -47,10 +47,7 @@ export CARGO_TARGET_DIR="$ROOT_DIR/benchmarks/generated/boltffi/target"
 
 "$ROOT_DIR/benchmarks/adapters/uniffi/build-csharp.sh"
 
-DOTNET_ARGS=()
-if [[ -n "$FILTER" ]]; then
-    DOTNET_ARGS+=("--filter" "$FILTER")
-fi
+DOTNET_ARGS=("--filter" "${FILTER:-*}")
 
 BOLTFFI_BENCH_ARTIFACTS="$ARTIFACTS_DIR" dotnet run -c Release -- "${DOTNET_ARGS[@]}"
 

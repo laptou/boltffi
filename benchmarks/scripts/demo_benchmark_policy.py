@@ -371,6 +371,7 @@ BENCHMARK_FAMILIES: tuple[BenchmarkFamily, ...] = (
             "message_summary",
             "echo_animal",
             "animal_name",
+            "echo_task_status",
             "get_status_progress",
             "is_status_complete",
         ),

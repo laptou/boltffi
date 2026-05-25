@@ -114,7 +114,7 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         ) { buf, status in
-            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
             defer { {{ prefix }}_free_buf(buf) }
 {%- if result.direct_buffer_is_data() %}
             guard buf.len > 0, let ptr = buf.ptr else { return Data() }
@@ -143,7 +143,7 @@
             cancelFn: {{ cancel }},
             freeFn: {{ free }}
         ) { buf, status in
-            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "ffi call failed") }
+            guard status.code == 0 else { {{ prefix }}_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
 {%- if result.throws() %}
             defer { {{ prefix }}_free_buf(buf) }
             return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }

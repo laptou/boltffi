@@ -1,0 +1,17 @@
+[package]
+name = "boltffi_binding"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend binding contract for BoltFFI exported Rust APIs"
+keywords = ["ffi", "binding", "metadata", "bindings"]
+categories = ["development-tools::ffi"]
+
+[dependencies]
+boltffi_ast.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

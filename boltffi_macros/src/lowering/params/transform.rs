@@ -331,7 +331,12 @@ impl<'a> ParamTransformClassifier<'a> {
             };
         }
 
-        if matches!(ty, Type::Reference(_)) {
+        if let Type::Reference(type_ref) = ty
+            && self
+                .named_type_transport_classifier
+                .named_type_category(&type_ref.elem)
+                .is_some()
+        {
             return ClassifiedParamTransform {
                 contract: ParamContract::new(
                     ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),

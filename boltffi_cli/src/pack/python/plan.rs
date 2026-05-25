@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use crate::build::CargoBuildProfile;
+use crate::build::{CargoBuildProfile, resolve_build_profile};
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
 use crate::config::Config;
@@ -90,7 +90,7 @@ impl PythonPackagingPlan {
         };
         layout.validate_wheel_directory_safety()?;
         let build_cargo_args = resolve_build_cargo_args(config, cli_cargo_args);
-        let build_profile = crate::build::resolve_build_profile(release, &build_cargo_args);
+        let build_profile = resolve_build_profile(release, &build_cargo_args);
         let cargo = Cargo::current(&build_cargo_args)?;
 
         if let Some(target_selector) = cargo.target_selector() {
@@ -253,6 +253,7 @@ mod tests {
         CargoConfig, Config, PackageConfig, PythonConfig, PythonWheelConfig, TargetsConfig,
     };
     use crate::pack::python::PythonPackageLayout;
+    use crate::target::NativeHostPlatform;
 
     fn config() -> Config {
         Config {
@@ -320,8 +321,7 @@ mod tests {
 
     #[test]
     fn resolves_built_and_packaged_shared_library_paths() {
-        let host_platform =
-            crate::target::NativeHostPlatform::current().expect("supported current host");
+        let host_platform = NativeHostPlatform::current().expect("supported current host");
         let plan = PythonPackagingPlan {
             distribution_name: "demo-package".to_string(),
             module_name: "demo_ffi".to_string(),
@@ -359,8 +359,7 @@ mod tests {
 
     #[test]
     fn resolves_generation_inputs_from_selected_package_manifest() {
-        let host_platform =
-            crate::target::NativeHostPlatform::current().expect("supported current host");
+        let host_platform = NativeHostPlatform::current().expect("supported current host");
         let plan = PythonPackagingPlan {
             distribution_name: "demo-package".to_string(),
             module_name: "demo_ffi".to_string(),

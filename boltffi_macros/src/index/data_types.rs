@@ -84,6 +84,18 @@ impl DataTypeRegistry {
     }
 }
 
+#[cfg(test)]
+impl DataTypeRegistry {
+    pub(crate) fn with_entries(entries: &[(&str, DataTypeCategory)]) -> Self {
+        let mut registry = DataTypeRegistry::default();
+        for (name, category) in entries {
+            registry.insert(vec![name.to_string()], *category);
+        }
+        registry.finalize_unique_names();
+        registry
+    }
+}
+
 pub fn registry_for_current_crate() -> syn::Result<DataTypeRegistry> {
     Ok(CrateIndex::for_current_crate()?.data_types().clone())
 }

@@ -1,4 +1,8 @@
 from __future__ import annotations
+{% if module.uses_records() %}
+
+from dataclasses import dataclass
+{% endif %}
 {% if module.uses_c_style_enums() %}
 
 from enum import IntEnum
@@ -11,6 +15,30 @@ from collections.abc import Sequence
 MODULE_NAME: str
 PACKAGE_NAME: str
 PACKAGE_VERSION: str | None
+{% if module.uses_records() %}
+
+{% for record in module.records %}
+@dataclass(frozen=True, slots=True)
+class {{ record.class_name() }}:
+{% for field in record.fields.iter() %}
+    {{ field.python_name }}: {{ field.annotation() }}
+{% endfor %}
+{% for constructor in record.constructors %}
+
+    @classmethod
+    def {{ constructor.python_name }}(cls{% if !constructor.callable.parameters.is_empty() %}, {% for parameter in constructor.callable.parameters %}{{ parameter.name }}: {{ parameter.type_ref.parameter_annotation() }}{% if !loop.last %}, {% endif %}{% endfor %}{% endif %}) -> {{ constructor.callable.return_type.return_annotation() }}: ...
+{% endfor %}
+{% for method in record.methods %}
+
+{% if method.is_static %}
+    @staticmethod
+    def {{ method.python_name }}({% for parameter in method.public_parameters() %}{{ parameter.name }}: {{ parameter.type_ref.parameter_annotation() }}{% if !loop.last %}, {% endif %}{% endfor %}) -> {{ method.callable.return_type.return_annotation() }}: ...
+{% else %}
+    def {{ method.python_name }}(self{% if !method.public_parameters().is_empty() %}, {% for parameter in method.public_parameters() %}{{ parameter.name }}: {{ parameter.type_ref.parameter_annotation() }}{% if !loop.last %}, {% endif %}{% endfor %}{% endif %}) -> {{ method.callable.return_type.return_annotation() }}: ...
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endif %}
 {% if module.uses_c_style_enums() %}
 
 {% for enumeration in module.enums %}

@@ -132,15 +132,21 @@ impl LanguageGenerator for JavaGenerator {
 
         let generation_mode = Self::generation_mode(request, &output_directory);
         let lowered_crate = request.lowered_crate(generation_mode.scan_pointer_width())?;
+        let library_name = match generation_mode {
+            JavaGenerationMode::Jvm => {
+                boltffi_bindgen::library_name(request.source_crate().crate_name())
+            }
+            JavaGenerationMode::Android => {
+                boltffi_bindgen::load_library_name(request.source_crate().crate_name())
+            }
+        };
         let java_output = JavaEmitter::emit(
             &lowered_crate.ffi_contract,
             &lowered_crate.abi_contract,
             package_name.clone(),
             module_name.clone(),
             JavaOptions {
-                library_name: Some(boltffi_bindgen::library_name(
-                    request.source_crate().crate_name(),
-                )),
+                library_name: Some(library_name),
                 min_java_version: JavaVersion(request.config().java_min_version().unwrap_or(8)),
                 desktop_loader: matches!(generation_mode, JavaGenerationMode::Jvm),
             },

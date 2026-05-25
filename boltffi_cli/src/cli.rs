@@ -1,7 +1,8 @@
+use std::path::PathBuf;
+
 use crate::config::ConfigError;
 use crate::pack::PackError;
 use crate::toolchain::AndroidToolchainError;
-use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {

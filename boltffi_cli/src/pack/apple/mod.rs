@@ -3,15 +3,18 @@ mod xcframework;
 
 use std::path::Path;
 
-use crate::build::{
-    BuildOptions, Builder, OutputCallback, all_successful, failed_target_details, failed_targets,
-};
+use crate::build::{BuildOptions, Builder, OutputCallback, all_successful, failed_target_details, failed_targets};
 use crate::cli::{CliError, Result};
 use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use crate::commands::pack::PackAppleOptions;
-use crate::config::{Config, SpmDistribution, SpmLayout};
+use crate::config::{Config, DebugSymbolsBundle, DebugSymbolsFormat, SpmDistribution, SpmLayout};
 use crate::pack::PackError;
+use crate::pack::symbols::{
+    DebugSymbolArtifact, DebugSymbolArtifactKind, ensure_debug_symbols_profile_has_debuginfo,
+    ensure_existing_debug_symbol_artifacts_are_usable, write_debug_symbols_zip,
+};
 use crate::reporter::Reporter;
+use crate::target::{BuiltLibrary, Platform};
 
 use super::{
     discover_built_libraries_for_targets, missing_built_libraries, print_cargo_line,
@@ -52,6 +55,17 @@ pub(crate) fn pack_apple(
     let apple_targets = config.apple_targets();
 
     if !options.execution.no_build {
+        if config.apple_debug_symbols_enabled() {
+            ensure_debug_symbols_profile_has_debuginfo(
+                &build_cargo_args,
+                &build_profile,
+                "targets.apple.debug_symbols",
+                &apple_targets
+                    .iter()
+                    .map(|target| target.triple().to_string())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
         let step = reporter.step("Building Apple targets");
         build_apple_targets(
             config,
@@ -91,6 +105,16 @@ pub(crate) fn pack_apple(
         .into());
     }
 
+    if options.execution.no_build && config.apple_debug_symbols_enabled() {
+        ensure_existing_debug_symbol_artifacts_are_usable(
+            &apple_libraries
+                .iter()
+                .map(|library| library.path.clone())
+                .collect::<Vec<_>>(),
+            "targets.apple.debug_symbols",
+        )?;
+    }
+
     let headers_dir = config.apple_header_output();
     if !headers_dir.exists() {
         return Err(CliError::FileNotFound(headers_dir));
@@ -108,6 +132,12 @@ pub(crate) fn pack_apple(
     } else {
         None
     };
+
+    if config.apple_debug_symbols_enabled() {
+        let step = reporter.step("Bundling Apple debug symbols");
+        write_apple_debug_symbols(config, &apple_libraries)?;
+        step.finish_success();
+    }
 
     if should_generate_spm {
         let (checksum, version) = match config.apple_spm_distribution() {
@@ -250,4 +280,54 @@ fn detect_version() -> Option<String> {
                         .map(|value| value.trim().trim_matches('"').to_string())
                 })
         })
+}
+
+fn write_apple_debug_symbols(config: &Config, libraries: &[BuiltLibrary]) -> Result<()> {
+    let archive_name = match config.apple_debug_symbols_format() {
+        DebugSymbolsFormat::Zip => format!("{}.xcframework.symbols.zip", config.xcframework_name()),
+    };
+    let bundle = match config.apple_debug_symbols_bundle() {
+        DebugSymbolsBundle::Unstripped => "unstripped",
+    };
+    let artifacts = libraries
+        .iter()
+        .map(|library| DebugSymbolArtifact {
+            source_path: library.path.clone(),
+            archive_path: std::path::PathBuf::from(apple_symbol_directory_name(
+                library.target.platform(),
+            ))
+            .join(library.target.triple())
+            .join(
+                library
+                    .path
+                    .file_name()
+                    .expect("built apple library should have a filename"),
+            ),
+            kind: DebugSymbolArtifactKind::Static,
+            target_triple: Some(library.target.triple().to_string()),
+            platform: Some(library.target.platform()),
+            architecture: Some(library.target.architecture()),
+            abi: None,
+            host_target: None,
+        })
+        .collect::<Vec<_>>();
+
+    write_debug_symbols_zip(
+        &config.apple_debug_symbols_output(),
+        &archive_name,
+        "apple",
+        bundle,
+        &artifacts,
+    )?;
+
+    Ok(())
+}
+
+fn apple_symbol_directory_name(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Ios => "ios",
+        Platform::IosSimulator => "ios-simulator",
+        Platform::MacOs => "macos",
+        Platform::Android | Platform::Wasm | Platform::Linux => unreachable!("non-apple platform"),
+    }
 }

@@ -55,6 +55,16 @@ def case_to_source_exports(case_name: str) -> tuple[str, ...]:
             "enums::data_enum::is_status_complete",
         )
 
+    if case_name in {"echo_direction", "echo_direction_north", "echo_direction_west"}:
+        return ("enums::c_style::echo_direction",)
+
+    if case_name in {
+        "echo_task_status_unit_variant",
+        "echo_task_status_small_payload",
+        "echo_task_status_completed_payload",
+    }:
+        return ("enums::data_enum::echo_task_status",)
+
     if case_name == "find_even_100":
         return ("options::primitives::find_even",)
 

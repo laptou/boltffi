@@ -40,7 +40,7 @@ build:
 
 # Build boltffi CLI (release)
 build-release:
-    cargo build -p boltffi_cli --release
+    cargo build -p boltffi_cli --profile release-lto
 
 # Build entire workspace (debug)
 build-all:
@@ -60,6 +60,14 @@ test:
 
 demo-verify:
     ./examples/demo/verify-platform-demos.sh
+
+# Audit semantic demo test cases against platform test markers
+demo-test-audit:
+    cargo run --manifest-path examples/demo/Cargo.toml --bin demo-tests -- audit
+
+# Report semantic demo test cases and platform support
+demo-test-report:
+    cargo run --manifest-path examples/demo/Cargo.toml --bin demo-tests -- report
 
 # Run tests with cargo-nextest (parallel, faster)
 test-nextest:
@@ -205,6 +213,17 @@ bench-wasm:
     echo "=== Running benchmarks ==="
     cd ../harnesses/wasm-bench && npm ci --silent && node bench.mjs
 
+# Python benchmark (pyperf) - builds BoltFFI + UniFFI Python bindings, runs pyperf
+bench-python *args:
+    #!/usr/bin/env bash
+    set -e
+    cd benchmarks/harnesses/python-bench
+    if [ -n "{{ args }}" ]; then
+        ./run-bench.sh {{ args }}
+    else
+        ./run-bench.sh
+    fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +255,7 @@ clean-benchmarks:
     rm -rf benchmarks/harnesses/dotnet-bench/build
     rm -rf benchmarks/harnesses/wasm-bench/build
     rm -rf benchmarks/harnesses/wasm-bench/node_modules
+    rm -rf benchmarks/harnesses/python-bench/build
     rm -rf benchmarks/harnesses/android-app/.gradle
     rm -rf benchmarks/harnesses/android-app/.kotlin
     rm -rf benchmarks/harnesses/android-app/build

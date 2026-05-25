@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/typescript/templates.rs
+assertion_line: 1163
 expression: template.render().unwrap()
 ---
 /**
@@ -74,7 +75,7 @@ export class Counter {
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
     try {
-      (_exports.boltffi_counter_next_value_complete as Function)(outPtr, awaitedHandle, 0);
+      _module.completeAsync((statusPtr: number) => (_exports.boltffi_counter_next_value_complete as Function)(outPtr, awaitedHandle, statusPtr));
       completeCompleted = true;
       const reader = _module.readerFromBuf(outPtr);
       const result = reader.readI32();

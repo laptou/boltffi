@@ -1,7 +1,7 @@
 use crate::ir::types::PrimitiveType;
 use crate::render::python::primitives::PythonScalarTypeExt as _;
 
-use super::PythonEnumType;
+use super::{PythonEnumType, PythonRecordType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PythonSequenceType {
@@ -75,6 +75,7 @@ impl PythonSequenceType {
 pub enum PythonType {
     Void,
     Primitive(PrimitiveType),
+    Record(PythonRecordType),
     CStyleEnum(PythonEnumType),
     String,
     Sequence(PythonSequenceType),
@@ -85,6 +86,7 @@ impl PythonType {
         match self {
             Self::Void => "None".to_string(),
             Self::Primitive(primitive) => primitive.python_annotation().to_string(),
+            Self::Record(record_type) => record_type.type_literal(),
             Self::CStyleEnum(enum_type) => enum_type.type_literal(),
             Self::String => "str".to_string(),
             Self::Sequence(sequence) => sequence.parameter_annotation(),
@@ -95,6 +97,7 @@ impl PythonType {
         match self {
             Self::Void => "None".to_string(),
             Self::Primitive(primitive) => primitive.python_annotation().to_string(),
+            Self::Record(record_type) => record_type.type_literal(),
             Self::CStyleEnum(enum_type) => enum_type.type_literal(),
             Self::String => "str".to_string(),
             Self::Sequence(sequence) => sequence.return_annotation(),
@@ -105,9 +108,17 @@ impl PythonType {
         match self {
             Self::Void => None,
             Self::Primitive(primitive) => Some(*primitive),
+            Self::Record(_) => None,
             Self::CStyleEnum(enum_type) => Some(enum_type.tag_type),
             Self::String => None,
             Self::Sequence(sequence) => sequence.primitive_element(),
+        }
+    }
+
+    pub fn record(&self) -> Option<&PythonRecordType> {
+        match self {
+            Self::Record(record_type) => Some(record_type),
+            _ => None,
         }
     }
 
@@ -131,6 +142,10 @@ impl PythonType {
 
     pub fn is_string(&self) -> bool {
         matches!(self, Self::String)
+    }
+
+    pub fn is_record(&self) -> bool {
+        matches!(self, Self::Record(_))
     }
 
     pub fn is_c_style_enum(&self) -> bool {

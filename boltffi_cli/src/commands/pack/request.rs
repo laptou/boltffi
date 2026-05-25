@@ -4,9 +4,12 @@ pub enum PackCommand {
     All(PackAllOptions),
     Apple(PackAppleOptions),
     Android(PackAndroidOptions),
+    Kmp(PackKmpOptions),
     Wasm(PackWasmOptions),
     Java(PackJavaOptions),
     Python(PackPythonOptions),
+    Dart(PackDartOptions),
+    CSharp(PackCSharpOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,11 @@ pub struct PackAndroidOptions {
     pub execution: PackExecutionOptions,
 }
 
+pub struct PackKmpOptions {
+    pub execution: PackExecutionOptions,
+    pub experimental: bool,
+}
+
 pub struct PackWasmOptions {
     pub execution: PackExecutionOptions,
 }
@@ -48,4 +56,13 @@ pub struct PackPythonOptions {
     pub execution: PackExecutionOptions,
     pub experimental: bool,
     pub python_interpreters: Vec<String>,
+}
+
+pub struct PackDartOptions {
+    pub execution: PackExecutionOptions,
+    pub experimental: bool,
+}
+
+pub struct PackCSharpOptions {
+    pub execution: PackExecutionOptions,
 }

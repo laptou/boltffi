@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -173,25 +174,51 @@ class DemoCallbacksAndAsyncTest {
     @Test
     fun topLevelAsyncFunctionsRoundTripThroughKotlin() = runBlocking {
         withTimeout(10_000) {
+            demoCase("case:async_fns.basic.add.should_return_sum")
             assertEquals(10, asyncAdd(3, 7))
+            demoCase("case:async_fns.basic.echo.should_prefix_message")
             assertEquals("Echo: hello async", asyncEcho("hello async"))
+            demoCase("case:async_fns.basic.double_all.should_double_i32_vector")
             assertContentEquals(intArrayOf(2, 4, 6), asyncDoubleAll(intArrayOf(1, 2, 3)))
+            demoCase("case:async_fns.basic.find_positive.should_return_first_positive")
             assertEquals(5, asyncFindPositive(intArrayOf(-1, 0, 5, 3)))
+            demoCase("case:async_fns.basic.find_positive.should_return_none_for_all_negative")
             assertNull(asyncFindPositive(intArrayOf(-1, -2, -3)))
+            demoCase("case:async_fns.basic.concat.should_join_string_vector")
             assertEquals("a, b, c", asyncConcat(listOf("a", "b", "c")))
+            demoCase("case:async_fns.basic.get_numbers.should_return_counting_sequence")
+            assertContentEquals(intArrayOf(0, 1, 2, 3, 4), asyncGetNumbers(5))
         }
     }
 
     @Test
     fun asyncResultFunctionsRoundTripThroughKotlin() = runBlocking {
         withTimeout(10_000) {
+            demoCase("case:results.async_results.safe_divide.should_return_quotient")
             assertEquals(5, asyncSafeDivide(10, 2))
+            demoCase("case:results.async_results.safe_divide.should_reject_division_by_zero")
             assertTrue(assertFailsWith<MathError> { asyncSafeDivide(1, 0) } is MathError.DivisionByZero)
+            demoCase("case:results.async_results.fallible_fetch.should_return_value_for_non_negative_key")
             assertEquals("value_7", asyncFallibleFetch(7))
+            demoCase("case:results.async_results.fallible_fetch.should_reject_negative_key")
             assertMessageContains(assertFailsWith<FfiException> { asyncFallibleFetch(-1) }, "invalid key")
+            demoCase("case:results.async_results.find_value.should_return_some_for_positive_key")
             assertEquals(40, asyncFindValue(4))
+            demoCase("case:results.async_results.find_value.should_return_none_for_zero_key")
             assertNull(asyncFindValue(0))
+            demoCase("case:results.async_results.find_value.should_reject_negative_key")
             assertMessageContains(assertFailsWith<FfiException> { asyncFindValue(-1) }, "invalid key")
+
+            demoCase("case:async_fns.results.try_compute.should_return_doubled_value")
+            assertEquals(14, tryComputeAsync(7))
+            demoCase("case:async_fns.results.try_compute.should_return_invalid_input_for_zero")
+            assertIs<ComputeError.InvalidInput>(assertFailsWith<ComputeError> { tryComputeAsync(0) })
+            demoCase("case:async_fns.results.try_compute.should_return_overflow_for_negative_value")
+            assertIs<ComputeError.Overflow>(assertFailsWith<ComputeError> { tryComputeAsync(-1) })
+            demoCase("case:async_fns.results.fetch_data.should_return_scaled_positive_id")
+            assertEquals(90, fetchData(9))
+            demoCase("case:async_fns.results.fetch_data.should_reject_non_positive_id")
+            assertMessageContains(assertFailsWith<FfiException> { fetchData(-1) }, "invalid id")
         }
     }
 

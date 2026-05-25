@@ -1,6 +1,6 @@
 ---
 title: "Configuration"
-description: "Configure boltffi.toml package names, target outputs, and platform packaging behavior for generated Swift, Kotlin, Java, TypeScript, and Python bindings."
+description: "Configure boltffi.toml package names, target outputs, and platform packaging behavior for generated Swift, Kotlin, Java, C#, TypeScript, and Python bindings."
 ---
 
 # Configuration
@@ -119,6 +119,25 @@ This name appears in your Swift import statements: `import MyLibrary`.
 ### SwiftPM Layouts
 
 The layout determines how BoltFFI structures the SwiftPM package. This is the most important configuration choice for Apple because it affects how you integrate the library into your Xcode project.
+
+### Debug Symbols
+
+If you want a companion archive of the unstripped Apple slice libraries, enable `debug_symbols`:
+
+```toml
+[targets.apple.debug_symbols]
+enabled = true
+output = "dist/apple/symbols"
+```
+
+`boltffi pack apple` writes `{XcframeworkName}.xcframework.symbols.zip` to that directory. The archive includes a `symbols.json` manifest plus one unstripped static library per discovered Apple target slice.
+
+For release-like packaging profiles, BoltFFI now requires Cargo debuginfo to be enabled before it will emit this archive. In practice that usually means:
+
+```toml
+[profile.release]
+debug = true
+```
 
 #### ffi-only Layout
 
@@ -403,6 +422,40 @@ dist/android/
 
 Copy `jniLibs` to your Android project's `src/main/` directory. Copy the Kotlin sources to your source set. The native libraries are loaded automatically when you first use the Kotlin bindings.
 
+### Android Debug Symbols
+
+To keep a companion archive of the unstripped JNI libraries per ABI:
+
+```toml
+[targets.android.debug_symbols]
+enabled = true
+output = "dist/android/symbols"
+```
+
+`boltffi pack android` writes `{crate_artifact_name}.android.symbols.zip` to that directory. The archive mirrors the `jniLibs/<abi>/` layout and includes a `symbols.json` manifest with ABI and target mappings.
+
+For release-like packaging profiles, BoltFFI requires Cargo debuginfo to be enabled before it will emit this archive.
+
+## Kotlin Multiplatform Configuration
+
+The `[targets.kotlin_multiplatform]` section is experimental and controls `boltffi generate kmp --experimental`.
+
+```toml
+experimental = ["kotlin_multiplatform"]
+
+[targets.kotlin_multiplatform]
+enabled = true
+output = "dist/kotlin-multiplatform"
+package = "com.mycompany.mylib"
+module_name = "MyLib"
+```
+
+Generated output is a Kotlin Multiplatform Gradle module with `commonMain` declarations and `jvmMain`/`androidMain` actuals backed by the existing Kotlin/JNI generator. Kotlin/Native `cinterop` actuals for iOS/macOS are not generated yet.
+
+If `package` or `module_name` is omitted, BoltFFI reuses the corresponding Android Kotlin defaults.
+
+`boltffi pack kmp` writes JVM desktop native resources under `src/jvmMain/resources/native/<host-target>/`. Those JVM host targets come from `[targets.java.jvm].host_targets`, which defaults to `["current"]`; `targets.java.jvm.enabled` does not need to be true for KMP packaging to use the shared host matrix.
+
 ## Java Configuration
 
 The `[targets.java]` section controls Java bindings for both JVM and Android.
@@ -460,6 +513,20 @@ The default output is `dist/java`. This produces Java sources, a C header, JNI g
 
 Phase 4 extends JVM packaging from current-host-only output to explicit desktop host matrices. Current-host packaging works on `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, and `windows-x86_64`. The initial cross-host parity path is macOS packaging `linux-x86_64`, which requires the Rust target, a configured Linux linker such as `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` or `BOLTFFI_JAVA_LINKER_X86_64_UNKNOWN_LINUX_GNU`, and target-appropriate JNI headers via either `BOLTFFI_JAVA_HOME_X86_64_UNKNOWN_LINUX_GNU` or `BOLTFFI_JAVA_INCLUDE_X86_64_UNKNOWN_LINUX_GNU`. `pack java` rejects explicit Cargo `--target` passthrough args because the host matrix is controlled by `host_targets`.
 
+### JVM Debug Symbols
+
+To archive the unstripped desktop JNI libraries per packaged host target:
+
+```toml
+[targets.java.jvm.debug_symbols]
+enabled = true
+output = "dist/java/symbols"
+```
+
+`boltffi pack java` writes `{selected_artifact_name}.jvm.symbols.zip` to that directory. The archive mirrors `native/<host-target>/` and includes a `symbols.json` manifest with host-target mappings.
+
+For release-like packaging profiles, BoltFFI requires Cargo debuginfo to be enabled before it will emit this archive. On Windows MSVC hosts, the archive also includes sibling `.pdb` files for the JNI DLL and any bundled Rust DLL when those sidecars exist.
+
 ### Android Target
 
 Enable Android packaging to produce shared libraries for all Android ABIs:
@@ -474,6 +541,41 @@ min_sdk = 24
 The default output is `dist/java/android`. The `min_sdk` sets the minimum Android API level (default `24`).
 
 Both JVM and Android targets can be enabled simultaneously. They share the same `package`, `module_name`, and `min_version` settings but produce separate output.
+
+<h2 id="c-sharp-configuration">C# Configuration</h2>
+
+The `[targets.csharp]` section controls C# generation and NuGet packaging.
+
+### Output Directory
+
+C# artifacts go into `dist/csharp` by default:
+
+```toml
+[targets.csharp]
+enabled = true
+output = "dist/csharp"
+```
+
+Run generation or packaging with:
+
+```bash
+boltffi generate csharp   # writes .cs files only
+boltffi pack csharp       # builds the NuGet package with native runtime assets
+```
+
+`generate csharp` writes one `.cs` file for the top-level module/runtime helpers plus additional `.cs` files for generated records, enums, classes, callbacks, and stream-owning types directly under `output`. `pack csharp` writes the generated sources under `{output}/src`, builds the Rust `cdylib` for each configured runtime identifier into `{output}/runtimes/<rid>/native/`, and emits a `.nupkg` under `{output}/packages/` that bundles everything together.
+
+### Runtime Identifiers
+
+Choose which .NET runtime identifiers `pack csharp` builds native assets for:
+
+```toml
+[targets.csharp]
+enabled = true
+runtime_identifiers = ["osx-arm64", "linux-x64", "win-x64"]
+```
+
+`current` resolves to the active host RID. Supported canonical values are `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, and `win-x64`. See [BOLTFFI_TOML_SPEC.md](https://github.com/boltffi/boltffi/blob/main/BOLTFFI_TOML_SPEC.md) for the full list of options including `package_id`, `target_framework`, and `package_output`.
 
 ## WASM Configuration
 
@@ -681,6 +783,10 @@ min_version = 8
 
 [targets.java.jvm]
 enabled = true
+
+[targets.csharp]
+enabled = true
+output = "dist/csharp"
 
 [targets.wasm]
 output = "dist/wasm"

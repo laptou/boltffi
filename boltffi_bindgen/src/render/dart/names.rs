@@ -18,9 +18,23 @@ impl NamingConvention {
         Self::escape_keyword(&converted)
     }
 
+    pub fn local_name(name: &str) -> String {
+        let converted = name.to_lower_camel_case();
+        format!("l${}", converted)
+    }
+
+    pub fn record_struct_name(name: &str) -> String {
+        format!("_${}$Struct", Self::class_name(name))
+    }
+
     pub fn property_name(name: &str) -> String {
         let converted = name.to_lower_camel_case();
         Self::escape_keyword(&converted)
+    }
+
+    pub fn priv_const_name(name: &str) -> String {
+        let converted = name.to_lower_camel_case();
+        format!("_k${}", converted)
     }
 
     pub fn escape_keyword(name: &str) -> String {
@@ -109,10 +123,6 @@ impl NamingConvention {
 
     pub fn ffi_module_name(crate_name: &str) -> String {
         naming::ffi_module_name(crate_name)
-    }
-
-    pub fn private_name(name: &str) -> String {
-        format!("$${}", name)
     }
 }
 

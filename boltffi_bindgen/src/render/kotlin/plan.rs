@@ -219,6 +219,7 @@ pub struct KotlinFunction {
     pub ffi_name: String,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: String,
     pub async_call: Option<KotlinAsyncCall>,
     pub decode_expr: String,
@@ -390,8 +391,11 @@ pub struct KotlinCallbackReturn {
 
 #[derive(Clone)]
 pub struct KotlinNative {
-    pub lib_name: Name<LibraryName>,
-    pub desktop_loader: bool,
+    pub android_lib_name: Name<LibraryName>,
+    pub desktop_jni_lib_name: Name<LibraryName>,
+    pub desktop_fallback_lib_name: Name<LibraryName>,
+    pub desktop_loader_bundled: bool,
+    pub desktop_loader_system: bool,
     pub prefix: String,
     pub functions: Vec<KotlinNativeFunction>,
     pub wire_functions: Vec<KotlinNativeWireFunction>,
@@ -598,6 +602,7 @@ pub struct KotlinAsyncCall {
     pub free: String,
     pub return_is_unit: bool,
     pub return_is_direct: bool,
+    pub direct_return_is_nullable: bool,
     pub return_cast: String,
     pub decode_expr: String,
     pub is_blittable_return: bool,

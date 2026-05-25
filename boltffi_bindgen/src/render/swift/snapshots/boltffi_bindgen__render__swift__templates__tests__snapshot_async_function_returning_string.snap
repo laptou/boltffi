@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
+assertion_line: 1019
 expression: "render_function(&func, \"boltffi\")"
 ---
 public func fetchData(url: String) async throws -> String {
@@ -12,7 +13,7 @@ public func fetchData(url: String) async throws -> String {
         cancelFn: boltffi_fetch_data_cancel,
         freeFn: boltffi_fetch_data_free
     ) { buf, status in
-        guard status.code == 0 else { boltffi_free_buf(buf); throw FfiError(message: "ffi call failed") }
+        guard status.code == 0 else { boltffi_free_buf(buf); throw FfiError(message: "FFI failed in async completion with code \(status.code)") }
         defer { boltffi_free_buf(buf) }
         return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readString() }
     }

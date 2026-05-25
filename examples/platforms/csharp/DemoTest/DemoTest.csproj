@@ -8,10 +8,13 @@
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Generated BoltFFI wrappers use `fixed` to pin managed memory
+         for zero-copy P/Invoke calls. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\dist\*.cs" Link="Generated\%(Filename)%(Extension)" />
+    <PackageReference Include="demo" Version="0.1.0" />
   </ItemGroup>
 
 </Project>

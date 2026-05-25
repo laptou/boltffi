@@ -1,0 +1,19 @@
+use boltffi_ast::{CanonicalName as SourceName, FieldDef as SourceField};
+
+use crate::{CanonicalName, FieldKey, NamePart};
+
+impl From<&SourceName> for CanonicalName {
+    fn from(name: &SourceName) -> Self {
+        Self::new(
+            name.parts()
+                .map(|part| NamePart::new(part.as_str()))
+                .collect(),
+        )
+    }
+}
+
+impl From<&SourceField> for FieldKey {
+    fn from(field: &SourceField) -> Self {
+        Self::Named(CanonicalName::from(&field.name))
+    }
+}

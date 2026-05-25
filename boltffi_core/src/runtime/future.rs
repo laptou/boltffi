@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use super::continuation::{ContinuationScheduler, ContinuationSignalPolicy};
+use crate::status::FfiStatus;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,13 +110,17 @@ pub enum TerminalState {
 enum FutureExecutionState<T> {
     Running(Pin<Box<dyn Future<Output = T> + Send + 'static>>),
     Complete(T),
+    Failed(FfiStatus),
     Panicked(String),
     Consumed,
 }
 
 impl<T> FutureExecutionState<T> {
     fn is_finished(&self) -> bool {
-        matches!(self, Self::Complete(_) | Self::Panicked(_) | Self::Consumed)
+        matches!(
+            self,
+            Self::Complete(_) | Self::Failed(_) | Self::Panicked(_) | Self::Consumed
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -142,6 +147,16 @@ impl<T> FutureExecutionState<T> {
             }
         }
     }
+
+    fn take_status(&mut self) -> Option<FfiStatus> {
+        match std::mem::replace(self, Self::Consumed) {
+            Self::Failed(status) => Some(status),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
 }
 
 pub struct RustFuture<T: Send + 'static> {
@@ -154,14 +169,22 @@ impl<T: Send + 'static> RustFuture<T> {
     where
         F: Future<Output = T> + Send + 'static,
     {
+        Self::from_execution_state(FutureExecutionState::Running(Box::pin(future)))
+    }
+
+    fn from_execution_state(future_execution_state: FutureExecutionState<T>) -> Arc<Self> {
         let wake_target = Arc::new(FutureWakeTarget::new());
         let rust_future = Arc::new(Self {
-            future_execution_state: Mutex::new(FutureExecutionState::Running(Box::pin(future))),
+            future_execution_state: Mutex::new(future_execution_state),
             wake_target: Arc::clone(&wake_target),
         });
         #[cfg(target_arch = "wasm32")]
         wake_target.initialize_wasm_handle(&rust_future);
         rust_future
+    }
+
+    fn from_status(status: FfiStatus) -> Arc<Self> {
+        Self::from_execution_state(FutureExecutionState::Failed(status))
     }
 
     fn poll_future_once(&self, waker: &Waker) -> bool {
@@ -205,8 +228,23 @@ impl<T: Send + 'static> RustFuture<T> {
         }
     }
 
-    pub fn complete(&self) -> Option<T> {
-        self.future_execution_state.lock().unwrap().take_result()
+    pub fn complete(&self) -> Result<T, FfiStatus> {
+        let mut execution_state = self.future_execution_state.lock().unwrap();
+        if let Some(result) = execution_state.take_result() {
+            return Ok(result);
+        }
+        if let Some(status) = execution_state.take_status() {
+            return Err(status);
+        }
+        if matches!(&*execution_state, FutureExecutionState::Panicked(_)) {
+            return Err(FfiStatus::INTERNAL_ERROR);
+        }
+        drop(execution_state);
+        if self.wake_target.is_cancelled() {
+            Err(FfiStatus::CANCELLED)
+        } else {
+            Err(FfiStatus::INTERNAL_ERROR)
+        }
     }
 
     pub fn panic_message(&self) -> Option<String> {
@@ -393,6 +431,10 @@ where
     Arc::into_raw(RustFuture::new(future)) as RustFutureHandle
 }
 
+pub fn rust_future_invalid_arg<T: Send + 'static>() -> RustFutureHandle {
+    Arc::into_raw(RustFuture::<T>::from_status(FfiStatus::INVALID_ARG)) as RustFutureHandle
+}
+
 pub unsafe fn rust_future_poll<T: Send + 'static>(
     handle: RustFutureHandle,
     continuation_callback: RustFutureContinuationCallback,
@@ -402,7 +444,9 @@ pub unsafe fn rust_future_poll<T: Send + 'static>(
         .with_future_arc(|rust_future| rust_future.poll(continuation_callback, callback_data));
 }
 
-pub unsafe fn rust_future_complete<T: Send + 'static>(handle: RustFutureHandle) -> Option<T> {
+pub unsafe fn rust_future_complete<T: Send + 'static>(
+    handle: RustFutureHandle,
+) -> Result<T, FfiStatus> {
     RustFutureHandleAccess::<T>::new(handle).with_future(RustFuture::complete)
 }
 
@@ -532,7 +576,28 @@ mod tests {
         );
         assert_eq!(
             unsafe { rust_future_complete::<String>(handle) },
-            Some("boltffi".to_string())
+            Ok("boltffi".to_string())
+        );
+
+        unsafe { rust_future_free::<String>(handle) };
+    }
+
+    #[test]
+    fn invalid_arg_future_returns_invalid_arg_status() {
+        let (sender, receiver) = mpsc::channel();
+        let sender = Box::new(sender);
+        let handle = rust_future_invalid_arg::<String>();
+
+        unsafe {
+            rust_future_poll::<String>(handle, send_poll_status, callback_data(sender.as_ref()))
+        };
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(RustFuturePoll::Ready)
+        );
+        assert_eq!(
+            unsafe { rust_future_complete::<String>(handle) },
+            Err(FfiStatus::INVALID_ARG)
         );
 
         unsafe { rust_future_free::<String>(handle) };

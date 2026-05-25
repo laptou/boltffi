@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::ir::definitions::ParamDef;
 use crate::render::python::{
     NamingConvention, PythonCStyleEnum, PythonCStyleEnumVariant, PythonEnumConstructor,
-    PythonEnumMethod, PythonFunction, PythonLowerError, PythonParameter,
+    PythonEnumMethod, PythonFunction, PythonLowerError, PythonParameter, PythonRecord,
+    PythonRecordConstructor, PythonRecordField, PythonRecordMethod,
 };
 
 use super::PythonLowerer;
@@ -42,8 +43,21 @@ impl PythonLowerer<'_> {
 
     pub(super) fn validate_top_level_names(
         functions: &[PythonFunction],
+        records: &[PythonRecord],
         enums: &[PythonCStyleEnum],
     ) -> Result<(), PythonLowerError> {
+        let reserved_top_level_names = if enums.is_empty() {
+            HashMap::new()
+        } else {
+            HashMap::from([(
+                NamingConvention::int_enum_base_name().to_string(),
+                format!(
+                    "imported enum base `{}`",
+                    NamingConvention::int_enum_base_name()
+                ),
+            )])
+        };
+
         functions
             .iter()
             .map(|function| {
@@ -52,6 +66,12 @@ impl PythonLowerer<'_> {
                     format!("function `{}`", function.python_name),
                 )
             })
+            .chain(records.iter().map(|record| {
+                (
+                    record.type_ref.class_name.clone(),
+                    format!("record `{}`", record.type_ref.class_name),
+                )
+            }))
             .chain(enums.iter().map(|enumeration| {
                 (
                     enumeration.type_ref.class_name.clone(),
@@ -59,7 +79,7 @@ impl PythonLowerer<'_> {
                 )
             }))
             .try_fold(
-                HashMap::<String, String>::new(),
+                reserved_top_level_names,
                 |mut seen_names, (generated_name, subject)| {
                     if let Some(existing_subject) =
                         seen_names.insert(generated_name.clone(), subject.clone())
@@ -80,11 +100,15 @@ impl PythonLowerer<'_> {
 
     pub(super) fn validate_native_module_names(
         functions: &[PythonFunction],
+        records: &[PythonRecord],
         enums: &[PythonCStyleEnum],
     ) -> Result<(), PythonLowerError> {
         let mut seen_native_module_names = HashMap::<String, String>::new();
 
-        if !functions.is_empty() || enums.iter().any(PythonCStyleEnum::has_native_callables) {
+        if !functions.is_empty()
+            || records.iter().any(PythonRecord::has_native_callables)
+            || enums.iter().any(PythonCStyleEnum::has_native_callables)
+        {
             seen_native_module_names.insert(
                 NamingConvention::native_loader_name().to_string(),
                 format!(
@@ -94,9 +118,18 @@ impl PythonLowerer<'_> {
             );
         }
 
-        enums
+        records
             .iter()
-            .map(|enumeration| {
+            .map(|record| {
+                (
+                    record.type_ref.registration_function_name(),
+                    format!(
+                        "record registration helper `{}`",
+                        record.type_ref.registration_function_name()
+                    ),
+                )
+            })
+            .chain(enums.iter().map(|enumeration| {
                 (
                     enumeration.type_ref.registration_function_name(),
                     format!(
@@ -104,12 +137,36 @@ impl PythonLowerer<'_> {
                         enumeration.type_ref.registration_function_name()
                     ),
                 )
-            })
+            }))
             .chain(functions.iter().map(|function| {
                 (
                     function.python_name.clone(),
                     format!("function `{}`", function.python_name),
                 )
+            }))
+            .chain(records.iter().flat_map(|record| {
+                record.constructors.iter().map(|constructor| {
+                    (
+                        constructor.callable.native_name.clone(),
+                        format!(
+                            "record constructor `{}.{}()`",
+                            record.class_name(),
+                            constructor.python_name
+                        ),
+                    )
+                })
+            }))
+            .chain(records.iter().flat_map(|record| {
+                record.methods.iter().map(|method| {
+                    (
+                        method.callable.native_name.clone(),
+                        format!(
+                            "record method `{}.{}()`",
+                            record.class_name(),
+                            method.python_name
+                        ),
+                    )
+                })
             }))
             .chain(enums.iter().flat_map(|enumeration| {
                 enumeration.constructors.iter().map(|constructor| {
@@ -151,6 +208,42 @@ impl PythonLowerer<'_> {
                     Ok(seen_names)
                 },
             )?;
+
+        Ok(())
+    }
+
+    pub(super) fn validate_record_field_names(
+        record_name: &str,
+        fields: &[PythonRecordField],
+    ) -> Result<(), PythonLowerError> {
+        fields
+            .iter()
+            .try_fold(HashMap::<String, String>::new(), |mut seen_names, field| {
+                if NamingConvention::is_reserved_record_field_name(&field.python_name) {
+                    return Err(PythonLowerError::RecordFieldNameCollision {
+                        record_name: record_name.to_string(),
+                        generated_name: field.python_name.clone(),
+                        existing_field: format!(
+                            "reserved record field name `{}`",
+                            field.python_name
+                        ),
+                        colliding_field: field.native_name.clone(),
+                    });
+                }
+
+                if let Some(existing_field) =
+                    seen_names.insert(field.python_name.clone(), field.native_name.clone())
+                {
+                    return Err(PythonLowerError::RecordFieldNameCollision {
+                        record_name: record_name.to_string(),
+                        generated_name: field.python_name.clone(),
+                        existing_field,
+                        colliding_field: field.native_name.clone(),
+                    });
+                }
+
+                Ok(seen_names)
+            })?;
 
         Ok(())
     }
@@ -229,6 +322,66 @@ impl PythonLowerer<'_> {
 
         Ok(())
     }
+
+    pub(super) fn validate_record_callable_names(
+        record_name: &str,
+        fields: &[PythonRecordField],
+        constructors: &[PythonRecordConstructor],
+        methods: &[PythonRecordMethod],
+    ) -> Result<(), PythonLowerError> {
+        let seen_names =
+            fields
+                .iter()
+                .fold(HashMap::<String, String>::new(), |mut seen_names, field| {
+                    seen_names.insert(
+                        field.python_name.clone(),
+                        format!("field `{}`", field.python_name),
+                    );
+                    seen_names
+                });
+
+        constructors
+            .iter()
+            .map(|constructor| {
+                (
+                    constructor.python_name.clone(),
+                    format!("constructor `{}`", constructor.python_name),
+                )
+            })
+            .chain(methods.iter().map(|method| {
+                (
+                    method.python_name.clone(),
+                    format!("method `{}`", method.python_name),
+                )
+            }))
+            .try_fold(seen_names, |mut seen_names, (generated_name, subject)| {
+                if NamingConvention::is_reserved_record_callable_name(&generated_name) {
+                    return Err(PythonLowerError::RecordCallableNameCollision {
+                        record_name: record_name.to_string(),
+                        generated_name: generated_name.clone(),
+                        existing_subject: format!(
+                            "reserved record callable name `{generated_name}`"
+                        ),
+                        colliding_subject: subject,
+                    });
+                }
+
+                if let Some(existing_subject) =
+                    seen_names.insert(generated_name.clone(), subject.clone())
+                {
+                    return Err(PythonLowerError::RecordCallableNameCollision {
+                        record_name: record_name.to_string(),
+                        generated_name,
+                        existing_subject,
+                        colliding_subject: subject,
+                    });
+                }
+
+                Ok(seen_names)
+            })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -237,9 +390,10 @@ mod tests {
 
     use crate::ir::TypeCatalog;
     use crate::ir::definitions::{
-        CStyleVariant, ConstructorDef, EnumDef, EnumRepr, MethodDef, Receiver, ReturnDef,
+        CStyleVariant, ConstructorDef, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef,
+        Receiver, RecordDef, ReturnDef,
     };
-    use crate::ir::ids::{EnumId, MethodId, VariantName};
+    use crate::ir::ids::{EnumId, FunctionId, MethodId, RecordId, VariantName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::render::python::PythonLowerError;
 
@@ -315,8 +469,8 @@ mod tests {
     fn reject_native_loader_name_for_functions() {
         let error = lower_contract(
             TypeCatalog::default(),
-            vec![crate::ir::definitions::FunctionDef {
-                id: crate::ir::ids::FunctionId::new("_initialize_loader"),
+            vec![FunctionDef {
+                id: FunctionId::new("_initialize_loader"),
                 params: vec![],
                 returns: ReturnDef::Void,
                 execution_kind: ExecutionKind::Sync,
@@ -357,8 +511,8 @@ mod tests {
 
         let error = lower_contract(
             catalog,
-            vec![crate::ir::definitions::FunctionDef {
-                id: crate::ir::ids::FunctionId::new("_register_status"),
+            vec![FunctionDef {
+                id: FunctionId::new("_register_status"),
                 params: vec![],
                 returns: ReturnDef::Void,
                 execution_kind: ExecutionKind::Sync,
@@ -374,6 +528,162 @@ mod tests {
                 generated_name,
                 ..
             } if generated_name == "_register_status"
+        ));
+    }
+
+    #[test]
+    fn reject_record_field_name_collisions() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("Config"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![
+                FieldDef {
+                    name: "class".into(),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: "class_".into(),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let error =
+            lower_contract(catalog, vec![]).expect_err("record field collision should fail");
+
+        assert!(matches!(
+            error,
+            PythonLowerError::RecordFieldNameCollision {
+                generated_name,
+                ..
+            } if generated_name == "class_"
+        ));
+    }
+
+    #[test]
+    fn reject_reserved_record_field_names() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("Config"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![FieldDef {
+                name: "__dict__".into(),
+                type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                doc: None,
+                default: None,
+            }],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let error =
+            lower_contract(catalog, vec![]).expect_err("reserved record field name should fail");
+
+        assert!(matches!(
+            error,
+            PythonLowerError::RecordFieldNameCollision {
+                generated_name,
+                ..
+            } if generated_name == "__dict__"
+        ));
+    }
+
+    #[test]
+    fn reject_record_method_names_that_shadow_fields() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("Point"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![FieldDef {
+                name: "x".into(),
+                type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                doc: None,
+                default: None,
+            }],
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("x"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+                execution_kind: ExecutionKind::Sync,
+                doc: None,
+                deprecated: None,
+            }],
+            doc: None,
+            deprecated: None,
+        });
+
+        let error =
+            lower_contract(catalog, vec![]).expect_err("record callable collision should fail");
+
+        assert!(matches!(
+            error,
+            PythonLowerError::RecordCallableNameCollision {
+                generated_name,
+                ..
+            } if generated_name == "x"
+        ));
+    }
+
+    #[test]
+    fn reject_record_names_that_shadow_int_enum_base() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("IntEnum"),
+            is_repr_c: true,
+            is_error: false,
+            fields: vec![FieldDef {
+                name: "value".into(),
+                type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                doc: None,
+                default: None,
+            }],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+        catalog.insert_enum(EnumDef {
+            id: EnumId::new("status"),
+            repr: EnumRepr::CStyle {
+                tag_type: PrimitiveType::I32,
+                variants: vec![CStyleVariant {
+                    name: VariantName::new("Active"),
+                    discriminant: 0,
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let error = lower_contract(catalog, vec![])
+            .expect_err("reserved IntEnum top-level name should fail");
+
+        assert!(matches!(
+            error,
+            PythonLowerError::TopLevelNameCollision {
+                generated_name,
+                ..
+            } if generated_name == "IntEnum"
         ));
     }
 }
