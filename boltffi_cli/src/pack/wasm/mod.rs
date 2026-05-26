@@ -1,4 +1,5 @@
 mod npm;
+mod wasm_bindgen;
 
 use std::path::Path;
 use std::process::Command;
@@ -85,7 +86,24 @@ pub(crate) fn pack_wasm(
         step.finish_success();
     }
 
-    if options.execution.regenerate {
+    let ts_out = config.wasm_typescript_output();
+    std::fs::create_dir_all(&ts_out).map_err(|source| CliError::CreateDirectoryFailed {
+        path: ts_out.clone(),
+        source,
+    })?;
+
+    let module_name = config.wasm_typescript_module_name();
+    let mut wasm_bindgen_ran = false;
+    if wasm_bindgen::wasm_has_wasm_bindgen_placeholder_imports(&wasm_artifact_path)? {
+        let step = reporter.step("Running wasm-bindgen");
+        wasm_bindgen::run_wasm_bindgen_for_pack(config, &wasm_artifact_path, &module_name)?;
+        wasm_bindgen_ran = true;
+        step.finish_success();
+    } else {
+        wasm_bindgen::clear_stale_wasm_bindgen_artifacts(&ts_out, &module_name)?;
+    }
+
+    if options.execution.regenerate || wasm_bindgen_ran {
         let step = reporter.step("Generating TypeScript bindings");
         run_generate_with_output(
             config,
@@ -104,15 +122,33 @@ pub(crate) fn pack_wasm(
         source,
     })?;
 
-    let module_name = config.wasm_typescript_module_name();
     let packaged_wasm_path = npm_output.join(format!("{}_bg.wasm", module_name));
-    std::fs::copy(&wasm_artifact_path, &packaged_wasm_path).map_err(|source| {
-        CliError::CopyFailed {
-            from: wasm_artifact_path.clone(),
-            to: packaged_wasm_path.clone(),
-            source,
+    let wasm_src_for_pack = if wasm_bindgen_ran {
+        ts_out.join(format!("{module_name}_bg.wasm"))
+    } else {
+        wasm_artifact_path.clone()
+    };
+    if wasm_bindgen::paths_differ(&wasm_src_for_pack, &packaged_wasm_path) {
+        std::fs::copy(&wasm_src_for_pack, &packaged_wasm_path).map_err(|source| {
+            CliError::CopyFailed {
+                from: wasm_src_for_pack.clone(),
+                to: packaged_wasm_path.clone(),
+                source,
+            }
+        })?;
+    }
+
+    if wasm_bindgen_ran {
+        let glue_src = ts_out.join(format!("{module_name}_wbg.js"));
+        let glue_dst = npm_output.join(format!("{module_name}_wbg.js"));
+        if wasm_bindgen::paths_differ(&glue_src, &glue_dst) {
+            std::fs::copy(&glue_src, &glue_dst).map_err(|source| CliError::CopyFailed {
+                from: glue_src,
+                to: glue_dst,
+                source,
+            })?;
         }
-    })?;
+    }
 
     let generated_typescript_source = config
         .wasm_typescript_output()

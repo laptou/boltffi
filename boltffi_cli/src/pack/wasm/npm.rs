@@ -116,14 +116,21 @@ pub(crate) fn generate_wasm_package_json(
             },
         },
         types: format!("./{}.d.ts", module_name),
-        files: vec![
-            format!("{}.js", module_name),
-            format!("{}.d.ts", module_name),
-            format!("{}_bg.wasm", module_name),
-            "bundler.js".to_string(),
-            "web.js".to_string(),
-            "node.js".to_string(),
-        ],
+        files: {
+            let mut files = vec![
+                format!("{}.js", module_name),
+                format!("{}.d.ts", module_name),
+                format!("{}_bg.wasm", module_name),
+                "bundler.js".to_string(),
+                "web.js".to_string(),
+                "node.js".to_string(),
+            ];
+            let wbg = output_dir.join(format!("{module_name}_wbg.js"));
+            if wbg.exists() {
+                files.push(format!("{module_name}_wbg.js"));
+            }
+            files
+        },
         dependencies,
         license: config.wasm_npm_license(),
         repository: config.wasm_npm_repository(),

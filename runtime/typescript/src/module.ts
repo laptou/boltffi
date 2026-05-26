@@ -190,6 +190,21 @@ export class BoltFFIModule {
     return { ptr: view[idx], len: view[idx + 1], cap: view[idx + 2], align: view[idx + 3] };
   }
 
+  /** pair of u32 cells on the wasm heap: `[err_out_ptr, err_out_len]` for fallible ffi out-params. */
+  allocErrOutPair(): number {
+    return this.exports.boltffi_wasm_alloc(8);
+  }
+
+  readErrOutPair(pairPtr: number): { ptr: number; len: number } {
+    const u32 = this.getU32();
+    const idx = pairPtr >>> 2;
+    return { ptr: u32[idx], len: u32[idx + 1] };
+  }
+
+  freeErrOutPair(pairPtr: number): void {
+    this.exports.boltffi_wasm_free(pairPtr, 8);
+  }
+
   completeAsync<T>(complete: (statusPtr: number) => T): T {
     const statusPtr = this.allocStatus();
     try {
@@ -1072,24 +1087,33 @@ export class BoltFFIModule {
   }
 }
 
+/** hooks from wasm-bindgen `--target web` glue (`__wbg_get_imports` / `__wbg_finalize_init`). */
+export interface BoltFFIWasmBindgenHooks {
+  getImports: () => WebAssembly.Imports;
+  finalize: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void;
+}
+
 export interface BoltFFIImports {
   env?: Record<string, WebAssembly.ImportValue>;
+  wasmBindgen?: BoltFFIWasmBindgenHooks;
 }
 
-function createUnimplementedImport(importName: string): (...args: unknown[]) => never {
-  return () => {
-    throw new Error(`Unimplemented wasm import: ${importName}`);
-  };
+let pendingWasmBindgenEnv: Record<string, WebAssembly.ImportValue> | null = null;
+
+function prepareWasmBindgenEnv(env: Record<string, WebAssembly.ImportValue>): void {
+  pendingWasmBindgenEnv = env;
 }
 
-function createImportModuleProxy(moduleName: string): Record<string, WebAssembly.ImportValue> {
-  return new Proxy(
-    {},
-    {
-      get: (_target, propertyName) =>
-        createUnimplementedImport(`${moduleName}.${String(propertyName)}`),
-    }
-  );
+/** used by patched wasm-bindgen glue to supply the `env` namespace to `__wbg_get_imports`. */
+export function __boltffi_takePendingEnv(): Record<string, WebAssembly.ImportValue> {
+  const env = pendingWasmBindgenEnv;
+  if (env === null) {
+    throw new Error(
+      "boltffi: wasm-bindgen env not prepared (instantiateBoltFFI with wasmBindgen must run first)"
+    );
+  }
+  pendingWasmBindgenEnv = null;
+  return env;
 }
 
 export async function instantiateBoltFFI(
@@ -1107,26 +1131,49 @@ export async function instantiateBoltFFI(
 
   const asyncManager = new AsyncFutureManager();
 
-  const importObject: WebAssembly.Imports = {
-    env: {
-      __boltffi_wake: (handle: number) => asyncManager.wake(handle),
-      ...(imports?.env ?? {}),
-    },
-    __wbindgen_placeholder__: createImportModuleProxy("__wbindgen_placeholder__"),
-    __wbindgen_externref_xform__: createImportModuleProxy("__wbindgen_externref_xform__"),
+  const env: Record<string, WebAssembly.ImportValue> = {
+    __boltffi_wake: (handle: number) => asyncManager.wake(handle),
+    ...(imports?.env ?? {}),
   };
 
-  const { instance } = await WebAssembly.instantiate(wasmSource, importObject);
-  const module = new BoltFFIModule(instance, asyncManager);
+  if (imports?.wasmBindgen) {
+    prepareWasmBindgenEnv(env);
+    const importObject = imports.wasmBindgen.getImports();
+    const { instance, module } = (await WebAssembly.instantiate(
+      wasmSource,
+      importObject,
+    )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
+    imports.wasmBindgen.finalize(instance, module);
+    const boltModule = new BoltFFIModule(instance, asyncManager);
 
-  const actualVersion = module.exports.boltffi_wasm_abi_version();
+    const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
+    if (actualVersion !== expectedVersion) {
+      throw new Error(
+        `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
+      );
+    }
+
+    return boltModule;
+  }
+
+  const importObject: WebAssembly.Imports = {
+    env,
+  };
+
+  const { instance } = (await WebAssembly.instantiate(
+    wasmSource,
+    importObject,
+  )) as unknown as WebAssembly.WebAssemblyInstantiatedSource;
+  const boltModule = new BoltFFIModule(instance, asyncManager);
+
+  const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
   if (actualVersion !== expectedVersion) {
     throw new Error(
       `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
     );
   }
 
-  return module;
+  return boltModule;
 }
 
 export function instantiateBoltFFISync(
@@ -1136,25 +1183,43 @@ export function instantiateBoltFFISync(
 ): BoltFFIModule {
   const asyncManager = new AsyncFutureManager();
 
+  const env: Record<string, WebAssembly.ImportValue> = {
+    __boltffi_wake: (handle: number) => asyncManager.wake(handle),
+    ...(imports?.env ?? {}),
+  };
+
+  if (imports?.wasmBindgen) {
+    prepareWasmBindgenEnv(env);
+    const importObject = imports.wasmBindgen.getImports();
+    const wasmModule = new WebAssembly.Module(source);
+    const instance = new WebAssembly.Instance(wasmModule, importObject);
+    imports.wasmBindgen.finalize(instance, wasmModule);
+    const boltModule = new BoltFFIModule(instance, asyncManager);
+
+    const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
+    if (actualVersion !== expectedVersion) {
+      throw new Error(
+        `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
+      );
+    }
+
+    return boltModule;
+  }
+
   const importObject: WebAssembly.Imports = {
-    env: {
-      __boltffi_wake: (handle: number) => asyncManager.wake(handle),
-      ...(imports?.env ?? {}),
-    },
-    __wbindgen_placeholder__: createImportModuleProxy("__wbindgen_placeholder__"),
-    __wbindgen_externref_xform__: createImportModuleProxy("__wbindgen_externref_xform__"),
+    env,
   };
 
   const wasmModule = new WebAssembly.Module(source);
   const instance = new WebAssembly.Instance(wasmModule, importObject);
-  const module = new BoltFFIModule(instance, asyncManager);
+  const boltModule = new BoltFFIModule(instance, asyncManager);
 
-  const actualVersion = module.exports.boltffi_wasm_abi_version();
+  const actualVersion = boltModule.exports.boltffi_wasm_abi_version();
   if (actualVersion !== expectedVersion) {
     throw new Error(
       `BoltFFI ABI version mismatch: expected ${expectedVersion}, got ${actualVersion}`
     );
   }
 
-  return module;
+  return boltModule;
 }
