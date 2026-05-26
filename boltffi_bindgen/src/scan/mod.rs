@@ -3667,7 +3667,7 @@ mod tests {
         let demo_crate_path = repo_root.join("examples").join("demo");
         scan_crate(&demo_crate_path, "demo").unwrap()
     }
-    
+
     fn scan_temp_crate_with_config(
         source: &str,
         pointer_width: Option<u8>,

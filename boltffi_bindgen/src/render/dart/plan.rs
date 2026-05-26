@@ -60,7 +60,9 @@ impl DartNativeType {
                 return_ty: Box::new(Self::from_abi_type(return_type)),
                 kind: DartNativeFunctionKind::InlineClosure,
             },
-            AbiType::Handle(_) | AbiType::PointerToHandle(_) => DartNativeType::Pointer(Box::new(DartNativeType::Void)),
+            AbiType::Handle(_) | AbiType::PointerToHandle(_) => {
+                DartNativeType::Pointer(Box::new(DartNativeType::Void))
+            }
             AbiType::CallbackHandle => DartNativeType::CallbackHandle,
             AbiType::Struct(record_id) => {
                 DartNativeType::Custom(NamingConvention::record_struct_name(record_id.as_str()))

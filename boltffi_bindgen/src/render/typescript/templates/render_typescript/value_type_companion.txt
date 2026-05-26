@@ -21,9 +21,6 @@ export const {{ name }} = {
 {%- elif constructor.return_route.is_void_slot() %}
     (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
     return {{ constructor.return_route.decode_expr() }};
-{%- elif constructor.return_route.is_nan_boxed_optional() %}
-    const packed = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }}) as number;
-    return {{ constructor.return_route.decode_expr() }};
 {%- elif constructor.return_route.is_packed() %}
     const packed = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }}) as bigint;
     const reader = _module.takePackedBuffer(packed);
@@ -48,9 +45,6 @@ export const {{ name }} = {
       }
 {%- elif constructor.return_route.is_void_slot() %}
       (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
-      return {{ constructor.return_route.decode_expr() }};
-{%- elif constructor.return_route.is_nan_boxed_optional() %}
-      const packed = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }}) as number;
       return {{ constructor.return_route.decode_expr() }};
 {%- elif constructor.return_route.is_packed() %}
       const packed = (_exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }}) as bigint;
@@ -108,9 +102,6 @@ export const {{ name }} = {
 {%- elif sync_method.return_route.is_void_slot() %}
     (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
     return {{ sync_method.return_route.decode_expr() }};
-{%- elif sync_method.return_route.is_nan_boxed_optional() %}
-    const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as number;
-    return {{ sync_method.return_route.decode_expr() }};
 {%- elif sync_method.return_route.is_packed() %}
     const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
     const reader = _module.takePackedBuffer(packed);
@@ -129,7 +120,7 @@ export const {{ name }} = {
     );
 {%- if async_method.return_route.is_async_scalar() %}
     try {
-      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ async_method.return_route.ts_cast() }};
+      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){% if method.return_handle.is_some() || method.return_callback.is_some() %} as number{% else %}{{ async_method.return_route.ts_cast() }}{% endif %};
 {%- if let Some(handle_return) = method.return_handle %}
 {%- if handle_return.nullable %}
       if (result === 0) {
@@ -177,11 +168,7 @@ export const {{ name }} = {
       (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
     }
 {%- elif async_method.return_route.is_void() %}
-    try {
-      _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
-    } finally {
-      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-    }
+    (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
 {%- elif async_method.return_route.is_direct() %}
     (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
     throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");
@@ -227,9 +214,6 @@ export const {{ name }} = {
 {%- elif sync_method.return_route.is_void_slot() %}
       (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
       return {{ sync_method.return_route.decode_expr() }};
-{%- elif sync_method.return_route.is_nan_boxed_optional() %}
-      const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as number;
-      return {{ sync_method.return_route.decode_expr() }};
 {%- elif sync_method.return_route.is_packed() %}
       const packed = (_exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}) as bigint;
       const reader = _module.takePackedBuffer(packed);
@@ -252,7 +236,7 @@ export const {{ name }} = {
       );
 {%- if async_method.return_route.is_async_scalar() %}
       try {
-        const result = _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ async_method.return_route.ts_cast() }};
+        const result = _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){% if method.return_handle.is_some() || method.return_callback.is_some() %} as number{% else %}{{ async_method.return_route.ts_cast() }}{% endif %};
 {%- if let Some(handle_return) = method.return_handle %}
 {%- if handle_return.nullable %}
         if (result === 0) {
@@ -300,11 +284,7 @@ export const {{ name }} = {
         (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
       }
 {%- elif async_method.return_route.is_void() %}
-      try {
-        _module.completeAsync((statusPtr: number) => (_exports.{{ async_method.complete_ffi_name }} as Function)(awaitedHandle, statusPtr));
-      } finally {
-        (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
-      }
+      (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
 {%- elif async_method.return_route.is_direct() %}
       (_exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
       throw new Error("Unsupported async return route: Direct{{ async_method.return_route.ts_cast() }}");

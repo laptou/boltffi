@@ -770,7 +770,7 @@ mod tests {
             params,
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }

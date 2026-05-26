@@ -5,12 +5,12 @@ expression: output
 export async function makeCallback(): Promise<MyCallback> {
 
 
-  const handle = _exports.boltffi_make_callback();
+  const handle = (_exports.boltffi_make_callback as Function)();
   const awaitedHandle = await _module.asyncManager.pollAsync(
     handle,
-    (h: number) => _exports.boltffi_make_callback_poll_sync(h),
-    (h: number) => _exports.boltffi_make_callback_panic_message(h),
-    (h: number) => _exports.boltffi_make_callback_free(h)
+    (h: number) => (_exports.boltffi_make_callback_poll_sync as Function)(h),
+    (h: number) => (_exports.boltffi_make_callback_panic_message as Function)(h),
+    (h: number) => (_exports.boltffi_make_callback_free as Function)(h)
   );
 
 

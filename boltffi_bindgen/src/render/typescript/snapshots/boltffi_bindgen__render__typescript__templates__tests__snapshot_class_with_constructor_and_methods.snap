@@ -1,6 +1,5 @@
 ---
 source: boltffi_bindgen/src/render/typescript/templates.rs
-assertion_line: 1163
 expression: template.render().unwrap()
 ---
 /**
@@ -10,7 +9,7 @@ const _CounterFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        (_exports.boltffi_counter_free as Function)(handle);
+        _exports.boltffi_counter_free(handle);
       });
 
 export class Counter {
@@ -40,8 +39,25 @@ export class Counter {
     }
     this._disposed = true;
     _CounterFinalizer?.unregister(this);
-    (_exports.boltffi_counter_free as Function)(this._handle);
+    _exports.boltffi_counter_free(this._handle);
     this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("Counter has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("Counter received a null handle");
+    }
+    this._disposed = true;
+    _CounterFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -54,23 +70,23 @@ export class Counter {
    * Creates a counter
    */
   static new(): Counter {
-    const handle = (_exports.boltffi_counter_new as Function)();
+    const handle = _exports.boltffi_counter_new();
     return Counter._fromHandle(handle);
   }
 
   increment(delta: number): number {
     this._assertNotDisposed();
-    return (_exports.boltffi_counter_increment as Function)(this._handle, delta);
+    return _exports.boltffi_counter_increment(this._handle, delta);
   }
 
   async nextValue(): Promise<number> {
     this._assertNotDisposed();
-    const handle = (_exports.boltffi_counter_next_value as Function)(this._handle);
+    const handle = _exports.boltffi_counter_next_value(this._handle);
     const awaitedHandle = await _module.asyncManager.pollAsync(
       handle,
-      (futureHandle: number) => (_exports.boltffi_counter_next_value_poll_sync as Function)(futureHandle),
-      (futureHandle: number) => (_exports.boltffi_counter_next_value_panic_message as Function)(futureHandle),
-      (futureHandle: number) => (_exports.boltffi_counter_next_value_free as Function)(futureHandle)
+      (futureHandle: number) => _exports.boltffi_counter_next_value_poll_sync(futureHandle),
+      (futureHandle: number) => _exports.boltffi_counter_next_value_panic_message(futureHandle),
+      (futureHandle: number) => _exports.boltffi_counter_next_value_free(futureHandle)
     );
     const outPtr = _module.allocBufDescriptor();
     let completeCompleted = false;
@@ -86,7 +102,7 @@ export class Counter {
       } else {
         _module.freeBufDescriptor(outPtr);
       }
-      (_exports.boltffi_counter_next_value_free as Function)(awaitedHandle);
+      _exports.boltffi_counter_next_value_free(awaitedHandle);
     }
   }
 }

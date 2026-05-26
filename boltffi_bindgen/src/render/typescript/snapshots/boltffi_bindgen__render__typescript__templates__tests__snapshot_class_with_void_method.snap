@@ -6,7 +6,7 @@ const _LoggerFinalizer: FinalizationRegistry<number> | null =
   typeof FinalizationRegistry === "undefined"
     ? null
     : new FinalizationRegistry<number>((handle) => {
-        (_exports.boltffi_logger_free as Function)(handle);
+        _exports.boltffi_logger_free(handle);
       });
 
 export class Logger {
@@ -36,8 +36,25 @@ export class Logger {
     }
     this._disposed = true;
     _LoggerFinalizer?.unregister(this);
-    (_exports.boltffi_logger_free as Function)(this._handle);
+    _exports.boltffi_logger_free(this._handle);
     this._handle = 0;
+  }
+
+  /**
+   * moves this rust-owned handle into the ffi callee; this wrapper must not be used afterward (mirrors swift `takeHandle()`).
+   */
+  takeHandle(): number {
+    if (this._disposed) {
+      throw new Error("Logger has been disposed");
+    }
+    if (this._handle === 0) {
+      throw new Error("Logger received a null handle");
+    }
+    this._disposed = true;
+    _LoggerFinalizer?.unregister(this);
+    const h = this._handle;
+    this._handle = 0;
+    return h;
   }
 
   private _assertNotDisposed(): void {
@@ -47,7 +64,7 @@ export class Logger {
   }
 
   static new(): Logger {
-    const handle = (_exports.boltffi_logger_new as Function)();
+    const handle = _exports.boltffi_logger_new();
     return Logger._fromHandle(handle);
   }
 
@@ -55,7 +72,7 @@ export class Logger {
     this._assertNotDisposed();
     const message_alloc = _module.allocString(message);
     try {
-      (_exports.boltffi_logger_log as Function)(this._handle, message_alloc.ptr, message_alloc.len);
+      _exports.boltffi_logger_log(this._handle, message_alloc.ptr, message_alloc.len);
     } finally {
       _module.freeAlloc(message_alloc);
     }

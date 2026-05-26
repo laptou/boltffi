@@ -19,9 +19,52 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
   }
 {% elif return_route.is_async_scalar() %}
   try {
-    const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+    const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){% if return_handle.is_some() || return_callback.is_some() %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
+{%- if let Some(handle_return) = return_handle %}
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_ret) = return_callback %}
+{%- if callback_ret.nullable %}
+    if (result === 0) {
+      return null;
+    }
+{%- endif %}
+    return {{ callback_ret.wrap_fn }}(result);
+{%- else %}
     return result;
+{%- endif %}
   } finally {
+    (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+  }
+{% elif return_route.is_async_fallible_handle_carrier() %}
+  const __errPair = _module.allocErrOutPair();
+  try {
+    const rawHandle = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4, statusPtr)) as number;
+    if (rawHandle !== 0) {
+      return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
+    }
+    const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+    try {
+      if (__errLen > 0) {
+        const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+        throw {{ return_route.carrier_err_throw_expr_for_template() }};
+      }
+{%- if return_route.carrier_handle_nullable() %}
+      return null;
+{%- else %}
+      throw new Error("ffi call failed");
+{%- endif %}
+    } finally {
+      if (__errLen > 0) {
+        _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+      }
+    }
+  } finally {
+    _module.freeErrOutPair(__errPair);
     (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
   }
 {% elif return_route.is_packed() %}
@@ -66,9 +109,52 @@ export async function {{ name }}({% for p in params %}{{ p.name }}: {{ p.ts_type
     }
 {% elif return_route.is_async_scalar() %}
     try {
-      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){{ return_route.ts_cast() }};
+      const result = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, statusPtr)){% if return_handle.is_some() || return_callback.is_some() %} as number{% else %}{{ return_route.ts_cast() }}{% endif %};
+{%- if let Some(handle_return) = return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- elif let Some(callback_ret) = return_callback %}
+{%- if callback_ret.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ callback_ret.wrap_fn }}(result);
+{%- else %}
       return result;
+{%- endif %}
     } finally {
+      (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
+    }
+{% elif return_route.is_async_fallible_handle_carrier() %}
+    const __errPair = _module.allocErrOutPair();
+    try {
+      const rawHandle = _module.completeAsync((statusPtr: number) => (_exports.{{ complete_ffi_name }} as Function)(awaitedHandle, __errPair, __errPair + 4, statusPtr)) as number;
+      if (rawHandle !== 0) {
+        return {{ return_route.carrier_ok_handle_class_name() }}._fromHandle(rawHandle);
+      }
+      const { ptr: __errPtr, len: __errLen } = _module.readErrOutPair(__errPair);
+      try {
+        if (__errLen > 0) {
+          const reader = new WireReader(_module.readFromMemory(__errPtr, __errLen).buffer as ArrayBuffer);
+          throw {{ return_route.carrier_err_throw_expr_for_template() }};
+        }
+{%- if return_route.carrier_handle_nullable() %}
+        return null;
+{%- else %}
+        throw new Error("ffi call failed");
+{%- endif %}
+      } finally {
+        if (__errLen > 0) {
+          _module.exports.boltffi_free_return_buffer(__errPtr, __errLen);
+        }
+      }
+    } finally {
+      _module.freeErrOutPair(__errPair);
       (_exports.{{ free_ffi_name }} as Function)(awaitedHandle);
     }
 {% elif return_route.is_packed() %}

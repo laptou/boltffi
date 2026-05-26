@@ -1,5 +1,5 @@
-use super::*;
 use super::calls::{AbiCallbackParamPlan, AbiCallbackParamStrategy};
+use super::*;
 use boltffi_ffi_rules::callable::ExecutionKind;
 
 impl<'c> Lowerer<'c> {
@@ -1033,8 +1033,12 @@ impl<'c> Lowerer<'c> {
                             self.expand_encode(&result_codec, ValueExpr::Var("result".into()));
                         let wire_transport = Transport::Span(SpanContent::Encoded(result_codec));
                         (
-                            ReturnShape::from_transport_with_ops(wire_transport, decode_ops, encode_ops)
-                                .with_error_strategy(ErrorReturnStrategy::Encoded),
+                            ReturnShape::from_transport_with_ops(
+                                wire_transport,
+                                decode_ops,
+                                encode_ops,
+                            )
+                            .with_error_strategy(ErrorReturnStrategy::Encoded),
                             ErrorTransport::Encoded {
                                 decode_ops: self.expand_decode(&err_codec),
                                 encode_ops: Some(
@@ -1076,18 +1080,20 @@ impl<'c> Lowerer<'c> {
             },
         };
 
-        let method_params = method.params.iter().flat_map(|param| {
-            match self.classify_type(&param.type_expr) {
-                Transport::Handle { .. } | Transport::Callback { .. } => {
-                    let plan = self.lower_param(param);
-                    self.abi_param_from_plan(&plan)
-                }
-                _ => {
-                    let plan = self.lower_callback_param(param);
-                    self.abi_callback_param_from_plan(plan)
-                }
-            }
-        });
+        let method_params =
+            method
+                .params
+                .iter()
+                .flat_map(|param| match self.classify_type(&param.type_expr) {
+                    Transport::Handle { .. } | Transport::Callback { .. } => {
+                        let plan = self.lower_param(param);
+                        self.abi_param_from_plan(&plan)
+                    }
+                    _ => {
+                        let plan = self.lower_callback_param(param);
+                        self.abi_callback_param_from_plan(plan)
+                    }
+                });
 
         let out_params = self.abi_callback_out_params(&method.returns, method.execution_kind());
 
@@ -1259,10 +1265,7 @@ mod return_shape_tests {
             shape.value_return_strategy(),
             ValueReturnStrategy::ObjectHandle
         );
-        assert_eq!(
-            shape.error_return_strategy(),
-            ErrorReturnStrategy::Encoded
-        );
+        assert_eq!(shape.error_return_strategy(), ErrorReturnStrategy::Encoded);
         assert!(shape.encode_ops.is_none());
         assert!(shape.decode_ops.is_none());
         assert!(matches!(
@@ -1288,10 +1291,7 @@ mod return_shape_tests {
             shape.value_return_strategy(),
             ValueReturnStrategy::ObjectHandle
         );
-        assert_eq!(
-            shape.error_return_strategy(),
-            ErrorReturnStrategy::Encoded
-        );
+        assert_eq!(shape.error_return_strategy(), ErrorReturnStrategy::Encoded);
         assert!(shape.encode_ops.is_none());
         assert!(matches!(
             &shape.transport,

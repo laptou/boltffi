@@ -6,5 +6,5 @@ expression: template.render().unwrap()
  * Adds two numbers
  */
 export function add(a: number, b: number): number {
-  return (_exports.boltffi_add as Function)(a, b);
+  return _exports.boltffi_add(a, b);
 }

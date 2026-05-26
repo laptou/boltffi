@@ -74,7 +74,7 @@ export class ReceivedTransfer {
     );
     try {
       const result = _module.completeAsync((statusPtr: number) => (_exports.boltffi_received_transfer_stream_complete as Function)(awaitedHandle, statusPtr)) as number;
-    return DataStreamHandle._fromHandle(result);
+      return DataStreamHandle._fromHandle(result);
     } finally {
       (_exports.boltffi_received_transfer_stream_free as Function)(awaitedHandle);
     }

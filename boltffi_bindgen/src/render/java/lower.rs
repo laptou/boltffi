@@ -3059,7 +3059,7 @@ impl<'a> JavaLowerer<'a> {
                         suffix: ".handle".to_string(),
                     },
                 }
-            },
+            }
             ValueReturnStrategy::CallbackHandle => {
                 let Some(Transport::Callback { callback_id, .. }) = &ret_shape.transport else {
                     unreachable!("callback handle return must use callback transport");
@@ -5226,7 +5226,7 @@ mod tests {
             params,
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -5237,7 +5237,7 @@ mod tests {
             params,
             is_fallible: true,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -5248,7 +5248,7 @@ mod tests {
             name: name.into(),
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -5265,7 +5265,7 @@ mod tests {
             rest_params: params_iter.collect(),
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }
@@ -5282,7 +5282,7 @@ mod tests {
             rest_params: params_iter.collect(),
             is_fallible: true,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }

@@ -2057,9 +2057,7 @@ impl<'a> JniLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => {
-                "J".to_string()
-            }
+            | ValueReturnStrategy::CallbackHandle => "J".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "[B".to_string()
             }
@@ -2093,9 +2091,7 @@ impl<'a> JniLowerer<'a> {
             }
             ValueReturnStrategy::ObjectHandle
             | ValueReturnStrategy::NullableObjectHandle
-            | ValueReturnStrategy::CallbackHandle => {
-                "J".to_string()
-            }
+            | ValueReturnStrategy::CallbackHandle => "J".to_string(),
             ValueReturnStrategy::CompositeValue | ValueReturnStrategy::Buffer(_) => {
                 "[B".to_string()
             }

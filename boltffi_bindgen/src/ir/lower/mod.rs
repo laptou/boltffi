@@ -677,7 +677,7 @@ mod tests {
             params: vec![],
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -715,7 +715,7 @@ mod tests {
             name: MethodId::new("try_new"),
             is_fallible: true,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -961,7 +961,7 @@ mod tests {
             name: MethodId::new("connect"),
             is_fallible: true,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -1366,7 +1366,7 @@ mod tests {
             params: vec![],
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -1382,7 +1382,7 @@ mod tests {
             name: MethodId::new("with_config"),
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -1850,7 +1850,7 @@ mod tests {
             params: vec![],
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -1876,7 +1876,7 @@ mod tests {
             name: MethodId::new("try_parse"),
             is_fallible: true,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         };
@@ -1905,7 +1905,7 @@ mod tests {
             params: vec![],
             is_fallible: false,
             is_optional: false,
-                execution_kind: ExecutionKind::Sync,
+            execution_kind: ExecutionKind::Sync,
             doc: None,
             deprecated: None,
         }];
