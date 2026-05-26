@@ -163,6 +163,12 @@ impl<T> FutureExecutionState<T> {
     }
 }
 
+fn lock_execution_state<T>(
+    mutex: &Mutex<FutureExecutionState<T>>,
+) -> std::sync::MutexGuard<'_, FutureExecutionState<T>> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub struct RustFuture<T> {
     future_execution_state: Mutex<FutureExecutionState<T>>,
     wake_target: Arc<FutureWakeTarget>,
@@ -220,7 +226,7 @@ impl<T: RustFutureOutput> RustFuture<T> {
     }
     
     fn poll_future_once(&self, waker: &Waker) -> bool {
-        let mut execution_state_guard = self.future_execution_state.lock().unwrap();
+        let mut execution_state_guard = lock_execution_state(&self.future_execution_state);
 
         if execution_state_guard.is_finished() {
             return true;
@@ -307,7 +313,7 @@ impl<T: RustFutureOutput> RustFuture<T> {
 
         match result {
             Ok(true) => {
-                let state = self.future_execution_state.lock().unwrap();
+                let state = lock_execution_state(&self.future_execution_state);
                 if state.is_panicked() {
                     WasmPollStatus::Panicked
                 } else {
@@ -317,7 +323,7 @@ impl<T: RustFutureOutput> RustFuture<T> {
             Ok(false) => WasmPollStatus::Pending,
             Err(panic_payload) => {
                 let message = panic_payload_to_string(panic_payload);
-                *self.future_execution_state.lock().unwrap() =
+                *lock_execution_state(&self.future_execution_state) =
                     FutureExecutionState::Panicked(message);
                 WasmPollStatus::Panicked
             }

@@ -479,6 +479,7 @@ mod tests {
 
         #[test]
         fn unit_decode_from_empty_buffer() {
+            // typescript async callbacks encode only the ok limb; Result<(), E> sends 0 bytes on success.
             let buf: [u8; 0] = [];
             let (value, consumed) = <()>::decode_from(&buf).unwrap();
             assert_eq!(value, ());

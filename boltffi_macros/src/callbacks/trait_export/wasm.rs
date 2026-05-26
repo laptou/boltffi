@@ -332,9 +332,12 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         match return_type {
             Some(return_type) => {
                 if let Some(result_types) = CallbackReturnType::new(return_type).result_types() {
+                    let ok_ty = result_types.ok;
                     let err_type = result_types.err;
                     let lowered = LoweredCallbackReturn::new(return_type, self.return_lowering)?;
                     if lowered.uses_async_completion_wire_decode() {
+                        // typescript async callbacks encode the ok limb only on success; errors
+                        // use completion status -2 with a wire string (see bindgen callback template).
                         return Ok(quote! {
                             std::future::poll_fn(move |cx| {
                                 callback_registry.set_waker(request_id, cx.waker().clone());
@@ -353,9 +356,16 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                                                 )
                                             ));
                                         }
-                                        let value: #return_type = ::boltffi::__private::wire::decode(&result.data)
-                                            .expect("wire decode async callback return");
-                                        std::task::Poll::Ready(value)
+                                        match <#ok_ty as ::boltffi::__private::wire::WireDecode>::decode_from(&result.data) {
+                                            Ok((ok_val, _used)) => std::task::Poll::Ready(Ok(ok_val)),
+                                            Err(decode_err) => std::task::Poll::Ready(Err(
+                                                <#err_type as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
+                                                    ::boltffi::UnexpectedFfiCallbackError::new(format!(
+                                                        "wire decode async callback ok payload: {decode_err}"
+                                                    ))
+                                                )
+                                            )),
+                                        }
                                     }
                                     None => std::task::Poll::Pending,
                                 }

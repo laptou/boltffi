@@ -22,6 +22,7 @@ pub(super) struct CallbackReturnType<'a> {
 }
 
 pub(super) struct ParsedResultTypes {
+    pub(super) ok: Type,
     pub(super) err: Type,
 }
 
@@ -50,8 +51,11 @@ impl<'a> CallbackReturnType<'a> {
             syn::GenericArgument::Type(ty) => Some(ty.clone()),
             _ => None,
         });
-        types.next()?;
-        Some(ParsedResultTypes { err: types.next()? })
+        let ok = types.next()?;
+        Some(ParsedResultTypes {
+            ok,
+            err: types.next()?,
+        })
     }
 }
 

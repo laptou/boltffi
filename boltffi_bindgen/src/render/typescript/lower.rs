@@ -5252,7 +5252,8 @@ mod tests {
             .find(|m| m.ts_name == "put")
             .expect("put async method");
 
-        // void result: no return type, no encode fields — template emits complete(requestId, 0, 0, 0, 0)
+        // void result: no return type, no encode fields — template emits complete(requestId, 0, 0, 0, 0).
+        // rust wasm async callback polling wire-decodes the ok limb only (see wasm.rs async_poll_body).
         assert_eq!(
             put.return_type, None,
             "Result<(), E> async callback should have no return_type (void completion)"
