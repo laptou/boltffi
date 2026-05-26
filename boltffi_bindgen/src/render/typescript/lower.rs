@@ -1089,12 +1089,19 @@ impl<'a> TypeScriptLowerer<'a> {
                         ReturnShape {
                             transport: Some(Transport::Handle { .. } | Transport::Callback { .. }),
                             ..
-                        } => (
-                            Some("number".to_string()),
-                            TsCallbackImportReturn::Direct {
-                                wasm_type: "number".to_string(),
-                            },
-                        ),
+                        } => {
+                            let ts_type = match &method_def.returns {
+                                ReturnDef::Value(ty) => emit::ts_type(ty),
+                                ReturnDef::Result { ok, .. } => emit::ts_type(ok),
+                                _ => "number".to_string(),
+                            };
+                            (
+                                Some(ts_type),
+                                TsCallbackImportReturn::Direct {
+                                    wasm_type: "number".to_string(),
+                                },
+                            )
+                        },
                         ReturnShape {
                             transport: Some(Transport::Scalar(origin)),
                             ..
@@ -1242,14 +1249,21 @@ impl<'a> TypeScriptLowerer<'a> {
                     ReturnShape {
                         transport: Some(Transport::Handle { .. } | Transport::Callback { .. }),
                         ..
-                    } => (
-                        Some("number".to_string()),
-                        None,
-                        None,
-                        Some("writeU32".to_string()),
-                        Some("result".to_string()),
-                        Some(4),
-                    ),
+                    } => {
+                        let ts_type = match &method_def.returns {
+                            ReturnDef::Value(ty) => emit::ts_type(ty),
+                            ReturnDef::Result { ok, .. } => emit::ts_type(ok),
+                            _ => "number".to_string(),
+                        };
+                        (
+                            Some(ts_type),
+                            None,
+                            None,
+                            Some("writeU32".to_string()),
+                            Some("result".to_string()),
+                            Some(4),
+                        )
+                    },
                     _ => (None, None, None, None, None, None),
                 };
 
